@@ -83,6 +83,9 @@ static uint64_t hash(const char *s, int n) {
 static int key_text(long k, char *out) { return sprintf(out, "%ld", k); }
 
 static int tfd, ifd;            // the table and its index, kept open
+static int CHECK;               // CHECK=1: before each operation, a stat of the path, as Nihil does
+static dev_t tdev;
+static ino_t tino;
 static long cap;                // the index's capacity
 static long nrec;               // records in the table
 
@@ -132,8 +135,23 @@ static void build_index(void) {
     ifd = open(IDX, O_RDWR); if (ifd < 0) die("open idx");
 }
 
+static void build_index(void);
+// CHECK=1: is the table at the path still the file kept open? If another program replaced it,
+// open it again and rebuild the index (the check Nihil makes before each operation)
+static void check_table(void) {
+    if (!CHECK) return;
+    struct stat st;
+    if (stat(FILE_, &st) != 0) die("stat");
+    if (st.st_dev == tdev && st.st_ino == tino) return;
+    close(tfd);
+    tfd = open(FILE_, O_RDWR); if (tfd < 0) die("open table");
+    tdev = st.st_dev; tino = st.st_ino;
+    build_index();
+}
+
 // where key k is: its record number (or -1), and its slot (or the empty one where it would go)
 static long find(long k, long *jout, Item *r) {
+    check_table();
     char kt[24]; int n = key_text(k, kt);
     long j = hash(kt, n) & (cap - 1);
     for (long left = cap; left > 0; left--) {
@@ -209,6 +227,7 @@ int main(void) {
     N = getenv("N") ? atol(getenv("N")) : 100000;
     OPS = getenv("OPS") ? atol(getenv("OPS")) : 20000;
     SYNCED = getenv("SYNCED") ? atol(getenv("SYNCED")) : 300;
+    CHECK = getenv("CHECK") && atoi(getenv("CHECK")) == 1;
     const char *dir = getenv("DIR") ? getenv("DIR") : "/tmp/nihil-bench";
     mkdir(dir, 0755);
     snprintf(FILE_, sizeof FILE_, "%s/items-c.dat", dir);
@@ -270,6 +289,7 @@ int main(void) {
 
     start();
     tfd = open(FILE_, O_RDWR); if (tfd < 0) die("open table");
+    { struct stat st; fstat(tfd, &st); tdev = st.st_dev; tino = st.st_ino; }
     build_index();
     long j; Item r; find(1, &j, &r);
     done("first key lookup (reads the table, builds the index)", 0);
@@ -280,7 +300,7 @@ int main(void) {
     done("lookup by key", OPS);
 
     start();
-    for (long k = 0; k < OPS; k++) { char b[W]; if (pread(tfd, b, W, rnd(N) * (W + 1)) != W) die("pread"); parse(b, &r); }
+    for (long k = 0; k < OPS; k++) { char b[W]; check_table(); if (pread(tfd, b, W, rnd(N) * (W + 1)) != W) die("pread"); parse(b, &r); }
     done("read record i", OPS);
 
     start();
