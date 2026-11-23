@@ -23,9 +23,14 @@ for n in ${SIZES:-100000 1000000}; do
         if [ "$(uname -s)" = Darwin ]; then
             N=$n DIR=$work/data /usr/bin/time -l "$work/$lang" > "$work/$lang-$n.txt" 2> "$work/time"
             awk '/maximum resident set size/ { print "peak memory: " int($1 / 1048576) " MB" }' "$work/time" >> "$work/$lang-$n.txt"
-        else
+        elif [ -x /usr/bin/time ]; then
             N=$n DIR=$work/data /usr/bin/time -v "$work/$lang" > "$work/$lang-$n.txt" 2> "$work/time"
             awk -F: '/Maximum resident set size/ { print "peak memory: " int($2 / 1024) " MB" }' "$work/time" >> "$work/$lang-$n.txt"
+        else
+            # no GNU time: Python runs it and reads the child's peak (ru_maxrss, in KB on Linux)
+            N=$n DIR=$work/data python3 -c 'import resource, subprocess, sys
+subprocess.run([sys.argv[1]], check=True)
+print("peak memory: %d MB" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024))' "$work/$lang" > "$work/$lang-$n.txt"
         fi
     done
 done
