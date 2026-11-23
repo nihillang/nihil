@@ -9,12 +9,13 @@
 # writes OUTDIR/nihil-PLATFORM.tar.gz (the name stays the same in every release, so
 # releases/latest/download/nihil-PLATFORM.tar.gz is always the newest) and its .sha256.
 # Inside: nihil-VERSION/{bin/nihil, libexec/nihil/…, VERSION, LICENSE, README.md, CHANGELOG.md}.
+#   NIHIL_PACKAGE_VERSION   the version the package says it is (default: VERSION), e.g. 4.2.4+nightly.10b3a6f
 set -eu
 cd "$(dirname "$0")/.."
 [ $# -ge 3 ] || { echo "usage: dist/package.sh linux-x86_64|macos-arm64 OUTDIR COMPILER [RT_O]" >&2; exit 2; }
 platform=$1
 outdir=$2
-version=$(cat VERSION)
+version=${NIHIL_PACKAGE_VERSION:-$(cat VERSION)}
 mkdir -p "$outdir"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -22,7 +23,8 @@ root=$stage/nihil-$version
 mkdir -p "$root/bin" "$root/libexec/nihil" "$root/share/nihil/ide"
 cp dist/nihil "$root/bin/nihil"
 chmod 755 "$root/bin/nihil"
-cp VERSION LICENSE README.md CHANGELOG.md "$root/"
+cp LICENSE README.md CHANGELOG.md "$root/"
+printf '%s\n' "$version" > "$root/VERSION"
 cp SPEC.md "$root/share/nihil/"
 cp -R ide/static "$root/share/nihil/ide/static"
 mkdir -p "$root/share/nihil/examples"

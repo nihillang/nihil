@@ -10,7 +10,23 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface App : NSObject <NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate>
+// no web view right-click menu (Reload, Back, Inspect Element…): the page has its own
+@interface IDEWebView : WKWebView
+@end
+
+@implementation IDEWebView
+static NSEvent *lastMouseDown;
+- (void)mouseDown:(NSEvent *)event {
+    lastMouseDown = event;
+    [super mouseDown:event];
+}
+- (void)willOpenMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
+    [menu removeAllItems];                      // the page shows its own menu (ide/static/index.html)
+    [super willOpenMenu:menu withEvent:event];
+}
+@end
+
+@interface App : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler>
 @property (strong) NSWindow *window;
 @property (strong) WKWebView *web;
 @property (strong) NSURL *url;
@@ -42,32 +58,31 @@ static NSString *fetch(NSURL *url) {
 
 @implementation App
 
+// one menu only, "Nihil IDE": the shortcuts of Edit, View and Window are in it as hidden items
+// (the keys work, the menu bar does not show them)
 - (void)menus {
     NSMenu *bar = [NSMenu new];
     NSMenu *app = [NSMenu new];
-    [app addItemWithTitle:@"Hide Nihil IDE" action:@selector(hide:) keyEquivalent:@"h"];
+    [app addItemWithTitle:@"About Nihil IDE" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
     [app addItem:[NSMenuItem separatorItem]];
+    [app addItemWithTitle:@"Hide Nihil IDE" action:@selector(hide:) keyEquivalent:@"h"];
     [app addItemWithTitle:@"Quit Nihil IDE" action:@selector(terminate:) keyEquivalent:@"q"];
-    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];
-    [edit addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
-    [edit addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
-    [edit addItem:[NSMenuItem separatorItem]];
-    [edit addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
-    [edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
-    [edit addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
-    [edit addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
-    NSMenu *view = [[NSMenu alloc] initWithTitle:@"View"];
-    [view addItemWithTitle:@"Reload" action:@selector(reload:) keyEquivalent:@"r"];
-    NSMenu *win = [[NSMenu alloc] initWithTitle:@"Window"];
-    [win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
-    [win addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];
-    for (NSMenu *m in @[app, edit, view, win]) {
-        NSMenuItem *item = [NSMenuItem new];
-        item.submenu = m;
-        [bar addItem:item];
+    NSArray *hidden = @[
+        @[@"Undo", @"undo:", @"z"], @[@"Redo", @"redo:", @"Z"], @[@"Cut", @"cut:", @"x"], @[@"Copy", @"copy:", @"c"],
+        @[@"Paste", @"paste:", @"v"], @[@"Select All", @"selectAll:", @"a"], @[@"Reload", @"reload:", @"r"],
+        @[@"Minimize", @"performMiniaturize:", @"m"], @[@"Close", @"performClose:", @"w"],
+        @[@"Full Screen", @"toggleFullScreen:", @"f"]];
+    for (NSArray *h in hidden) {
+        NSMenuItem *item = [app addItemWithTitle:h[0] action:NSSelectorFromString(h[1]) keyEquivalent:h[2]];
+        if ([h[1] isEqual:@"toggleFullScreen:"])
+            item.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
+        item.hidden = YES;
+        item.allowsKeyEquivalentWhenHidden = YES;
     }
+    NSMenuItem *top = [NSMenuItem new];
+    top.submenu = app;
+    [bar addItem:top];
     NSApp.mainMenu = bar;
-    NSApp.windowsMenu = win;
 }
 
 - (void)reload:(id)sender { [self.web loadRequest:[NSURLRequest requestWithURL:self.url]]; }
@@ -114,17 +129,28 @@ static NSString *fetch(NSURL *url) {
     self.url = [NSURL URLWithString:u ?: [NSString stringWithFormat:@"http://127.0.0.1:%@/", port]];
 
     WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
-    self.web = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 820) configuration:cfg];
+    // the page's right-click menu asks for cut/copy/paste/select all here: the system's commands,
+    // so pasting needs no permission (the clipboard API would ask each time)
+    [cfg.userContentController addScriptMessageHandler:self name:@"nihil"];
+    self.web = [[IDEWebView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 820) configuration:cfg];
     self.web.UIDelegate = self;
     self.web.navigationDelegate = self;
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1280, 820)
-        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
+                  | NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"Nihil IDE";
+    // no title bar: the page's header (42 px) is the top of the window, the window's buttons inside it
+    self.window.titleVisibility = NSWindowTitleHidden;
+    self.window.titlebarAppearsTransparent = YES;
+    self.window.backgroundColor = [NSColor colorWithSRGBRed:0x1d / 255.0 green:0x1f / 255.0 blue:0x27 / 255.0 alpha:1];
+    self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    self.window.delegate = self;
     self.window.contentView = self.web;
     self.window.frameAutosaveName = @"NihilIDE";
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
+    [self placeButtons];
     [NSApp activateIgnoringOtherApps:YES];
 
     if ([self serve]) {
@@ -145,6 +171,49 @@ static NSString *fetch(NSURL *url) {
             if (page && ![token_of(page) isEqualToString:current ?: @""]) [self reload:nil];
         }];
     return NO;
+}
+
+// the window's buttons centered in the page's header (42 px high), 14 px from the left
+- (void)placeButtons {
+    NSButton *close = [self.window standardWindowButton:NSWindowCloseButton];
+    NSView *bar = close.superview.superview;              // the title bar's container
+    if (!bar || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    CGFloat header = 42;
+    NSRect r = bar.frame;
+    r.size.height = header;
+    r.origin.y = NSHeight(self.window.frame) - header;
+    bar.frame = r;
+    NSWindowButton kinds[] = {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton};
+    for (int i = 0; i < 3; i++) {
+        NSButton *b = [self.window standardWindowButton:kinds[i]];
+        NSRect f = b.frame;
+        f.origin.x = 14 + i * 20;
+        f.origin.y = (header - NSHeight(f)) / 2;
+        [b setFrameOrigin:f.origin];
+    }
+}
+- (void)windowDidResize:(NSNotification *)n { [self placeButtons]; }
+- (void)windowDidBecomeKey:(NSNotification *)n { [self placeButtons]; }
+- (void)windowDidEnterFullScreen:(NSNotification *)n {
+    [self.web evaluateJavaScript:@"document.documentElement.classList.add('full-screen')" completionHandler:nil];
+}
+- (void)windowDidExitFullScreen:(NSNotification *)n {
+    [self.web evaluateJavaScript:@"document.documentElement.classList.remove('full-screen')" completionHandler:nil];
+    [self placeButtons];
+}
+
+- (void)userContentController:(WKUserContentController *)c didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.body isKindOfClass:[NSDictionary class]]) return;
+    NSString *win = message.body[@"window"];
+    if ([win isEqual:@"drag"] && lastMouseDown && ([NSEvent pressedMouseButtons] & 1)) {
+        [self.window performWindowDragWithEvent:lastMouseDown];
+        return;
+    }
+    if ([win isEqual:@"zoom"]) { [self.window performZoom:nil]; return; }
+    NSString *edit = message.body[@"edit"];
+    NSDictionary *actions = @{@"cut": @"cut:", @"copy": @"copy:", @"paste": @"paste:", @"selectAll": @"selectAll:"};
+    if ([edit isKindOfClass:[NSString class]] && actions[edit])
+        [NSApp sendAction:NSSelectorFromString(actions[edit]) to:nil from:self];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app { return YES; }

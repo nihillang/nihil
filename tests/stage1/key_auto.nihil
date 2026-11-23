@@ -1,0 +1,26 @@
+// #+: an automatic key. @{}>> numbers a record whose key is 0, and r keeps its number
+P = @[#+id: INT(4); name: STRING(6)];
+F = "build/kauto.dat";
+@>> F, "";
+(F + ".nihil-seq").remove();
+a = P(0, "a");
+@{}>> F, a;
+@{}>> F, P(0, "b");
+@{}>> F, P(0, "c");
+>> a.id; >> "\n";
+>> $(P @ F);
+P @{3} F = _;                  // the number of a deleted record is not given again
+@{}>> F, P(0, "d");
+>> (P @{4} F).name; >> " "; >> P @# F; >> "\n";
+@{}>> F, P(10, "hand");        // a number by hand moves the counter past it
+@{}>> F, P(0, "e");
+>> (P @{11} F).name; >> "\n";
+c = P @{2} F;                  // a record with its number is replaced, not numbered
+c.name = "B";
+@{}>> F, c;
+>> P @# F; >> " "; >> (P @{2} F).name; >> "\n";
+// the counter lost, the table written another way: the largest key + 1
+(F + ".nihil-seq").remove();
+@>> F, "   1x     \n   7y     \n";
+@{}>> F, P(0, "z");
+>> $(P @ F);

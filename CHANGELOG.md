@@ -4,6 +4,23 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.3.0
+
+- automatic keys: `#+id: INT(w)` in a model makes `@{}>>` give a record whose key is 0 the next number (1, 2, 3, …), kept in `path.nihil-seq`; a deleted number is never given again, and a key written by hand past the counter moves it (SPEC §20.5)
+  - *Why:* Tables with a key had to compute the next number in every program (`#rows + 1`, which repeats a number after a deletion); the counter belongs to the table
+- the IDE's Database area: a table can be filtered and sorted with a Nihil query (`where(…)`, `sort(…)`), and its records inserted, changed (double click on a cell) and deleted, through the language's own table operations; an automatic key is left blank on insert
+  - *Why:* A table could only be looked at: changing one record, or finding it, meant writing a program
+- the IDE's own right-click menus: in the editor, the terminal, the file tree (open, run, rename, duplicate, delete, copy path, new file or folder) and the Database area; a selection can be taken to Claude (right-click or Cmd+L)
+  - *Why:* The browser's menu offered nothing about the IDE's files and tables
+- `Nihil IDE.app`: no title bar (the IDE's header is the top of the window) and one menu
+  - *Why:* The window looked like a browser's, with a bar and menus that did nothing for the IDE
+- `nihil ide` starts the IDE's server in the background and gives the terminal back (log in `~/Nihil/.nihil-ide/server.log`); `nihil ide stop` stops it, `nihil ide --foreground` keeps it in the terminal
+  - *Why:* `nihil ide` held the terminal for as long as the IDE was open
+- building from source on Linux needs only `make` and `curl`: the runtime is kept assembled in `src1/runtime_bin.nihil`, and without `nasm` or `ld`, stage 1 starts from the latest release's compiler, which gives the same bytes as stage 0 (`make seedcheck`)
+  - *Why:* Building Nihil needed an assembler, though only the frozen stage 0 and the runtime are in assembly
+- GitHub builds the packages on every push (kept with the run in Actions) and the pre-release `nightly` from `main`: `curl -fsSL https://nihil-lang.dev/install.sh | NIHIL_VERSION=nightly sh`
+  - *Why:* Trying a change before a release meant building it by hand
+
 ## v4.2.4
 
 - Linux: the installer adds a "Nihil IDE" menu entry with the Nihil icon; `nihil ide` opens the IDE in a browser profile of its own (window class `NihilIDE`), so the taskbar and Alt+Tab show the Nihil icon, and closing the window stops the server

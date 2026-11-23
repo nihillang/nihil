@@ -506,7 +506,7 @@ command         ::= method                      (* top level only *)
 method          ::= IDENT "(" [ param ( "," param )* ] ")" block
 param           ::= IDENT [ "?" ] "=" ( literal | IDENT "(" ")" | "[" IDENT "(" ")" "]" )
 model           ::= IDENT "=" "@" "[" field ( ";" field )* [ ";" ] "]" ";"
-field           ::= [ "#" ] IDENT ":" ( ( "INT" | "STRING" | "FLOAT" ) "(" INTEGER ")" | "BOOL" )
+field           ::= [ "#" [ "+" ] ] IDENT ":" ( ( "INT" | "STRING" | "FLOAT" ) "(" INTEGER ")" | "BOOL" )
 block           ::= "{" command* "}"
 assignment      ::= IDENT [ "?" ] [ "[" expression "]" ] "=" expression
                   | IDENT ( "[" expression "]" | "." IDENT )* "." IDENT "=" expression
@@ -1033,6 +1033,31 @@ nihil: 'products.dat' has no PRODUCT with code = 99 to delete
 nihil: 'products.dat', line 3: the key code = 1 is also in line 1, and a key is unique
 ```
 
+**Automatic keys.** `#+` marks an INT key that the table numbers by itself:
+`@{}>>` gives a record whose key is **0** the next number (1, 2, 3, …) before
+writing it, and the record keeps it, so the program can read it right after.
+
+```text
+ORDER = @[#+id: INT(8); client: STRING(20); total: FLOAT(10)];
+
+o = ORDER(0, "Ana", 99.9);
+@{}>> "orders.dat", o;            // o.id is now the next number
+>> "order #" + $o.id + "\n";
+@{}>> "orders.dat", o;            // o has its number: replaced in place, not numbered again
+```
+
+- The last number given is kept in `path.nihil-seq` (its decimal text), so a
+  number is **not given again** after its record is deleted.
+- A record written with a number by hand (not 0) keeps it; a number past the
+  counter moves the counter there.
+- If `path.nihil-seq` is missing, or behind because the table was written in
+  some other way (`@>>`, `@+>>`, an editor), the next number is the largest key
+  of the table + 1 (found by reading the table once).
+- Only `@{}>>` numbers records; `@[i]>>` and `@+>>` write the key as it is.
+- The key must be INT: `an automatic key (#+) must be INT`. The counter is
+  read and written by each numbered write, so it is meant for one writer at a
+  time, like the rest of a table.
+
 ### 20.6 Methods of a model
 
 A method declared with a model's name and a `.` in front belongs to that model.
@@ -1529,6 +1554,7 @@ branch per tool, reading its parameters with the JSON library.
 | **v1.9:** saved registers learned between passes | The prologue comes before the body; using the count from the previous pass avoids saving registers for nothing |
 | **v2.1:** `... ms;` waits | Animations need a fixed speed; a busy loop depends on the machine. The ellipsis reads as a pause and cannot start any valid expression |
 | **v2.2:** renamed from Ket to Nihil | Latin for *nothing*: no keywords, and `_` for the missing value |
+| **v4.3:** automatic keys `#+id: INT(w)`: `@{}>>` numbers a record whose key is 0, with the counter in `path.nihil-seq` | Tables with a key had to compute the next number in every program (`#rows + 1`, which repeats a number after a deletion); the counter belongs to the table, and a deleted number is never given again |
 | **v4.2:** the standard library: `@ "std:name.nihil";` (§16), kept inside the compiler | Libraries every program needs (configuration, JSON, MCP) were copied into each project; now they ship with the language |
 | **v4.1:** inclusions compared by their normalized path (`.`, empty segments and `dir/..` removed) | A program and a server that share files reached each one by a different relative path (`api/../services/../models/x.nihil`, `database/../models/x.nihil`): the same file was included twice and its models clashed |
 | **v4.0:** protected calls `?f()` and `?!`; `x.to_json()`, `MODEL.from_json(text)`, `MODEL.from_json_items(text)`; `tools("prefix")` and `call_tool("prefix", name, arguments)` | The planogram's MCP server showed what a server in Nihil lacks (docs/v4.0-mcp.md): one bad request ended the whole server, every answer was JSON assembled by hand, and every tool was declared twice (its method and its schema). A runtime error can now be a missing value, any value can be written as JSON and read back into a record, and the tools come from the methods themselves |

@@ -1,5 +1,12 @@
-# A release: on a tag vX.Y.Z (the same as VERSION), the packages for Linux x86_64 and macOS
-# arm64 are built, tested and published on GitHub Releases, where site/install.sh finds them.
+# The packages for Linux x86_64 and macOS arm64, built and tested by GitHub:
+#  - on every push, they are kept with the run (Actions → the run → Artifacts: nihil-linux-x86_64,
+#    nihil-macos-arm64), for 90 days;
+#  - on a push to main, they replace the ones of the pre-release `nightly` (the tag nightly moves to
+#    that commit): `curl -fsSL https://nihil-lang.dev/install.sh | NIHIL_VERSION=nightly sh`;
+#  - on a tag vX.Y.Z (the same as VERSION), they are published as that release, where
+#    site/install.sh finds them.
+#
+# A package says its version in VERSION: the tag's, or VERSION+nightly.COMMIT otherwise.
 #
 # The Mac's compiler comes from the Linux one: stage 1 built on Linux emits its own x86-64 code
 # with a map, and the macOS job translates it to ARM64 (docs/macos-arm64.md). The macOS job then
@@ -9,7 +16,14 @@ name: release
 
 on:
   push:
+    branches: ["**"]
     tags: ["v*"]
+  workflow_dispatch:
+
+# a newer push to the same branch replaces a build still running; a release is never cancelled
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   linux:
@@ -19,7 +33,17 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: The tag is the version in VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
         run: test "v$(cat VERSION)" = "$GITHUB_REF_NAME"
+
+      - name: The packages' version
+        run: |
+          case $GITHUB_REF in
+            refs/tags/v*) v=$(cat VERSION) ;;
+            *) v=$(cat VERSION)+nightly.$(git rev-parse --short=7 HEAD) ;;
+          esac
+          echo "NIHIL_PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
+          echo "packages: $v"
 
       - name: Install nasm
         run: sudo apt-get update -q && sudo apt-get install -y -q nasm
@@ -50,12 +74,17 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          name: nihil-linux-x86_64
+          path: dist/out/
+
+      # for the macOS job; every path is in build/, so the artifact keeps them without it (linux/…)
+      - uses: actions/upload-artifact@v4
+        with:
           name: linux
+          retention-days: 7
           path: |
-            dist/out/
             build/nihilc1.x86
             build/nihilc1.map
-            build/runtime.nihil
             build/prelude_text.nihil
             build/std_text.nihil
 
@@ -66,6 +95,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: The packages' version
+        run: |
+          case $GITHUB_REF in
+            refs/tags/v*) v=$(cat VERSION) ;;
+            *) v=$(cat VERSION)+nightly.$(git rev-parse --short=7 HEAD) ;;
+          esac
+          echo "NIHIL_PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
+
       - uses: actions/download-artifact@v4
         with:
           name: linux
@@ -74,15 +111,15 @@ jobs:
       - name: The compiler translated to ARM64
         run: |
           mkdir -p build/macos
-          cp linux/build/runtime.nihil linux/build/prelude_text.nihil linux/build/std_text.nihil build/
-          python3 macos/translate.py linux/build/nihilc1.x86 linux/build/nihilc1.map build/macos/nihilc1.s
+          cp linux/prelude_text.nihil linux/std_text.nihil build/
+          python3 macos/translate.py linux/nihilc1.x86 linux/nihilc1.map build/macos/nihilc1.s
           clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
           clang -arch arm64 -o build/macos/nihilc1-native build/macos/nihilc1.s build/macos/rt.o
 
       - name: Fixed point (the Mac's compiler emits the same bytes as Linux's)
         run: |
           printf -- '-map %s/src1/nihilc1.nihil\n' "$PWD" | build/macos/nihilc1-native > build/macos/c2.x86 2> /dev/null
-          cmp linux/build/nihilc1.x86 build/macos/c2.x86
+          cmp linux/nihilc1.x86 build/macos/c2.x86
 
       - name: Tests, natively
         run: |
@@ -116,11 +153,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: nihil-macos-arm64
           path: dist/out/
 
   publish:
     needs: [linux, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -131,14 +169,14 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: nihil-*
+          merge-multiple: true
           path: artifacts
 
       - name: Build provenance for the packages (gh attestation verify FILE --repo nihillang/nihil)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
-          subject-path: |
-            artifacts/linux/dist/out/*.tar.gz
-            artifacts/macos/*.tar.gz
+          subject-path: artifacts/*.tar.gz
 
       - name: "The release notes, from this version's part of CHANGELOG.md"
         run: |
@@ -162,4 +200,51 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Nihil $GITHUB_REF_NAME" --notes-file notes.md \
-            artifacts/linux/dist/out/* artifacts/macos/*
+            artifacts/*
+
+  nightly:
+    needs: [linux, macos]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write       # build provenance attestation
+      attestations: write
+    concurrency:
+      group: nightly
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nihil-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Build provenance for the packages (gh attestation verify FILE --repo nihillang/nihil)
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/*.tar.gz
+
+      - name: The pre-release nightly, with this commit's packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=$(git rev-parse --short=7 HEAD)
+          {
+            echo "The newest build of \`main\`: commit $short ($(date -u '+%Y-%m-%d %H:%M UTC')). It is not a release and may break; the releases are the versions vX.Y.Z."
+            echo
+            echo '```sh'
+            echo 'curl -fsSL https://nihil-lang.dev/install.sh | NIHIL_VERSION=nightly sh'
+            echo '```'
+            echo
+            echo 'Linux x86_64, and macOS on Apple silicon (with the Xcode Command Line Tools). `curl -fsSL https://nihil-lang.dev/install.sh | sh` goes back to the latest release.'
+          } > notes.md
+          git tag -f nightly "$GITHUB_SHA"
+          git push -f origin refs/tags/nightly
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release edit nightly --prerelease --title "Nihil nightly ($short)" --notes-file notes.md
+          else
+            gh release create nightly --prerelease --latest=false --verify-tag --title "Nihil nightly ($short)" --notes-file notes.md
+          fi
+          gh release upload nightly artifacts/* --clobber
