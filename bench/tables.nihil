@@ -1,0 +1,113 @@
+// bench/tables.nihil — how fast tables are: N synthetic records written, read, queried, and
+// changed one at a time by key (bench/run.sh runs it for several N and adds the memory).
+//
+//   N=100000 OPS=20000 SYNCED=300 DIR=/tmp/nihil-bench nihil run bench/tables.nihil
+//
+// The clock is /proc/uptime (10 ms), so the single-record operations are timed OPS at a time.
+@ "std:env.nihil";
+
+N = env_int("N", 100000);
+OPS = env_int("OPS", 20000);         // lookups and reads of one record
+SYNCED = env_int("SYNCED", 300);     // changes, additions and deletions by key (each one syncs the disk)
+DIR = env("DIR", "/tmp/nihil-bench");
+ITEM = @[#code: INT(8); name: STRING(20); category: INT(4); price: FLOAT(10); qty: INT(6); active: BOOL];
+FILE = DIR + "/items.dat";
+
+now_ms() {
+    up = (@ "/proc/uptime").split(" ");
+    : #((up[0].float() || 0.0) * 1000.0 + 0.5);
+}
+
+seed = 12345;
+rnd(n = 1) {                            // a fixed pseudo-random sequence: the same data on every run
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    : seed / 16 % n;
+}
+
+T0 = 0;
+start() { T0 = now_ms(); }
+// one line of the report: the time, and per record or per operation
+done(what = "", count = 0) {
+    ms = now_ms() - T0;
+    each = "";
+    count > 0 {
+        us = ms * 1000 / count;
+        each = $us + " µs each";
+        us == 0 { each = "< 1 µs each"; }
+    }
+    count > 0 { >> what + ": " + $ms + " ms (" + $count + ", " + each + ")\n"; :; }
+    >> what + ": " + $ms + " ms\n";
+}
+
+DIR.make_dir();
+FILE.remove();
+(FILE + ".nihil-idx").remove();
+>> "N = " + $N + " records of " + $(#$ITEM()) + " bytes\n";
+
+start();
+rows = [ITEM() ; N];
+i = 0;
+* i < N {
+    p = rnd(100000);
+    rows[i] = ITEM(i + 1, "item " + $(i + 1), rnd(50), .p / 100.0, rnd(1000), rnd(10) > 1);
+    i = i + 1;
+}
+done("make the records in memory", N);
+
+start();
+@>> FILE, rows;
+done("write the table (@>>, atomic)", N);
+>> "  file: " + $((FILE.size() || 0) / 1024) + " KB\n";
+
+start();
+table = ITEM @ FILE;
+done("read the whole table (ITEM @)", N);
+
+start();
+cheap = table.where(active && price < 200.0);
+done("where(active && price < 200.0): " + $#cheap + " found", N);
+
+start();
+n = table.count(category == 7);
+done("count(category == 7): " + $n, N);
+
+start();
+total = table.sum(price * .qty);
+done("sum(price * qty)", N);
+
+start();
+sorted = table.sort(-price);
+done("sort(-price)", N);
+
+start();
+r = ITEM @{1} FILE;
+done("first key lookup (reads the table, builds the index)", 0);
+>> "  index: " + $(((FILE + ".nihil-idx").size() || 0) / 1024) + " KB\n";
+
+start();
+k = 0;
+* k < OPS { r = ITEM @{rnd(N) + 1} FILE; k = k + 1; }
+done("lookup by key (ITEM @{k})", OPS);
+
+start();
+k = 0;
+* k < OPS { r = ITEM @[rnd(N)] FILE; k = k + 1; }
+done("read record i (ITEM @[i])", OPS);
+
+start();
+k = 0;
+* k < SYNCED { r = ITEM @{rnd(N) + 1} FILE; r.qty = r.qty + 1; @{}>> FILE, r; k = k + 1; }
+done("change by key (lookup + @{}>>, 2 fsync)", SYNCED);
+
+start();
+k = 0;
+* k < SYNCED { @{}>> FILE, ITEM(N + 1 + k, "new", 1, 1.0, 1, true); k = k + 1; }
+done("add by key (@{}>>, 2 fsync)", SYNCED);
+
+start();
+k = 0;
+* k < SYNCED { ITEM @{N + 1 + k} FILE = _; k = k + 1; }
+done("delete by key (= _, 2 fsync)", SYNCED);
+
+FILE.remove();
+(FILE + ".nihil-idx").remove();
