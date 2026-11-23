@@ -1010,6 +1010,11 @@ then the record, whose key is always checked), whatever the size of the table;
 adding one costs a write of the line and of one slot. The index has at least
 twice as many slots as records and doubles when it gets half full.
 
+A program also keeps, in memory, the last index it found to match its table (the
+table's size and stamp, and the index's capacity): a key operation on a table
+that has not changed since reads only the slots and the record, not the index's
+header, and the record's line is read once.
+
 The index is a **cache** of the table: its header keeps the size and the
 *stamp* (modification time and inode) the table had when the index was last
 right. When they do not match, because the table was written by `@>>`, `@+>>`,

@@ -544,6 +544,17 @@ __nihil_same_line(s = "", a = 0, b = 0, n = 0) {
     : true;
 }
 
+// The index this program last found to match its table: the table's path, its size and stamp
+// then, and the index's capacity. A key operation on a table that has not changed since (same
+// size and stamp, which every write changes) uses it without reading the index's header again;
+// a slot that cannot be read drops it. __nihil_kf_line is the line of the record that
+// __nihil_key_find found last, so a lookup reads it once.
+__nihil_kc_path = "";
+__nihil_kc_size = -1;
+__nihil_kc_stamp = 0;
+__nihil_kc_cap = 0;
+__nihil_kf_line = "";
+
 // slot j of the index (0 = empty)
 __nihil_key_slot(idx = "", j = 0) {
     __p = __nihil_pread(idx, 16 + j * 4, 4);
@@ -557,19 +568,38 @@ __nihil_key_slot(idx = "", j = 0) {
 // would go), the capacity]. Every slot found is checked against the record.
 __nihil_key_find(key = "", path = "", size = 0, stamp = 0, schema = [0], names = "", model = "", kf = 0) {
     __idx = path + ".nihil-idx";
-    __c = __nihil_key_current(__idx, size, stamp);
+    __c = 0;
+    __cached = __nihil_kc_path == path && __nihil_kc_size == size && __nihil_kc_stamp == stamp;
+    __cached { __c = __nihil_kc_cap; }
+    __c == 0 { __c = __nihil_key_current(__idx, size, stamp); }
     __c == 0 { __c = __nihil_key_rebuild(path, size, stamp, schema, names, model, kf); }
+    __nihil_kc_path = path;
+    __nihil_kc_size = size;
+    __nihil_kc_stamp = stamp;
+    __nihil_kc_cap = __c;
     __w = __nihil_rec_width(schema) + 1;
     __j = __nihil_key_hash(key) & (__c - 1);
     __left = __c;
     * __left > 0 {
-        __v = __nihil_key_slot(__idx, __j);
+        __p = __nihil_pread(__idx, 16 + __j * 4, 4);
+        __p == 0 && __cached {                      // the index went away: look again, from its header
+            __nihil_kc_path = "";
+            : __nihil_key_find(key, path, size, stamp, schema, names, model, kf);
+        }
+        __v = 0;
+        __p != 0 {
+            __s = __nihil_str_at(__p);
+            #__s == 4 { __v = __nihil_le_at(__s, 0, 4); }
+        }
         __v == 0 { : [-1, __j, __c]; }
         __o = __v - 1;
         __a = __nihil_pread(path, __o * __w, __w - 1);
         __a != 0 {
             __t = __nihil_str_at(__a);
-            #__t == __w - 1 && __nihil_key_at(__t, 0, schema, names, path, __o + 1, kf) == key { : [__o, __j, __c]; }
+            #__t == __w - 1 && __nihil_key_at(__t, 0, schema, names, path, __o + 1, kf) == key {
+                __nihil_kf_line = __t;
+                : [__o, __j, __c];
+            }
         }
         __j = (__j + 1) & (__c - 1);
         __left = __left - 1;
@@ -593,9 +623,7 @@ __nihil_key_get(k = 0, path = "", schema = [0], names = "", model = "", kf = 0, 
         __ty == 3 { __q = "\"" + __key + "\""; }
         __nihil_fail("'" + path + "' has no " + model + " with " + __nihil_word(names, kf) + " = " + __q);
     }
-    __w = __nihil_rec_width(schema);
-    __t = __nihil_str_at(__nihil_pread(path, __f[0] * (__w + 1), __w));
-    : __nihil_rec_parse(__t, 0, schema, names, path, __f[0] + 1);
+    : __nihil_rec_parse(__nihil_kf_line, 0, schema, names, path, __f[0] + 1);   // the line key_find read
 }
 
 // @{}>> path, r : replaces the record with r's key, or adds r at the end
