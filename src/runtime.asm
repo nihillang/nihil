@@ -1161,9 +1161,11 @@ rt_error:
 %ifdef GC_STRESS
 %define GC_FORK_MIN   (1 << 20)
 %define GC_POLL       (256 << 10)
+%define GC_SWEEP_STEP 4
 %else
 %define GC_FORK_MIN   (64 << 20)
 %define GC_POLL       (4 << 20)
+%define GC_SWEEP_STEP 64            ; pages swept at a time after a forked marking (4 MiB)
 %endif
 %define PD_SMALL 1
 %define PD_LARGE 2
@@ -1213,6 +1215,14 @@ rt_alloc:                           ; rcx = n → rax (keeps every register but 
     mov rax, [GC_FREE + r8 * 8]
     test rax, rax
     jnz .take
+    cmp qword [GC_SWEEPING], 0
+    je .new_page
+    mov eax, GC_SWEEP_STEP          ; a sweep in steps: the next pages may free blocks of this class
+    call gc_sweep_step
+    mov rax, [GC_FREE + r8 * 8]
+    test rax, rax
+    jnz .take
+.new_page:
     call gc_small_page              ; a new page of free blocks of class r8
     mov rax, [GC_FREE + r8 * 8]
 .take:
@@ -1258,8 +1268,8 @@ rt_alloc:                           ; rcx = n → rax (keeps every register but 
     inc r10
     jmp .cont
 .header:
-    cmp qword [GC_CHILD], 0         ; a child is marking: the new block is live (the map)
-    je .unmarked
+    cmp qword [GC_MAP], 0           ; a forked collection under way (marking, or sweeping in
+    je .unmarked                    ; steps): the new block is live (the map)
     mov rcx, rax
     sub rcx, [GC_HEAP_BASE]
     cmp rcx, [GC_SNAP]
@@ -1646,6 +1656,22 @@ gc_collect:
     push r13
     push r14
     push r15
+    cmp qword [GC_SWEEPING], 0
+    je .not_sweeping
+    mov rax, [GC_ALLOCATED]         ; a sweep in steps under way: another step, or all of it when
+    cmp rax, [GC_THRESHOLD]         ; no page is left
+    mov rax, -1
+    jbe .sweep_more
+    mov eax, GC_SWEEP_STEP
+.sweep_more:
+    call gc_sweep_step
+    cmp qword [GC_SWEEPING], 0
+    je .out
+    mov rax, [GC_ALLOCATED]
+    add rax, GC_POLL
+    mov [GC_THRESHOLD], rax
+    jmp .out
+.not_sweeping:
     cmp qword [GC_CHILD], 0
     jne .running
     mov rax, [GC_ALLOCATED]
@@ -1708,16 +1734,18 @@ gc_collect_now:
     call gc_now_us
     mov [GC_STAT_T1], rax
 %endif
-    call gc_sweep
+    call gc_sweep_begin             ; the whole sweep, now (it sets the next threshold)
+    mov rax, -1
+    call gc_sweep_step
     inc qword [GC_COUNT]
 %ifdef GC_STATS
     call gc_stats
 %endif
-    jmp gc_threshold
+    ret
 
 ; marks what the registers (pushed by gc_collect), the stack and the globals reach, and what those
 ; blocks reach: in the blocks' headers, or in GC_MAP when GC_MAPMODE is 1 (a child). Leaves
-; r12 = descriptors, r13 = heap bytes, r14 = heap (for gc_sweep).
+; r12 = descriptors, r13 = heap bytes, r14 = heap (for gc_sweep_begin).
 gc_mark:
     mov eax, 257                    ; sys_openat(AT_FDCWD, "/proc/self/pagemap", O_RDONLY | O_CLOEXEC)
     mov rdi, -100
@@ -1879,32 +1907,29 @@ gc_poll:
     call gc_unmap
     jmp gc_collect_now
 
-; the child has marked: sweep the heap it saw with its map (the pages handed out after the fork
-; stay as they are), then the next threshold
+; the child has marked: sweep the heap it saw with its map, in steps (the pages handed out after the
+; fork stay as they are)
 gc_finish:
 %ifdef GC_STATS
     call gc_now_us
     mov [GC_STAT_T1], rax
 %endif
-    mov r14, [GC_HEAP_BASE]
-    mov r12, [GC_DESC]
-    mov r13, [GC_SNAP]
-    mov rax, [GC_BUMP]
-    sub rax, r14
-    sub rax, r13                    ; bytes of pages handed out after the fork
-    mov [GC_TAIL], rax
-    mov qword [GC_MAPMODE], 2
-    call gc_sweep
-    mov rax, [GC_TAIL]
-    add [GC_LIVE], rax              ; those pages count as in use
-    mov qword [GC_MAPMODE], 0
-    mov qword [GC_TAIL], 0
-    call gc_unmap
+    mov r13, [GC_SNAP]              ; the heap the child saw, swept with its map, in steps: the first
+    mov qword [GC_MAPMODE], 2       ; one now, the others as the program allocates (rt_alloc,
+    call gc_sweep_begin             ; gc_collect); the last one frees the map
+    mov eax, GC_SWEEP_STEP
+    call gc_sweep_step
     inc qword [GC_COUNT]
 %ifdef GC_STATS
     call gc_stats
 %endif
-    jmp gc_threshold
+    cmp qword [GC_SWEEPING], 0
+    je .swept                       ; all of it already: the threshold is set
+    mov rax, [GC_ALLOCATED]
+    add rax, GC_POLL
+    mov [GC_THRESHOLD], rax
+.swept:
+    ret
 
 gc_unmap:
     mov rdi, [GC_MAP]
@@ -2188,7 +2213,15 @@ gc_scan_resident:
 
 ; frees what was not marked, clears the marks, rebuilds the free lists and the
 ; runs of free pages, and gives free pages back to the kernel
-gc_sweep:
+; The sweep, in steps. gc_sweep_begin (r13 = the heap's bytes to sweep) empties the free lists,
+; which the steps fill again page by page, so no free block is ever in a list twice.
+; gc_sweep_step (rax = pages at most; -1: all) sweeps the next pages and, after the last one, puts
+; the free pages in runs, counts the pages handed out since the sweep began as in use, frees the
+; map of a forked collection and sets the next threshold. While pages are left (GC_SWEEPING), the
+; map stays and rt_alloc marks in it what it hands out, so a page swept later never frees a block
+; handed out after the fork. Both keep every register.
+gc_sweep_begin:
+    push rax
     xor eax, eax
 .clear:
     mov qword [GC_FREE + rax * 8], 0
@@ -2197,12 +2230,42 @@ gc_sweep:
     jb .clear
     mov qword [GC_LIVE], 0
     mov qword [GC_NDIRTY], 0
-    mov r11, r13
-    shr r11, GC_PAGE_SHIFT          ; pages in use
-    xor ebx, ebx                    ; page
+    mov qword [GC_SWEEP_POS], 0
+    mov rax, r13
+    shr rax, GC_PAGE_SHIFT
+    mov [GC_SWEEP_END], rax
+    mov qword [GC_SWEEPING], 1
+    pop rax
+    ret
+
+gc_sweep_step:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    mov r12, [GC_DESC]
+    mov r14, [GC_HEAP_BASE]
+    mov r11, [GC_SWEEP_END]         ; pages to sweep in all
+    mov rbx, [GC_SWEEP_POS]         ; the next one
+    mov r13, r11
+    cmp rax, -1
+    je .page
+    add rax, rbx                    ; this step stops before page rax
+    cmp rax, r11
+    jae .page
+    mov r13, rax
 .page:
-    cmp rbx, r11
-    jae .runs
+    cmp rbx, r13
+    jae .paused
     mov r9, [r12 + rbx * 8]
     movzx ecx, r9b
     cmp ecx, PD_SMALL
@@ -2364,7 +2427,42 @@ gc_sweep:
     add rax, r14
     mov [GC_BUMP], rax
 .runs_done:
+    mov rax, [GC_TAIL]
+    add [GC_LIVE], rax              ; the pages handed out since the sweep began count as in use
+    mov qword [GC_TAIL], 0
+    mov qword [GC_SWEEPING], 0
+    cmp qword [GC_MAPMODE], 2
+    jne .no_map
+    mov qword [GC_MAPMODE], 0
+    call gc_unmap
+.no_map:
+    call gc_threshold
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
     ret
+.paused:                            ; the step's last page: done, or more to do?
+    mov [GC_SWEEP_POS], rbx
+    cmp rbx, r11
+    jb .out
+    mov rax, [GC_BUMP]              ; all swept: the pages handed out since (past the swept ones),
+    sub rax, r14                    ; then the free pages in runs
+    mov rdx, r11
+    shl rdx, GC_PAGE_SHIFT
+    sub rax, rdx
+    mov [GC_TAIL], rax
+    jmp .runs
 .give_back:                         ; madvise(pages r10 … rbx, MADV_DONTNEED)
     push r11
     mov rdi, r10

@@ -65,6 +65,10 @@
 %define FD_CACHE        (BASE_DATA + 0x200)
 %define FD_SLOT         288
 %define FD_SLOTS        4
+; a sweep in steps (gc_sweep_step): 1 while pages are left, the next one, and the last one
+%define GC_SWEEPING     (BASE_DATA + 0x680)
+%define GC_SWEEP_POS    (BASE_DATA + 0x688)
+%define GC_SWEEP_END    (BASE_DATA + 0x690)
 %define OUTPUT_BUF       (BASE_DATA + 0x1000)   ; standard output buffer
 %define OUTPUT_CAP       65536
 %define IN_BUF         (BASE_DATA + 0x11000)  ; standard input buffer
