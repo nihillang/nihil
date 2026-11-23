@@ -97,7 +97,7 @@ done("read record i (ITEM @[i])", OPS);
 start();
 k = 0;
 * k < SYNCED { r = ITEM @{rnd(N) + 1} FILE; r.qty = r.qty + 1; @{}>> FILE, r; k = k + 1; }
-done("change by key (lookup + @{}>>, 2 fsync)", SYNCED);
+done("change by key (lookup + @{}>>, 1 fsync)", SYNCED);
 
 start();
 k = 0;
@@ -109,5 +109,7 @@ k = 0;
 * k < SYNCED { ITEM @{N + 1 + k} FILE = _; k = k + 1; }
 done("delete by key (= _, 2 fsync)", SYNCED);
 
-FILE.remove();
-(FILE + ".nihil-idx").remove();
+env("KEEP", "") == "" {                 // KEEP=1: the table stays, to compare
+    FILE.remove();
+    (FILE + ".nihil-idx").remove();
+}

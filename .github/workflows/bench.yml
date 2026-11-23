@@ -1,5 +1,6 @@
-# The table benchmark (bench/run.sh) on Linux x86-64, natively: run it by hand (Actions → bench →
-# Run workflow); the numbers are in the log and in the run's summary. docs/performance.md has them.
+# The table benchmark (bench/run.sh) and its comparison with C and Go (bench/compare/run.sh) on
+# Linux x86-64, natively: run it by hand (Actions → bench → Run workflow); the numbers are in the
+# log and in the run's summary. The site's Performance page has them.
 name: bench
 
 on:
@@ -22,3 +23,12 @@ jobs:
         run: |
           bench/run.sh ./nihilc1.sh | tee bench.txt
           { echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Compared with C and Go
+        run: |
+          bench/compare/run.sh ./nihilc1.sh | tee compare.txt
+          { echo; echo '```'; cat compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
