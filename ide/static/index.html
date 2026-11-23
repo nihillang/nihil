@@ -269,6 +269,14 @@ aside .db-group { padding: 4px 12px 0 14px; font-size: 11px; color: var(--dim); 
 .tab .count { background: var(--err); color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 5px; font-size: 11px; }
 .pane { display: none; min-height: 0; overflow: auto; }
 .pane.active { display: block; }
+/* the bottom panel minimized: only its bar of tabs stays, at the bottom, with the button to bring it back */
+#bottomToggle { margin-left: auto; padding: 2px 9px; background: none; border: none; color: var(--dim); font-size: 13px; }
+#bottomToggle:hover { color: var(--text); background: var(--panel2); }
+#work.min { grid-template-rows: minmax(0, 1fr) 0 33px !important; }
+#work.min #splitter { visibility: hidden; pointer-events: none; }   /* kept in the grid, 0 high */
+#work.min .pane { display: none !important; }
+#work.min .tabs { border-bottom: none; }
+#work.min .tab.active { border-bottom-color: transparent; }
 #terminal { padding: 6px 0 0 8px; height: 100%; background: #101116; overflow: hidden; }
 #problems .item { padding: 6px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
   font-family: ui-monospace, monospace; font-size: 12px; }
@@ -334,6 +342,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
           <div class="tab" data-pane="problems">Problems<span class="count" id="probCount" hidden></span></div>
           <div class="tab" data-pane="asm">Assembly</div>
           <div class="tab" data-pane="table">Table</div>
+          <button id="bottomToggle" title="Minimize the panel (Ctrl+J)">▾</button>
         </div>
         <div class="pane active" id="terminal"></div>
         <div class="pane" id="problems"><div class="empty">No problems.</div></div>
@@ -1049,12 +1058,29 @@ $('btnAsm').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- layout
+// the bottom panel minimized to its bar of tabs (▾, Ctrl+J), and brought back (▴, a tab, Ctrl+J), as it
+// is whenever something has to be shown there (a program's output, problems, assembly, a table)
+function setBottomMin(on) {
+  $('work').classList.toggle('min', on);
+  const b = $('bottomToggle'); b.textContent = on ? '▴' : '▾';
+  b.title = on ? 'Show the panel (Ctrl+J)' : 'Minimize the panel (Ctrl+J)';
+  try { localStorage.setItem('nihil-ide-bottom-min', on ? '1' : '0'); } catch (e) {}
+  editor.refresh(); if (!on) setTimeout(fitTerm, 0);
+}
+$('bottomToggle').onclick = (e) => { e.stopPropagation(); setBottomMin(!$('work').classList.contains('min')); };
+addEventListener('keydown', (e) => {               // Ctrl+J (Cmd+J): before the terminal, which would take it as a new line
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
+    e.preventDefault(); e.stopPropagation(); setBottomMin(!$('work').classList.contains('min'));
+  }
+}, true);
 function showTab(name) {
+  if ($('work').classList.contains('min')) setBottomMin(false);
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.pane === name));
   document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('active', p.id === name));
   if (name === 'terminal') setTimeout(fitTerm, 0);
 }
 document.querySelectorAll('.tab').forEach((t) => t.onclick = () => showTab(t.dataset.pane));
+{ let m = null; try { m = localStorage.getItem('nihil-ide-bottom-min'); } catch (e) {} if (m === '1') setBottomMin(true); }
 // the side bar: its width (the bar between it and the editor) and how much of it the folders
 // and the database take (the bar between them); both are remembered
 const remember = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) {} };
