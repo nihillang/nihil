@@ -601,8 +601,8 @@ rt_lines:
 ; FLOAT fields drop the spaces around; STRING keeps the leading ones. FLOAT: Clinger's fast
 ; path, m × 10^-k with m < 10^15 and k <= 22, one correctly rounded division, the same
 ; bits as the exact conversion.
-; A record is one block: its n slots, then each STRING field's text (its length word and
-; room for the field's width and a 0), which the slot points to. The collector keeps a block
+; A record is one block: its n slots, then each STRING field's text (its length word, its
+; bytes and a 0), which the slot points to. The collector keeps a block
 ; for a pointer into its middle, so a text taken out of the record keeps the block alive.
 rt_rec_parse:
     push rbx
@@ -617,18 +617,30 @@ rt_rec_parse:
     mov r14, rdx                    ; the schema
     mov rcx, [r14]                  ; n slots …
     xor r9d, r9d
+    mov r10, r13                    ; where field i starts
 .size:
     cmp r9, [r14]
     jae .sized
     mov r8, r9
     shl r8, 4
+    mov rdx, [r14 + r8 + 16]        ; its width
     cmp qword [r14 + r8 + 8], 3
     jne .size_next
-    mov r8, [r14 + r8 + 16]         ; … and, for a STRING, 1 + (width + 8) / 8
-    add r8, 16
-    shr r8, 3
-    add rcx, r8
+    lea r11, [r10 + rdx]            ; … and, for a STRING, 1 + (length + 8) / 8, the length
+.size_trim:                         ; without the spaces at its end
+    cmp r11, r10
+    jbe .size_len
+    cmp byte [rbx + r11 - 1], ' '
+    jne .size_len
+    dec r11
+    jmp .size_trim
+.size_len:
+    sub r11, r10
+    add r11, 16
+    shr r11, 3
+    add rcx, r11
 .size_next:
+    add r10, rdx
     inc r9
     jmp .size
 .sized:
@@ -817,10 +829,7 @@ rt_rec_parse:
     lea rsi, [rbx + rsi]
     mov rcx, r12
     rep movsb
-    mov rcx, rbp
-    shl rcx, 4
-    mov rcx, [r14 + rcx + 16]       ; the field's width: the next text after it and a 0
-    add rcx, 8
+    lea rcx, [r12 + 8]              ; the next text after this one and a 0
     shr rcx, 3
     lea rcx, [rax + rcx * 8]
     mov [rsp], rcx
