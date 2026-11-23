@@ -1652,12 +1652,14 @@ gc_collect:
     cmp r15, [GC_MSTACK]
     je .sweep
     sub r15, 8
+%ifdef GC_PF_DRAIN
     lea rax, [r15 - 64]             ; the block 8 entries down the mark stack: into the cache now,
     cmp rax, [GC_MSTACK]            ; so it is there when its turn comes
     jb .drain_block
     mov rax, [rax]
     prefetcht0 [rax]
 .drain_block:
+%endif
     mov rbx, [r15]
     mov rcx, [rbx]
     shr rcx, 8                      ; n
@@ -1801,6 +1803,7 @@ gc_scan:
     lea rax, [rsi + 8]
     cmp rax, rdi
     ja .done
+%ifdef GC_PF_SCAN
     lea rax, [rsi + 64]             ; the value 8 qwords on: if it points into the heap, its block
     cmp rax, rdi                    ; is fetched into the cache now, so it is there when it is marked
     jae .no_prefetch
@@ -1810,6 +1813,7 @@ gc_scan:
     jae .no_prefetch
     prefetcht0 [r14 + rax - 16]
 .no_prefetch:
+%endif
     mov rax, [rsi]
     add rsi, 8
     sub rax, r14
