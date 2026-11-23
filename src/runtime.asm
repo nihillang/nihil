@@ -1436,12 +1436,25 @@ gc_get_pages:
     push rsi
     push rdi
     push r11
+%ifdef GC_STATS
+    push rax
+    call gc_now_us
+    mov [GC_STAT_STEPT0], rax
+    pop rax
+%endif
     mov rdi, rax
     mov rsi, rcx
     shl rsi, GC_PAGE_SHIFT
     mov eax, 28                     ; sys_madvise(pages, bytes, MADV_DONTNEED)
     mov edx, 4
     syscall
+%ifdef GC_STATS
+    call gc_now_us
+    sub rax, [GC_STAT_STEPT0]
+    lea rsi, [rel s_gcs_zero]
+    mov edx, s_gcs_zero_len
+    call gc_slow_stats
+%endif
     pop r11
     pop rdi
     pop rsi
@@ -1809,6 +1822,10 @@ gc_give_step:
     push r11
     mov r8, rax                     ; pages still to give back in this step
     mov rbx, [GC_GIVE_POS]
+%ifdef GC_STATS
+    call gc_now_us
+    push rax
+%endif
 .run:
     cmp rbx, [GC_NRUNS]
     jae .all
@@ -1836,6 +1853,14 @@ gc_give_step:
     mov qword [GC_GIVING], 0
 .paused:
     mov [GC_GIVE_POS], rbx
+%ifdef GC_STATS
+    pop rcx
+    call gc_now_us
+    sub rax, rcx
+    lea rsi, [rel s_gcs_give]
+    mov edx, s_gcs_give_len
+    call gc_slow_stats
+%endif
     pop r11
     pop r9
     pop r8
@@ -2018,6 +2043,11 @@ gc_poll:
     add rsp, 16
     ret
 .wait:
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_STEPT0], rax
+%endif
+.wait_again:
     mov eax, 61                     ; sys_wait4(child, status, 0, 0)
     mov rdi, [GC_CHILD]
     mov rsi, rsp
@@ -2025,7 +2055,16 @@ gc_poll:
     xor r10d, r10d
     syscall
     cmp rax, -4                     ; -EINTR: again
-    je .wait
+    je .wait_again
+%ifdef GC_STATS
+    push rax
+    call gc_now_us
+    sub rax, [GC_STAT_STEPT0]
+    lea rsi, [rel s_gcs_wait]
+    mov edx, s_gcs_wait_len
+    call gc_slow_stats
+    pop rax
+%endif
 .ended:
     mov qword [GC_CHILD], 0
     test rax, rax
@@ -2075,6 +2114,40 @@ gc_unmap:
     ret
 
 %ifdef GC_STATS
+; rax = µs, rsi/rdx = what: on stderr "gc <what>: X us" when X is 1 ms or more (keeps every register)
+gc_slow_stats:
+    cmp rax, 1000
+    jb .quick
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rax
+    mov edi, 2
+    call rt_write_fd
+    pop rax
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_us]
+    mov edx, s_gcs_us_len
+    call rt_write_fd
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+.quick:
+    ret
+
 ; after a fork, on stderr: "gc fork: X us (the program stopped), Y MB of heap"
 gc_fork_stats:
     call gc_now_us
@@ -3633,6 +3706,14 @@ s_gcs_longest: db " steps, the longest "
 s_gcs_longest_len equ $ - s_gcs_longest
 s_gcs_us:     db " us", 10
 s_gcs_us_len  equ $ - s_gcs_us
+s_gcs_wait:   db "gc wait for the child: "
+s_gcs_wait_len equ $ - s_gcs_wait
+s_gcs_give:   db "gc give-back step: "
+s_gcs_give_len equ $ - s_gcs_give
+s_gcs_zero:   db "gc zero a pending run: "
+s_gcs_zero_len equ $ - s_gcs_zero
+s_gcs_poll:   db "gc poll: "
+s_gcs_poll_len equ $ - s_gcs_poll
 s_gcs_fork:   db "gc fork: "
 s_gcs_fork_len equ $ - s_gcs_fork
 s_gcs_forkmb: db " us (the program stopped), "
