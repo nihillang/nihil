@@ -1616,6 +1616,11 @@ gc_collect:
     push r13
     push r14
     push r15
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_T0], rax
+    mov qword [GC_STAT_MARKED], 0
+%endif
     mov eax, 257                    ; sys_openat(AT_FDCWD, "/proc/self/pagemap", O_RDONLY | O_CLOEXEC)
     mov rdi, -100
     lea rsi, [rel s_pagemap]
@@ -1641,6 +1646,12 @@ gc_collect:
     cmp r15, [GC_MSTACK]
     je .sweep
     sub r15, 8
+    lea rax, [r15 - 64]             ; the block 8 entries down the mark stack: into the cache now,
+    cmp rax, [GC_MSTACK]            ; so it is there when its turn comes (−15% of the marking of a
+    jb .drain_block                 ; large heap; a multiply instead of div, and a prefetch in
+    mov rax, [rax]                  ; gc_scan, were measured too and made it slower)
+    prefetcht0 [rax]
+.drain_block:
     mov rbx, [r15]
     mov rcx, [rbx]
     shr rcx, 8                      ; n
@@ -1654,6 +1665,10 @@ gc_collect:
     call gc_scan_resident
     jmp .drain
 .sweep:
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_T1], rax
+%endif
     mov rdi, [GC_PAGEMAP]
     test rdi, rdi
     jz .swept
@@ -1664,6 +1679,9 @@ gc_collect:
 .swept:
     call gc_sweep
     inc qword [GC_COUNT]
+%ifdef GC_STATS
+    call gc_stats
+%endif
     mov qword [GC_ALLOCATED], 0
 %ifdef GC_STRESS
     mov eax, GC_MIN
@@ -1691,6 +1709,85 @@ gc_collect:
     pop rbx
     pop rax
     ret
+
+%ifdef GC_STATS
+; → rax = the monotonic clock in µs (keeps every other register)
+gc_now_us:
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r11
+    sub rsp, 16
+    mov eax, 228                    ; sys_clock_gettime(CLOCK_MONOTONIC, ts)
+    mov edi, 1
+    mov rsi, rsp
+    syscall
+    mov rax, [rsp + 8]              ; ns → µs
+    xor edx, edx
+    mov ecx, 1000
+    div rcx
+    mov rcx, [rsp]
+    imul rcx, rcx, 1000000
+    add rax, rcx
+    add rsp, 16
+    pop r11
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    ret
+
+; after a collection, on stderr: "gc N: mark A µs, sweep B µs, live C KB, heap D KB, marked E blocks"
+gc_stats:
+    call gc_now_us
+    mov [GC_STAT_T2], rax
+    mov edi, 2
+    lea rsi, [rel s_gcs_gc]
+    mov edx, s_gcs_gc_len
+    call rt_write_fd
+    mov rax, [GC_COUNT]
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_mark]
+    mov edx, s_gcs_mark_len
+    call rt_write_fd
+    mov rax, [GC_STAT_T1]
+    sub rax, [GC_STAT_T0]
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_sweep]
+    mov edx, s_gcs_sweep_len
+    call rt_write_fd
+    mov rax, [GC_STAT_T2]
+    sub rax, [GC_STAT_T1]
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_live]
+    mov edx, s_gcs_live_len
+    call rt_write_fd
+    mov rax, [GC_LIVE]
+    shr rax, 10
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_heap]
+    mov edx, s_gcs_heap_len
+    call rt_write_fd
+    mov rax, [GC_BUMP]
+    sub rax, [GC_HEAP_BASE]
+    shr rax, 10
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_marked]
+    mov edx, s_gcs_marked_len
+    call rt_write_fd
+    mov rax, [GC_STAT_MARKED]
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_end]
+    mov edx, s_gcs_end_len
+    jmp rt_write_fd
+%endif
 
 ; every qword in [rsi, rdi) that points into a used block marks it and puts it
 ; on the mark stack (r15). r12 = descriptors, r13 = heap bytes, r14 = heap.
@@ -1741,6 +1838,9 @@ gc_scan:
     jnz gc_scan                     ; already marked
     or rax, 2
     mov [r9], rax
+%ifdef GC_STATS
+    inc qword [GC_STAT_MARKED]
+%endif
     cmp r15, [GC_MSTACK_END]
     jae .overflow
     mov [r15], r9
@@ -2930,6 +3030,22 @@ s_tmp_suffix: db ".nihil-tmp", 0
 s_tmp_suffix_len equ $ - s_tmp_suffix
 s_errno:     db "error "
 s_errno_len  equ $ - s_errno
+%ifdef GC_STATS
+s_gcs_gc:     db "gc "
+s_gcs_gc_len  equ $ - s_gcs_gc
+s_gcs_mark:   db ": mark "
+s_gcs_mark_len equ $ - s_gcs_mark
+s_gcs_sweep:  db " us, sweep "
+s_gcs_sweep_len equ $ - s_gcs_sweep
+s_gcs_live:   db " us, live "
+s_gcs_live_len equ $ - s_gcs_live
+s_gcs_heap:   db " KB, heap "
+s_gcs_heap_len equ $ - s_gcs_heap
+s_gcs_marked: db " KB, marked "
+s_gcs_marked_len equ $ - s_gcs_marked
+s_gcs_end:    db " blocks", 10
+s_gcs_end_len equ $ - s_gcs_end
+%endif
 %macro REASON 2
     db %1, %%e - %%s
 %%s: db %2
