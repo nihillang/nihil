@@ -27,7 +27,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-#app { display: grid; grid-template-rows: 42px 1fr 24px; height: 100vh; }
+#app { display: grid; grid-template-rows: 42px 1fr 24px; grid-template-columns: minmax(0, 1fr); height: 100vh; }
 header { display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--panel);
   border-bottom: 1px solid var(--line); }
 header .logo { font-weight: 700; letter-spacing: .5px; margin-right: 10px; }
@@ -180,7 +180,7 @@ select { background: var(--panel2); color: var(--text); border: 1px solid var(--
   padding: 6px 8px; font: inherit; resize: vertical; min-height: 44px; }
 .chat-input .chat-buttons { display: flex; flex-direction: column; gap: 4px; }
 #current.dirty::after { content: " ●"; color: var(--accent); }
-main { display: grid; grid-template-columns: 240px 5px 1fr; min-height: 0; }
+main { display: grid; grid-template-columns: 240px 5px minmax(0, 1fr); min-height: 0; min-width: 0; }
 aside { background: var(--panel); display: grid; grid-template-rows: 3fr 6px 2fr; min-height: 0; overflow: hidden; }
 #files, #db { overflow: auto; min-height: 0; padding: 6px 0; }
 #sideSplit { background: var(--line); cursor: row-resize; }
@@ -251,14 +251,14 @@ aside .db-group { padding: 4px 12px 0 14px; font-size: 11px; color: var(--dim); 
 .err-mark { text-decoration: wavy underline var(--err); }
 .gutter-err { color: var(--err); font-size: 12px; padding-left: 3px; cursor: default; }
 #splitter { background: var(--line); cursor: row-resize; }
-#bottom { display: grid; grid-template-rows: 32px 1fr; background: var(--panel); min-height: 0; }
+#bottom { display: grid; grid-template-rows: 32px 1fr; grid-template-columns: minmax(0, 1fr); background: var(--panel); min-height: 0; min-width: 0; }
 .tabs { display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--line); }
 .tab { padding: 6px 12px; cursor: pointer; color: var(--dim); border-bottom: 2px solid transparent; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .tab .count { background: var(--err); color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 5px; font-size: 11px; }
 .pane { display: none; min-height: 0; overflow: auto; }
 .pane.active { display: block; }
-#terminal { padding: 6px 0 0 8px; height: 100%; background: #101116; }
+#terminal { padding: 6px 0 0 8px; height: 100%; background: #101116; overflow: hidden; }
 #problems .item { padding: 6px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
   font-family: ui-monospace, monospace; font-size: 12px; }
 #problems .item:hover { background: var(--panel2); }
@@ -1048,8 +1048,16 @@ document.querySelectorAll('.tab').forEach((t) => t.onclick = () => showTab(t.dat
 const remember = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) {} };
 const recall = (k) => { try { return parseFloat(localStorage.getItem(k)); } catch (e) { return NaN; } };
 let sideW = 240, chatW = 400, chatOpen = false;
+// the code (editor and terminal) keeps at least MIN_WORK pixels: the side bar and the Claude panel
+// never take more than the window leaves (dragging stops there, and a narrower window shrinks them)
+const MIN_SIDE = 140, MIN_CHAT = 260, MIN_WORK = 360, HANDLE = 5;
+const mainWidth = () => document.documentElement.clientWidth;      // the window, not main (main grows with its columns)
+const roomFor = (other) => mainWidth() - HANDLE - (chatOpen ? HANDLE : 0) - MIN_WORK - other;
 function layout() {
-  document.querySelector('main').style.gridTemplateColumns = `${sideW}px 5px 1fr` + (chatOpen ? ` 5px ${chatW}px` : '');
+  // the widths shown: the ones chosen, made smaller when the window is too narrow (the chat first)
+  let chat = chatOpen ? Math.max(MIN_CHAT, Math.min(chatW, roomFor(sideW))) : 0;
+  const side = Math.max(MIN_SIDE, Math.min(sideW, roomFor(chat)));
+  document.querySelector('main').style.gridTemplateColumns = `${side}px ${HANDLE}px minmax(0, 1fr)` + (chatOpen ? ` ${HANDLE}px ${chat}px` : '');
   $('chat').hidden = $('chatResize').hidden = !chatOpen;
   editor.refresh(); fitTerm();
 }
@@ -1060,7 +1068,7 @@ function setSideRows(f) { $('side').style.gridTemplateRows = `${f}fr 6px ${1 - f
 $('sideResize').onmousedown = (e) => {
   e.preventDefault();
   const left = document.querySelector('main').getBoundingClientRect().left;
-  const move = (ev) => { const w = Math.min(640, Math.max(140, ev.clientX - left)); setSideWidth(w); remember('nihil-ide-side-width', w); editor.refresh(); fitTerm(); };
+  const move = (ev) => { const w = Math.max(MIN_SIDE, Math.min(640, roomFor(chatOpen ? Math.min(chatW, roomFor(MIN_SIDE)) : 0), ev.clientX - left)); setSideWidth(w); remember('nihil-ide-side-width', w); editor.refresh(); fitTerm(); };
   const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
   addEventListener('mousemove', move); addEventListener('mouseup', up);
 };
@@ -1614,10 +1622,11 @@ $('chatAccount').onclick = async () => {
   if (s && s.ok && !s.status.loggedIn && t && !t.run) { chatAdd('user', '/login', t); chatLogin(t, false); }
 };
 
+addEventListener('resize', layout);          // a narrower window: the panels give way to the code
 $('chatResize').onmousedown = (e) => {
   e.preventDefault();
   const right = document.querySelector('main').getBoundingClientRect().right;
-  const move = (ev) => { chatW = Math.min(900, Math.max(260, right - ev.clientX)); remember('nihil-ide-chat-width', chatW); layout(); };
+  const move = (ev) => { chatW = Math.max(MIN_CHAT, Math.min(900, roomFor(Math.min(sideW, roomFor(MIN_CHAT))), right - ev.clientX)); remember('nihil-ide-chat-width', chatW); layout(); };
   const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
   addEventListener('mousemove', move); addEventListener('mouseup', up);
 };
