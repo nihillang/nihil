@@ -28,7 +28,7 @@ build/runtime.bin: src/runtime.asm src/layout.inc
 # (src1/runtime_bin.nihil), so stage 1 builds without nasm; after a change to src/runtime.asm,
 # `make runtime` writes them again, and `make runtime-check` (CI) checks they are up to date
 RUNTIME_TEXT = { printf '// generated from src/runtime.asm by `make runtime` (nasm) — do not edit; `make runtime-check` compares\nruntime_bin = ['; \
-	  od -An -v -tu1 build/runtime.bin | xargs | sed 's/ /, /g'; printf '];\n'; }
+	  od -An -v -tu1 build/runtime.bin | tr -s ' \n' '  ' | sed 's/^ //; s/ $$//; s/ /, /g'; printf '\n];\n'; }
 
 runtime: build/runtime.bin
 	$(RUNTIME_TEXT) > src1/runtime_bin.nihil

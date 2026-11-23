@@ -1,0 +1,8 @@
+@ "std:time.nihil";
+a = now_us();
+... 50;                                     // waits 50 ms
+b = now_us();
+>> $(b - a >= 45000 && b - a < 2000000) + "\n";          // true: about 50 ms went by
+>> $(now_ms() >= b / 1000) + "\n";                       // true: the clock never goes back
+t = unix_time();
+>> $(t > 1700000000 && t < 4102444800) + "\n";           // true: a date between 2023 and 2100
