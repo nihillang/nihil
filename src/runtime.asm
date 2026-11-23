@@ -627,7 +627,16 @@ rt_rec_parse:
     cmp qword [r14 + r8 + 8], 3
     jne .size_next
     lea r11, [r10 + rdx]            ; … and, for a STRING, 1 + (length + 8) / 8, the length
-.size_trim:                         ; without the spaces at its end
+    mov rax, 0x2020202020202020     ; without the spaces at its end (8 at a time, then 1)
+.size_trim8:
+    lea r8, [r11 - 8]
+    cmp r8, r10
+    jl .size_trim
+    cmp [rbx + r8], rax
+    jne .size_trim
+    mov r11, r8
+    jmp .size_trim8
+.size_trim:
     cmp r11, r10
     jbe .size_len
     cmp byte [rbx + r11 - 1], ' '
@@ -671,12 +680,22 @@ rt_rec_parse:
     inc rsi
     jmp .trim_start
 .trim_end:
+    mov rax, 0x2020202020202020     ; 8 spaces at a time, then 1
+.trim_end8:
+    lea r8, [rdi - 8]
+    cmp r8, rsi
+    jl .trim_end1
+    cmp [rbx + r8], rax
+    jne .trim_end1
+    mov rdi, r8
+    jmp .trim_end8
+.trim_end1:
     cmp rdi, rsi
     jbe .trimmed
     cmp byte [rbx + rdi - 1], ' '
     jne .trimmed
     dec rdi
-    jmp .trim_end
+    jmp .trim_end1
 .trimmed:
     cmp r12, 1
     je .int
