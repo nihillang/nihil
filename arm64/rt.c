@@ -798,14 +798,42 @@ static i64 last_size = -1, last_stamp;
 i64 nh_last_size(void) { return last_size; }
 i64 nh_last_stamp(void) { return last_stamp; }
 
+// The file is kept open for the next call (4 files, paths up to 256 bytes), as rt_read_at does on
+// Linux: each call asks what is at the path now (stat), and uses the open file only while it is the
+// same one (st_dev and st_ino); a file replaced or removed is opened again or forgotten.
+static struct { int fd; dev_t dev; ino_t ino; size_t len; char path[257]; } kept[4];
+static int kept_next;
+
 char *nh_read_at(const char *t, i64 offset, i64 want) {
     char path[4096];
     last_size = -1; last_stamp = 0;
     if (!c_path(t, path, 4095)) return 0;
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return 0;
+    size_t len = strlen(path);
+    int slot = -1;
+    for (int i = 0; i < 4; i++)
+        if (kept[i].fd > 0 && kept[i].len == len && memcmp(kept[i].path, path, len) == 0) { slot = i; break; }
     struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return 0; }
+    int fd = -1, keep = 0;
+    if (stat(path, &st) != 0) {                    // nothing there: forget a file kept for it
+        if (slot >= 0) { close(kept[slot].fd - 1); kept[slot].fd = 0; }
+        return 0;
+    }
+    if (slot >= 0 && kept[slot].dev == st.st_dev && kept[slot].ino == st.st_ino) {
+        fd = kept[slot].fd - 1;                    // the same file: its fd, and the stat just made
+        keep = 1;
+    } else {
+        if (slot >= 0) { close(kept[slot].fd - 1); kept[slot].fd = 0; }   // another file there now
+        fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return 0;
+        if (fstat(fd, &st) != 0) { close(fd); return 0; }
+        if (len <= 256) {
+            int k = kept_next; kept_next = (kept_next + 1) & 3;
+            if (kept[k].fd > 0) close(kept[k].fd - 1);
+            kept[k].fd = fd + 1; kept[k].dev = st.st_dev; kept[k].ino = st.st_ino;
+            kept[k].len = len; memcpy(kept[k].path, path, len); kept[k].path[len] = 0;
+            keep = 1;
+        }
+    }
     i64 size = st.st_size;
     i64 stamp = (i64)((u64)st.st_mtimespec.tv_sec * 1000000000u + (u64)st.st_mtimespec.tv_nsec
                       + (u64)st.st_ino * 0x9E3779B97F4A7C15u);
@@ -821,7 +849,7 @@ char *nh_read_at(const char *t, i64 offset, i64 want) {
     }
     ((i64 *)r)[-1] = got;
     r[got] = 0;
-    close(fd);
+    if (!keep) close(fd);
     last_size = size;
     last_stamp = stamp;
     return r;
@@ -1117,6 +1145,12 @@ i64 nh_syscall(const i64 *a) {
     case 80: return res(chdir((const char *)x[1]));
     case 83: return res(mkdir((const char *)x[1], (mode_t)x[2]));
     case 217: return l_getdents64((int)x[1], (unsigned char *)x[2], x[3]);
+    case 228: {                                       // clock_gettime(0 = realtime, 1 = monotonic, timespec)
+        struct timespec ts;
+        if (clock_gettime(x[1] == 1 ? CLOCK_MONOTONIC : CLOCK_REALTIME, &ts) != 0) return -errno;
+        ((i64 *)x[2])[0] = ts.tv_sec; ((i64 *)x[2])[1] = ts.tv_nsec;
+        return 0;
+    }
     case 231: nh_flush(); _exit((int)x[1]);
     case 257: return res(openat(at_dir(x[1]), (const char *)x[2], open_flags(x[3]), (int)x[4]));
     case 262: {                                       // newfstatat(dir, path, struct stat (Linux), flags)

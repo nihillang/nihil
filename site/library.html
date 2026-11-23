@@ -162,6 +162,7 @@ protected calls that turn a runtime error into <code>_</code>: see §23–§25 o
 <tbody>
 <tr><td><code>@ "std:env.nihil";</code></td><td><code>env(key, default)</code>, <code>env_int(key, default)</code>: the <code>.env</code> file of the current folder, and over it the process's environment</td></tr>
 <tr><td><code>@ "std:json.nihil";</code></td><td><code>json_bool(b)</code>, <code>json_text(t)</code>, <code>json_text_or_null(t)</code>: helpers for writing JSON</td></tr>
+<tr><td><code>@ "std:time.nihil";</code></td><td><code>now_us()</code>, <code>now_ms()</code>: microseconds and milliseconds on the monotonic clock, to time something (subtract two readings); <code>unix_time()</code>: seconds since 1970 by the system clock</td></tr>
 <tr><td><code>@ "std:mcp.nihil";</code></td><td>an MCP server over stdio for AI agents: define <code>mcp_tools()</code> and <code>mcp_call(name, arguments)</code>, then call <code>mcp_serve(name, version)</code>; <code>arg_int</code> and <code>arg_text</code> read the arguments. <code>tools("prefix")</code> builds the tool list from your methods</td></tr>
 </tbody></table></div>
 </div></main>
