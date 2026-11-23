@@ -507,41 +507,90 @@ rt_put:
 ; and says which). NAME @ path checks this before reading the records.
 rt_lines:
     push rbx
+    push r11
     mov rsi, rax
-    mov rdx, [rax - 8]              ; n
+    mov rdx, [rax - 8]              ; n bytes
     mov r8, rcx                     ; width
-    xor ecx, ecx                    ; lines
-    xor ebx, ebx                    ; where the line starts
     test r8, r8
     jle .bad
-.next:
-    cmp rbx, rdx
-    jae .done
-    lea r9, [rbx + r8]              ; where it must end
-    cmp r9, rdx
-    ja .bad
-    mov r10, rbx
-.scan:                              ; no line break inside it
-    cmp r10, r9
-    jae .end_ok
-    cmp byte [rsi + r10], 10
-    je .bad
-    inc r10
-    jmp .scan
-.end_ok:
-    inc rcx
-    cmp r9, rdx
-    je .done                        ; the last line, without "\n"
-    cmp byte [rsi + r9], 10
+    test rdx, rdx
+    jz .none
+    lea r9, [r8 + 1]
+    mov rax, rdx
+    xor edx, edx
+    div r9                          ; rax = whole lines (with "\n"), rdx = what is left
+    mov rcx, rax                    ; lines
+    mov r10, rax                    ; line breaks there must be
+    test rdx, rdx
+    jz .ends
+    cmp rdx, r8
+    jne .bad                        ; the last line is not one width long
+    inc rcx                         ; the last line, without "\n"
+.ends:                              ; each line ends with "\n" where its width says
+    mov rdx, [rsi - 8]
+    mov rbx, r8
+    mov rax, r10
+.end_loop:
+    test rax, rax
+    jz .count
+    cmp byte [rsi + rbx], 10
     jne .bad
-    lea rbx, [r9 + 1]
-    jmp .next
-.done:
+    add rbx, r9
+    dec rax
+    jmp .end_loop
+.count:                             ; and there is no other one: count them all, 8 bytes at a time
+    push rcx
+    push r10
+    mov r9, 0x0A0A0A0A0A0A0A0A
+    mov r10, 0x7F7F7F7F7F7F7F7F
+    mov r11, 0x0101010101010101
+    xor ecx, ecx                    ; line breaks seen
+    xor ebx, ebx
+.word:
+    lea rax, [rbx + 8]
+    cmp rax, rdx
+    ja .tail
+    mov rax, [rsi + rbx]
+    xor rax, r9                     ; a "\n" byte is now 0
+    mov r8, rax
+    and r8, r10
+    add r8, r10
+    or r8, rax
+    or r8, r10                      ; the high bit is 0 exactly in the zero bytes
+    not r8
+    shr r8, 7
+    imul r8, r11
+    shr r8, 56                      ; how many
+    add rcx, r8
+    add rbx, 8
+    jmp .word
+.tail:
+    cmp rbx, rdx
+    jae .counted
+    cmp byte [rsi + rbx], 10
+    jne .tail_next
+    inc rcx
+.tail_next:
+    inc rbx
+    jmp .tail
+.counted:
+    pop r10
     mov rax, rcx
+    pop rcx
+    cmp rax, r10
+    jne .bad                        ; a line break inside a line
+    mov rax, rcx
+    pop r11
+    pop rbx
+    ret
+.none:
+    xor eax, eax
+    pop r11
     pop rbx
     ret
 .bad:
     mov rax, -1
+    pop r11
     pop rbx
     ret
 
@@ -552,6 +601,9 @@ rt_lines:
 ; FLOAT fields drop the spaces around; STRING keeps the leading ones. FLOAT: Clinger's fast
 ; path, m × 10^-k with m < 10^15 and k <= 22, one correctly rounded division, the same
 ; bits as the exact conversion.
+; A record is one block: its n slots, then each STRING field's text (its length word, its
+; bytes and a 0), which the slot points to. The collector keeps a block
+; for a pointer into its middle, so a text taken out of the record keeps the block alive.
 rt_rec_parse:
     push rbx
     push rbp
@@ -559,14 +611,54 @@ rt_rec_parse:
     push r13
     push r14
     push r15
+    sub rsp, 8                      ; [rsp]: where the next text goes
     mov rbx, rax                    ; the text (kept alive in a register)
     mov r13, rcx                    ; position of the current field
     mov r14, rdx                    ; the schema
-    mov rcx, [r14]                  ; n slots
+    mov rcx, [r14]                  ; n slots …
+    xor r9d, r9d
+    mov r10, r13                    ; where field i starts
+.size:
+    cmp r9, [r14]
+    jae .sized
+    mov r8, r9
+    shl r8, 4
+    mov rdx, [r14 + r8 + 16]        ; its width
+    cmp qword [r14 + r8 + 8], 3
+    jne .size_next
+    lea r11, [r10 + rdx]            ; … and, for a STRING, 1 + (length + 8) / 8, the length
+    mov rax, 0x2020202020202020     ; without the spaces at its end (8 at a time, then 1)
+.size_trim8:
+    lea r8, [r11 - 8]
+    cmp r8, r10
+    jl .size_trim
+    cmp [rbx + r8], rax
+    jne .size_trim
+    mov r11, r8
+    jmp .size_trim8
+.size_trim:
+    cmp r11, r10
+    jbe .size_len
+    cmp byte [rbx + r11 - 1], ' '
+    jne .size_len
+    dec r11
+    jmp .size_trim
+.size_len:
+    sub r11, r10
+    add r11, 16
+    shr r11, 3
+    add rcx, r11
+.size_next:
+    add r10, rdx
+    inc r9
+    jmp .size
+.sized:
     call rt_alloc
     mov rcx, [r14]
     mov [rax - 8], rcx
     mov r15, rax                    ; the record
+    lea rcx, [rax + rcx * 8]
+    mov [rsp], rcx
     xor ebp, ebp                    ; field i
 .field:
     cmp rbp, [r14]
@@ -588,12 +680,22 @@ rt_rec_parse:
     inc rsi
     jmp .trim_start
 .trim_end:
+    mov rax, 0x2020202020202020     ; 8 spaces at a time, then 1
+.trim_end8:
+    lea r8, [rdi - 8]
+    cmp r8, rsi
+    jl .trim_end1
+    cmp [rbx + r8], rax
+    jne .trim_end1
+    mov rdi, r8
+    jmp .trim_end8
+.trim_end1:
     cmp rdi, rsi
     jbe .trimmed
     cmp byte [rbx + rdi - 1], ' '
     jne .trimmed
     dec rdi
-    jmp .trim_end
+    jmp .trim_end1
 .trimmed:
     cmp r12, 1
     je .int
@@ -736,19 +838,20 @@ rt_rec_parse:
     mov eax, 1
     jmp .store
     ; ---- STRING
-.string:
+.string:                            ; into the record's block, after its slots
     mov r12, rdi
     sub r12, rsi                    ; length
-    push rsi
-    lea rcx, [r12 + 8]
-    shr rcx, 3
-    call rt_alloc
-    pop rsi
-    mov [rax - 8], r12
+    mov rax, [rsp]
+    mov [rax], r12
+    add rax, 8                      ; the text
     mov rdi, rax
     lea rsi, [rbx + rsi]
     mov rcx, r12
     rep movsb
+    lea rcx, [r12 + 8]              ; the next text after this one and a 0
+    shr rcx, 3
+    lea rcx, [rax + rcx * 8]
+    mov [rsp], rcx
 .store:
     mov [r15 + rbp * 8], rax
     inc rbp
@@ -759,6 +862,7 @@ rt_rec_parse:
 .fallback:
     mov rax, -1
 .end:
+    add rsp, 8
     pop r15
     pop r14
     pop r13
