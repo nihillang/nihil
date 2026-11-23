@@ -4,6 +4,15 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.3.3
+
+- the IDE's Claude panel shows a tab's earlier messages when the IDE is opened again: they are read from the file Claude Code keeps of the conversation (the latest 1.5 MB, without the tools' results), so it costs no tokens, and the next message goes on with the same conversation
+  - *Why:* A tab kept its conversation but showed nothing of it after the IDE was reopened, so it looked lost
+- the bottom panel (Terminal, Problems, Assembly, Table) can be minimized to its bar of tabs with ▾ or Ctrl+J / Cmd+J, and comes back when something has to be shown there
+  - *Why:* The editor could not take the whole height of the window
+- the browser no longer offers to translate the IDE (`translate="no"`), the scroll bars take the IDE's dark colors, and the panel's Activity starts closed (opened, it stays open)
+  - *Why:* A translator changes code and names on screen; the system's light scroll bars and an open Activity took attention and room from the code and the chat
+
 ## v4.3.2
 
 - lookups by key are faster: a program keeps in memory the last index it found to match its table, and reads the record once (on the Mac, `ITEM @{k} path` went from 70 to 40 µs; SPEC §20.5)
