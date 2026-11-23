@@ -170,9 +170,29 @@ emit_op_float(op = 0, pi = 0, pl = 0, pn = 0, pli = 0) {
     : TYPE_BOOL;
 }
 
+// the code at a … is one load of a constant or of a local (not of a global, which a method
+// called by the right side may change) → its length, else 0
+left_late(a = 0) {
+    n = load_simple(a);
+    n == 5 || n == 10 { : n; }
+    n == 7 && code[a + 1] == 0xC7 { : n; }
+    n == 7 && code[a + 1] == 0x8B && code[a + 2] == 0x85 { : n; }
+    : 0;
+}
+
+// emits n bytes kept in w (the first 8, the first in the low byte) and w2 (the rest)
+emit_packed(w = 0, w2 = 0, n = 0) {
+    i = 0;
+    n {
+        i < 8 { emit(w >> (i * 8) & 255); } || { emit(w2 >> ((i - 8) * 8) & 255); }
+        i = i + 1;
+    }
+}
+
 // binary: level 0 … 6; from 7 on it becomes unary
 binary(nv = 0) {
     nv >= 7 { : unary(); }
+    ls = size_code;
     t = binary(nv + 1);
     op = find_op(nv, tok_type);
     * op >= 0 {
@@ -200,10 +220,27 @@ binary(nv = 0) {
             : t;
         }
         next_token();
+        // the left side is a constant or a local (which only this method can change: the right
+        // side cannot, whatever it calls): it is loaded after the right side, without the stack
+        lk = left_late(ls);
+        lw = 0;                            // its bytes (up to 10), kept in this call: the right
+        lw2 = 0;                           // side compiles other binary operations
+        lk > 0 {
+            i = lk;
+            * i > 8 { i = i - 1; lw2 = lw2 << 8 | code[ls + i]; }
+            * i > 0 { i = i - 1; lw = lw << 8 | code[ls + i]; }
+            size_code = ls;
+        }
         pos_push = size_code;
-        emit(0x50);                        // push rax
+        lk == 0 { emit(0x50); }            // push rax
         u = binary(nv + 1);
-        load_simple(pos_push + 1) > 0 {
+        lk > 0 && load_simple(pos_push) > 0 {
+            reload_in_rcx(pos_push);        // both simple: the right one into rcx, then the left
+            emit_packed(lw, lw2, lk);
+        } || lk > 0 {
+            eb(0x48, 0x89, 0xC1);           // mov rcx, rax ; the left one into rax
+            emit_packed(lw, lw2, lk);
+        } || load_simple(pos_push + 1) > 0 {
             // the right side is a simple load: load it straight into rcx
             move_code_back(pos_push + 1, pos_push);
             reload_in_rcx(pos_push);
