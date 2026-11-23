@@ -30,16 +30,21 @@ jobs:
           mkdir -p $W/oldinc && cp $W/old-layout.inc $W/oldinc/layout.inc
           build old $W/old.asm $W/oldinc ""
           build new $W/new.asm src ""
+          build huge $W/new.asm src "-DGC_HUGE"
           build newstats $W/new.asm src "-DGC_STATS"
+          build hugestats $W/new.asm src "-DGC_STATS -DGC_HUGE"
+          cat /sys/kernel/mm/transparent_hugepage/enabled | tee -a $W/r.txt
           git checkout src1/runtime_bin.nihil
           for round in 1 2 3; do
-            for v in old new; do
+            for v in old new huge; do
               echo "== round $round $v" | tee -a $W/r.txt
               N=1000000 SYNCED=20 DIR=$W/data /usr/bin/time -f "  total %e s, peak %M KB" $W/tables-$v 2>&1 | grep -E "make|write|read the|lookup|read record|typical|total" | tee -a $W/r.txt
             done
           done
           echo "== new, GC_STATS (mark = while the program goes on; sweep = the pause)" | tee -a $W/r.txt
-          N=1000000 SYNCED=20 DIR=$W/data $W/tables-newstats 2>&1 >/dev/null | grep '^gc' | tail -16 | tee -a $W/r.txt
+          N=1000000 SYNCED=20 DIR=$W/data $W/tables-newstats 2>&1 >/dev/null | grep '^gc fork' | tee -a $W/r.txt
+          echo "== huge, GC_STATS" | tee -a $W/r.txt
+          N=1000000 SYNCED=20 DIR=$W/data $W/tables-hugestats 2>&1 >/dev/null | grep '^gc fork' | tee -a $W/r.txt
           echo "== the final table, Nihil (new) against C, byte for byte" | tee -a $W/r.txt
           cc -O2 -o $W/c bench/compare/tables.c
           mkdir -p $W/same
