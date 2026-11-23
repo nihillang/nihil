@@ -1503,6 +1503,13 @@ gc_init:
     mov [GC_BUMP], rax
     add rax, rbx
     mov [GC_HEAP_LIMIT], rax
+%ifdef GC_HUGE
+    mov rdi, [GC_HEAP_BASE]         ; huge pages for the heap (2 MiB): a fork copies far fewer entries
+    mov rsi, rbx
+    mov eax, 28                     ; sys_madvise(heap, bytes, MADV_HUGEPAGE)
+    mov edx, 14
+    syscall
+%endif
     mov rsi, rbx
     shr rsi, GC_PAGE_SHIFT - 3      ; 8 bytes per page
     call gc_mmap
