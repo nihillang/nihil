@@ -103,6 +103,9 @@ nihil ide stop               # stop the IDE's server, which runs in the backgrou
 
 Releases and checksums: [github.com/nihillang/nihil/releases](https://github.com/nihillang/nihil/releases).
 
+How fast tables are (write, read, query and change a million records, on Linux and macOS):
+[nihil-lang.dev/performance](https://nihil-lang.dev/performance.html); `bench/run.sh` measures your machine.
+
 The newest build of `main`, made by GitHub on every push (not a release: it may break):
 `curl -fsSL https://nihil-lang.dev/install.sh | NIHIL_VERSION=nightly sh`. The packages of any
 push are also kept with its run in Actions (Artifacts), for 90 days.
