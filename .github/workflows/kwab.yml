@@ -1,0 +1,30 @@
+# Temporary: writes by key, main against fast-key-writes, on one runner.
+name: kwab
+on:
+  push:
+    branches: [fast-key-writes]
+jobs:
+  kwab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: main against the branch
+        run: |
+          set -e
+          make -s build/nihilc1
+          W=$RUNNER_TEMP/kw; mkdir -p $W
+          ./nihilc1.sh bench/tables.nihil $W/tables-new
+          git worktree add -q $W/main origin/main
+          (cd $W/main && make -s build/nihilc1 && ./nihilc1.sh bench/tables.nihil $W/tables-old)
+          cc -O2 -o $W/c bench/compare/tables.c
+          for round in 1 2 3; do
+            for v in old new c; do
+              f=$W/tables-$v; [ $v = c ] && f=$W/c
+              echo "== round $round $v" | tee -a $W/r.txt
+              N=100000 OPS=20000 SYNCED=500 DIR=$W/data $f | grep -E "lookup by key|change by key|add by key|delete by key" | tee -a $W/r.txt
+            done
+          done
+          { echo '```'; cat $W/r.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
