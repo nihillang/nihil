@@ -94,8 +94,14 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   of records at once, change them in memory and write the table once with <code>@&gt;&gt;</code>: a million records take under half
   a second.</li>
   <li><b>Reading by key or by number is cheap at any size</b>: the runtime keeps the files open between reads, and a lookup by key is
-  one <code>stat</code> of the table and two reads. With a million records, reading record <i>i</i> measured 7 µs on Linux: by then the
-  program holds about 380 MB of records, and a garbage collection over them most likely fell inside that measurement.</li>
+  one <code>stat</code> of the table and two reads, about 1 µs and 2 µs at a hundred thousand records or a million.</li>
+  <li><b>A garbage collection stops the program</b> while it goes over everything in memory (<a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#124-memory-and-the-garbage-collector">SPEC §12.4</a>).
+  With a million records the program holds about 380 MB, and one collection takes 70 to 150 ms, depending on the machine:
+  timed 1 000 at a time, 19 of the 20 laps of reads take 1 to 2.5 ms and one takes about 150 ms (Linux, an i7-1255U). Spread over the 20 000 operations, that one pause made reading
+  record <i>i</i> measure 7 to 9 µs, where it typically takes 1 µs. The benchmark prints the median lap and the slowest after each
+  measurement of one record at a time, and the comparison shows both where they differ. A program that keeps hundreds of MB
+  of values pays such a pause now and then (a batch job hardly notices; a server answering requests sees it as an occasional
+  slow answer); C has no collector, and Go's runs alongside the program, with pauses under a millisecond.</li>
   <li><b>In memory a record is bigger than on disk:</b> each field takes an 8-byte slot, and a text its own bytes besides. This run
   holds two copies of the records (the ones it made and the ones it read). Reading a table needs, at its peak, two to three times
   the file's size.</li>
@@ -105,7 +111,7 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   <li><b>GitHub's runners are not all the same machine</b>, and a shared server under load gives noisier numbers still. Compare
   numbers from the same run.</li>
   <li><b>The clock</b> is <code>std:time</code>'s <code>now_us()</code>, in microseconds. The operations on one record are timed
-  thousands at a time (20 000 reads, 300 writes) and divided.</li>
+  thousands at a time (20 000 reads, 300 writes) and divided; the reads are also timed 1 000 at a time, for the median.</li>
 </ul>
 <p>The numbers come from the runs of 23 November 2026, with Nihil 4.4.0. The rules behind them are in
 <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
