@@ -598,6 +598,12 @@ __nihil_kc_size = -1;
 __nihil_kc_stamp = 0;
 __nihil_kc_cap = 0;
 __nihil_kf_line = "";
+__nihil_kf_j = 0;                               // key_find's slot (where the key is, or where it would go)
+__nihil_kf_c = 0;                               // and the index's capacity
+__nihil_kc_idx = "";                            // the index's path for __nihil_kc_idxof (made once)
+__nihil_kc_idxof = "";
+__nihil_kslot = "";                             // a slot read into here (4 bytes, reused)
+__nihil_kline = "";                             // a record's line read into here (reused while the width is the same)
 
 // The table and its index, kept open by the key operations themselves, so a lookup is one stat of
 // the table and two reads (the slot, the record): __nihil_kt_* is the table as the last stat saw it
@@ -696,8 +702,16 @@ __nihil_key_slot(idx = "", j = 0) {
 
 // where the key is: [record number or -1, its slot (or the empty one where it
 // would go), the capacity]. Every slot found is checked against the record.
+// where the key is: its record number, or -1; __nihil_kf_j is its slot (or the empty one where it
+// would go) and __nihil_kf_c the capacity. Every slot found is checked against the record. The slots
+// and lines are read into reused buffers and the key compared in place, so a lookup allocates nothing
+// here (the record found is left in __nihil_kf_line, which the next lookup reuses).
 __nihil_key_find(key = "", path = "", size = 0, stamp = 0, schema = [0], names = "", model = "", kf = 0) {
-    __idx = path + ".nihil-idx";
+    __nihil_kc_idxof != path {
+        __nihil_kc_idx = path + ".nihil-idx";
+        __nihil_kc_idxof = path;
+    }
+    __idx = __nihil_kc_idx;
     __c = 0;
     __cached = __nihil_kc_path == path && __nihil_kc_size == size && __nihil_kc_stamp == stamp;
     __cached { __c = __nihil_kc_cap; }
@@ -729,39 +743,81 @@ __nihil_key_find(key = "", path = "", size = 0, stamp = 0, schema = [0], names =
     __tfd = -1;                                     // the table's fd, while the caller's stamp is the last stat's
     __nihil_kt_path == path && __nihil_kt_stamp == stamp { __tfd = __nihil_kt_fd; }
     __w = __nihil_rec_width(schema) + 1;
+    #__nihil_kslot != 4 { __nihil_kslot = __nihil_bytes(4); }
+    #__nihil_kline != __w - 1 { __nihil_kline = __nihil_bytes(__w - 1); }
+    __ka = 0;                                       // the key field: its offset in a line, width and type
+    __i = 0;
+    kf { __ka = __ka + schema[2 + __i * 2]; __i = __i + 1; }
+    __kw = schema[2 + kf * 2];
+    __int = schema[1 + kf * 2] == 1;
+    __nihil_kf_c = __c;
     __j = __nihil_key_hash(key) & (__c - 1);
     __left = __c;
     * __left > 0 {
-        __s = "";
-        __nihil_ki_fd >= 0 { __s = __nihil_key_pread(__nihil_ki_fd, 16 + __j * 4, 4); }
-        #__s != 4 {
+        __v = -1;
+        __nihil_ki_fd >= 0 && __nihil_syscall([17, __nihil_ki_fd, __nihil_addr(__nihil_kslot), 4, 16 + __j * 4]) == 4 {
+            __v = __nihil_le_at(__nihil_kslot, 0, 4);
+        }
+        __v < 0 {
             __p = __nihil_pread(__idx, 16 + __j * 4, 4);
             __p == 0 && __cached {                  // the index went away: look again, from its header
                 __nihil_kc_path = "";
                 : __nihil_key_find(key, path, size, stamp, schema, names, model, kf);
             }
-            __p != 0 { __s = __nihil_str_at(__p); }
+            __v = 0;
+            __p != 0 {
+                __s = __nihil_str_at(__p);
+                #__s == 4 { __v = __nihil_le_at(__s, 0, 4); }
+            }
         }
-        __v = 0;
-        #__s == 4 { __v = __nihil_le_at(__s, 0, 4); }
-        __v == 0 { : [-1, __j, __c]; }
+        __v == 0 { __nihil_kf_j = __j; : -1; }
         __o = __v - 1;
         __t = "";
-        __tfd >= 0 { __t = __nihil_key_pread(__tfd, __o * __w, __w - 1); }
+        __tfd >= 0 && __nihil_syscall([17, __tfd, __nihil_addr(__nihil_kline), __w - 1, __o * __w]) == __w - 1 {
+            __t = __nihil_kline;
+        }
         #__t == 0 {
             __a = __nihil_pread(path, __o * __w, __w - 1);
             __a != 0 { __t = __nihil_str_at(__a); }
         }
-        #__t > 0 {
-            #__t == __w - 1 && __nihil_key_at(__t, 0, schema, names, path, __o + 1, kf) == key {
-                __nihil_kf_line = __t;
-                : [__o, __j, __c];
-            }
+        #__t == __w - 1 && __nihil_key_same(__t, __ka, __kw, __int, key, schema, names, path, __o + 1, kf) {
+            __nihil_kf_line = __t;
+            __nihil_kf_j = __j;
+            : __o;
         }
         __j = (__j + 1) & (__c - 1);
         __left = __left - 1;
     }
-    : [-1, __j, __c];
+    __nihil_kf_j = __j;
+    : -1;
+}
+
+// the key field of a line (at a, width w) is key: compared in place when its text there is already
+// the key's text (as __nihil_key_hash_at checks it), else through __nihil_key_at
+__nihil_key_same(t = "", a = 0, w = 0, int = false, key = "", schema = [0], names = "", path = "", line = 0, kf = 0) {
+    __b = a + w;
+    __s = a;
+    int { * __s < __b && t[__s] == ' ' { __s = __s + 1; } }
+    * __b > __s && t[__b - 1] == ' ' { __b = __b - 1; }
+    __plain = true;
+    int {
+        __d = __s;
+        __d < __b && t[__d] == '-' { __d = __d + 1; }
+        __d == __b || (t[__d] == '0' && (__b - __d > 1 || __d > __s)) { __plain = false; }
+        __k = __d;
+        * __plain && __k < __b {
+            t[__k] < '0' || t[__k] > '9' { __plain = false; }
+            __k = __k + 1;
+        }
+    }
+    !__plain { : __nihil_key_at(t, 0, schema, names, path, line, kf) == key; }
+    __b - __s != #key { : false; }
+    __k = 0;
+    * __k < #key {
+        t[__s + __k] != key[__k] { : false; }
+        __k = __k + 1;
+    }
+    : true;
 }
 
 // NAME @{k} path / NAME @?{k} path → the record's address, or 0 (= _)
@@ -773,14 +829,14 @@ __nihil_key_get(k = 0, path = "", schema = [0], names = "", model = "", kf = 0, 
     }
     __ty = schema[1 + kf * 2];
     __key = __nihil_key_value(k, __ty);
-    __f = __nihil_key_find(__key, path, __size, __nihil_kt_stamp, schema, names, model, kf);
-    __f[0] < 0 {
+    __o = __nihil_key_find(__key, path, __size, __nihil_kt_stamp, schema, names, model, kf);
+    __o < 0 {
         opt { : 0; }
         __q = __key;
         __ty == 3 { __q = "\"" + __key + "\""; }
         __nihil_fail("'" + path + "' has no " + model + " with " + __nihil_word(names, kf) + " = " + __q);
     }
-    : __nihil_rec_parse(__nihil_kf_line, 0, schema, names, path, __f[0] + 1);   // the line key_find read
+    : __nihil_rec_parse(__nihil_kf_line, 0, schema, names, path, __o + 1);   // the line key_find read
 }
 
 // @{}>> path, r : replaces the record with r's key, or adds r at the end
@@ -789,13 +845,15 @@ __nihil_key_put(path = "", r = 0, schema = [0], names = "", model = "", kf = 0) 
     __key = __nihil_key_value(__nihil_arr_at(r)[kf], schema[1 + kf * 2]);
     __size = __nihil_key_stat(path);                // one stat; the table kept open (for writing)
     __size < 0 { __size = 0; }
-    __f = __nihil_key_find(__key, path, __size, __nihil_kt_stamp, schema, names, model, kf);
+    __o = __nihil_key_find(__key, path, __size, __nihil_kt_stamp, schema, names, model, kf);
+    __fj = __nihil_kf_j;
+    __fc = __nihil_kf_c;
     __w = #__text;
     __idx = path + ".nihil-idx";
     __tfd = -1;
     __nihil_kt_path == path && __nihil_kt_rw { __tfd = __nihil_kt_fd; }
-    __f[0] >= 0 {
-        __nihil_key_write(path, __tfd, __f[0] * __w, __text, true);
+    __o >= 0 {
+        __nihil_key_write(path, __tfd, __o * __w, __text, true);
     } || {
         __size = __nihil_key_stat(path);            // a rebuild may have finished a deletion
         __size < 0 { __size = 0; }
@@ -807,13 +865,13 @@ __nihil_key_put(path = "", r = 0, schema = [0], names = "", model = "", kf = 0) 
             __at = __at - 1;
         }
         __nihil_key_write(path, __tfd, __at, __text, true);
-        (__n + 1) * 2 > __f[2] {                    // over half full: a bigger index
+        (__n + 1) * 2 > __fc {                      // over half full: a bigger index
             __nihil_key_rebuild(path, __nihil_fsize(path), __nihil_fstamp(path), schema, names, model, kf);
             :;
         }
         __ifd = -1;
         __nihil_ki_path == path && __nihil_ki_rw { __ifd = __nihil_ki_fd; }
-        __nihil_key_write(__idx, __ifd, 16 + __f[1] * 4, __nihil_le(__n + 1, 4), true);
+        __nihil_key_write(__idx, __ifd, 16 + __fj * 4, __nihil_le(__n + 1, 4), true);
     }
     __nihil_key_note(path);                         // the index's header (if lost: rebuilt)
 }
@@ -838,7 +896,7 @@ __nihil_key_put_auto(path = "", r = 0, schema = [0], names = "", model = "", kf 
         __size = __nihil_fsize(path);
         __size > 0 {
             __g = __nihil_key_find(__nihil_int_text(__next), path, __size, __nihil_fstamp(path), schema, names, model, kf);
-            __g[0] >= 0 {
+            __g >= 0 {
                 __next = __nihil_key_max(path, schema, names, model, kf) + 1;
                 __next <= __last { __next = __last + 1; }
             }
@@ -909,8 +967,10 @@ __nihil_key_delete(k = 0, path = "", schema = [0], names = "", model = "", kf = 
     }
     __ty = schema[1 + kf * 2];
     __key = __nihil_key_value(k, __ty);
-    __f = __nihil_key_find(__key, path, __size, __nihil_fstamp(path), schema, names, model, kf);
-    __f[0] < 0 {
+    __i = __nihil_key_find(__key, path, __size, __nihil_fstamp(path), schema, names, model, kf);
+    __fj = __nihil_kf_j;
+    __fc = __nihil_kf_c;
+    __i < 0 {
         opt { :; }
         __q = __key;
         __ty == 3 { __q = "\"" + __key + "\""; }
@@ -919,8 +979,7 @@ __nihil_key_delete(k = 0, path = "", schema = [0], names = "", model = "", kf = 
     __size = __nihil_fsize(path);                   // a rebuild may have finished a deletion
     __n = __nihil_rec_count(path, __size, schema, model);
     __w = __nihil_rec_width(schema) + 1;
-    __i = __f[0];
-    __mask = __f[2] - 1;
+    __mask = __fc - 1;
     __idx = path + ".nihil-idx";
     __last = __n - 1;
     __moved = "";
@@ -948,7 +1007,7 @@ __nihil_key_delete(k = 0, path = "", schema = [0], names = "", model = "", kf = 
     }
     // … and the deleted key's slot is emptied, moving back each slot after it
     // whose home is not between the hole and itself (linear probing)
-    __j = __f[1];
+    __j = __fj;
     __k = (__j + 1) & __mask;
     __v = __nihil_key_slot(__idx, __k);
     * __v != 0 {
