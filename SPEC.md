@@ -753,8 +753,10 @@ inclusions (§16). `build/runtime.nihil` is generated from `runtime.bin`, and
   library names another library. An unknown name is a compile error that lists the
   libraries. Today: `std:env.nihil` (the `.env` file and the environment: `env(key,
   default)`, `env_int`), `std:json.nihil` (`json_bool`, `json_text`,
-  `json_text_or_null`) and `std:mcp.nihil` (an MCP server over stdio: `mcp_serve`,
-  `arg_int`, `arg_text`; §27). Their locals start with `__` (§18).
+  `json_text_or_null`), `std:mcp.nihil` (an MCP server over stdio: `mcp_serve`,
+  `arg_int`, `arg_text`; §27) and `std:time.nihil` (clocks: `now_us()` and `now_ms()`,
+  microseconds and milliseconds on the monotonic clock, for timing; `unix_time()`, seconds
+  since 1970 by the system clock). Their locals start with `__` (§18).
 - Error messages point to the original file and line, e.g.
   `nihilc: src1/lexer.nihil:12:5: …` and `it is created on line 2 in util.nihil`.
 - Implementation: each file is read into the raw-files arena and copied into the
@@ -1009,6 +1011,15 @@ and the other writes still work on it.
 then the record, whose key is always checked), whatever the size of the table;
 adding one costs a write of the line and of one slot. The index has at least
 twice as many slots as records and doubles when it gets half full.
+
+**Files kept open.** The runtime keeps up to four files open between reads (`@[i]`, `@#`,
+key operations): each read asks the kernel what is at the path now (`stat`) and uses the open
+file only while it is the same one (device and inode). A file written in place is the same file;
+one replaced by a rename (`@>>`, an editor, another program) is opened again, and one removed is
+forgotten. So a read still sees the table as it is now, without opening it each time. The key
+operations go further: they keep the table and its index open themselves, so a lookup is
+one `stat` of the table (its size and stamp) and two reads, the index slot and the record;
+the index is read through the open file only while it is known to match the table.
 
 A program also keeps, in memory, the last index it found to match its table (the
 table's size and stamp, and the index's capacity): a key operation on a table

@@ -15,6 +15,10 @@ for p in range(-330, 310): cases.append(10.0 ** p) if abs(p) < 308 else None
 for e in range(-1074, 1024, 7): cases.append(2.0 ** e)
 for _ in range(int(sys.argv[2]) if len(sys.argv) > 2 else 20000):
     cases.append(from_bits(random.getrandbits(63)) if random.random() < .6 else random.uniform(-1e6, 1e6))
+# what data holds: whole numbers and 1 to 3 decimals (prices, measures), where FLOAT → text
+# takes its fast way (float_text.nihil, __nihil_ft_fast)
+for _ in range(int(sys.argv[2]) if len(sys.argv) > 2 else 20000):
+    cases.append(random.randint(-10**random.randint(1, 15), 10**random.randint(1, 15)) / random.choice([1, 10, 100, 1000]))
 cases = [c for c in cases if c is not None and math.isfinite(c)]
 cases += [-c for c in cases[:200]]
 stdin = ''.join(f'{bits(c)} {repr(c)}\n' for c in cases)
@@ -23,12 +27,13 @@ if r.returncode != 0: print('failed:', r.returncode, r.stderr.decode()[:300]); s
 lines = r.stdout.decode().split('\n')
 errors = 0
 for c, l in zip(cases, lines):
-    text, parsed = l.split(' ')
+    text, parsed, same = l.split(' ')
     round_trip = float(text) == c and math.copysign(1, float(text)) == math.copysign(1, c)
     shortest = significant(text) == significant(repr(c))
     exact_parse = int(parsed) == bits(c)
-    if not (round_trip and shortest and exact_parse):
+    same = same == '1'                      # the fast way and the general one agree
+    if not (round_trip and shortest and exact_parse and same):
         errors += 1
-        if errors <= 10: print(f'ERROR {c!r}: nihil="{text}" parsed={parsed} expected={bits(c)} round_trip={round_trip} shortest={shortest} parse={exact_parse}')
+        if errors <= 10: print(f'ERROR {c!r}: nihil="{text}" parsed={parsed} expected={bits(c)} round_trip={round_trip} shortest={shortest} parse={exact_parse} same={same}')
 print(f'{len(cases)} cases, {errors} errors')
 sys.exit(1 if errors else 0)

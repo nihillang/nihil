@@ -2655,18 +2655,25 @@ rt_write_file:
 ; rcx = the file's stamp: its st_mtime in nanoseconds mixed with its inode, so it
 ;   changes when the file is written or replaced (0 if it does not open).
 ; Reads only those bytes (pread), whatever the size of the file.
+; The file is kept open for the next call (FD_CACHE, 4 files, paths up to 256 bytes): each call
+; asks the kernel for what is at the path now (newfstatat), and uses the open file only while it
+; is the same one (st_dev and st_ino); a file replaced (a rename, an editor) or removed is opened
+; again or forgotten, so a call sees what another program wrote, as when it opened every time.
+; Frame: the path at rsp (4096), then at rsp + 4096 the stat buffer (144 bytes), the stamp (+160),
+; whether the fd is kept (+168) and the path's length (+176).
 rt_read_at:
     push rbx
     push r12
     push r13
     push r14
     push r15
-    sub rsp, 4096
+    sub rsp, 4096 + 256
     mov r12, rcx                    ; offset
     mov r13, rdx                    ; bytes wanted
     mov rcx, [rax - 8]
     cmp rcx, 4095
     ja .no_file
+    mov [rsp + 4096 + 176], rcx     ; the path's length
     mov rsi, rax
     mov rdi, rsp
     rep movsb
@@ -2681,27 +2688,116 @@ rt_read_at:
     pop rax
     je .no_file
 .path_ok:
-    mov eax, 257                    ; sys_openat(AT_FDCWD, path, O_RDONLY)
+    mov qword [rsp + 4096 + 168], 0 ; the fd is closed at the end, unless it is kept
+    mov eax, 262                    ; sys_newfstatat(AT_FDCWD, path, stat, 0): what is there now
     mov rdi, -100
     mov rsi, rsp
-    xor edx, edx
+    lea rdx, [rsp + 4096]
+    xor r10d, r10d
+    syscall
+    mov r14, rax
+    xor ebx, ebx                    ; the slot that keeps this path open, if any
+    mov r8, FD_CACHE
+    mov r9d, FD_SLOTS
+.find:
+    cmp qword [r8], 0
+    je .find_next
+    mov rcx, [rsp + 4096 + 176]
+    cmp rcx, [r8 + 24]
+    jne .find_next
+    mov rsi, rsp
+    lea rdi, [r8 + 32]
+    repe cmpsb
+    jne .find_next
+    mov rbx, r8
+    jmp .found
+.find_next:
+    add r8, FD_SLOT
+    dec r9d
+    jnz .find
+.found:
+    test r14, r14
+    js .gone
+    test rbx, rbx
+    jz .open
+    mov rax, [rsp + 4096]           ; the same file as the one kept open?
+    cmp rax, [rbx + 8]
+    jne .stale
+    mov rax, [rsp + 4096 + 8]
+    cmp rax, [rbx + 16]
+    jne .stale
+    mov r14, [rbx]                  ; yes: its fd, and the stat just made
+    dec r14
+    mov qword [rsp + 4096 + 168], 1
+    jmp .have_stat
+.gone:                              ; nothing at the path: forget a file kept for it
+    test rbx, rbx
+    jz .no_file
+    mov eax, 3                      ; sys_close
+    mov rdi, [rbx]
+    dec rdi
+    syscall
+    mov qword [rbx], 0
+    jmp .no_file
+.stale:                             ; another file at the path now: close the old one
+    mov eax, 3
+    mov rdi, [rbx]
+    dec rdi
+    syscall
+    mov qword [rbx], 0
+.open:
+    mov eax, 257                    ; sys_openat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC)
+    mov rdi, -100
+    mov rsi, rsp
+    mov edx, 0x80000
     syscall
     test rax, rax
     js .no_file
     mov r14, rax                    ; fd
-    mov eax, 5                      ; sys_fstat(fd, buffer): the path is no longer needed
+    mov eax, 5                      ; sys_fstat(fd, buffer): the file that was opened
     mov rdi, r14
-    mov rsi, rsp
+    lea rsi, [rsp + 4096]
     syscall
     test rax, rax
     js .close_no_file
-    mov r15, [rsp + 48]             ; st_size
-    imul rax, [rsp + 88], 1000000000 ; the stamp: st_mtime in nanoseconds …
-    add rax, [rsp + 96]
+    mov rcx, [rsp + 4096 + 176]     ; kept open, in the next slot, if the path fits
+    cmp rcx, 256
+    ja .have_stat
+    mov r8, FD_CACHE_NEXT
+    mov rax, [r8]
+    lea r9, [rax + 1]
+    and r9, FD_SLOTS - 1
+    mov [r8], r9
+    imul rax, rax, FD_SLOT
+    mov r8, FD_CACHE
+    add r8, rax
+    cmp qword [r8], 0
+    je .keep
+    mov eax, 3                      ; the slot's previous file is closed
+    mov rdi, [r8]
+    dec rdi
+    syscall
+.keep:
+    lea rax, [r14 + 1]
+    mov [r8], rax
+    mov rax, [rsp + 4096]           ; st_dev
+    mov [r8 + 8], rax
+    mov rax, [rsp + 4096 + 8]       ; st_ino
+    mov [r8 + 16], rax
+    mov rcx, [rsp + 4096 + 176]
+    mov [r8 + 24], rcx
+    mov rsi, rsp
+    lea rdi, [r8 + 32]
+    rep movsb
+    mov qword [rsp + 4096 + 168], 1
+.have_stat:
+    mov r15, [rsp + 4096 + 48]      ; st_size
+    imul rax, [rsp + 4096 + 88], 1000000000 ; the stamp: st_mtime in nanoseconds …
+    add rax, [rsp + 4096 + 96]
     mov rdx, 0x9E3779B97F4A7C15     ; … mixed with st_ino (a rename gives a new file)
-    imul rdx, [rsp + 8]
+    imul rdx, [rsp + 4096 + 8]
     add rax, rdx
-    mov [rsp + 256], rax            ; kept for the return (past the stat buffer)
+    mov [rsp + 4096 + 160], rax     ; kept for the return
     xor ecx, ecx                    ; bytes to read: 0 outside the file …
     test r12, r12
     js .count
@@ -2748,12 +2844,15 @@ rt_read_at:
 .got:
     mov rcx, [rbx - 8]
     mov byte [rbx + rcx], 0
+    cmp qword [rsp + 4096 + 168], 0
+    jne .kept
     mov eax, 3                      ; sys_close
     mov rdi, r14
     syscall
+.kept:
     mov rax, rbx
     mov rdx, r15
-    mov rcx, [rsp + 256]
+    mov rcx, [rsp + 4096 + 160]
     jmp .back
 .close_no_file:
     mov eax, 3
@@ -2764,7 +2863,7 @@ rt_read_at:
     mov rdx, -1
     xor ecx, ecx
 .back:
-    add rsp, 4096
+    add rsp, 4096 + 256
     pop r15
     pop r14
     pop r13
