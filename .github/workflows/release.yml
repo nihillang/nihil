@@ -77,6 +77,7 @@ jobs:
           name: nihil-linux-x86_64
           path: dist/out/
 
+      # for the macOS job; every path is in build/, so the artifact keeps them without it (linux/…)
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -110,15 +111,15 @@ jobs:
       - name: The compiler translated to ARM64
         run: |
           mkdir -p build/macos
-          cp linux/build/prelude_text.nihil linux/build/std_text.nihil build/
-          python3 macos/translate.py linux/build/nihilc1.x86 linux/build/nihilc1.map build/macos/nihilc1.s
+          cp linux/prelude_text.nihil linux/std_text.nihil build/
+          python3 macos/translate.py linux/nihilc1.x86 linux/nihilc1.map build/macos/nihilc1.s
           clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
           clang -arch arm64 -o build/macos/nihilc1-native build/macos/nihilc1.s build/macos/rt.o
 
       - name: Fixed point (the Mac's compiler emits the same bytes as Linux's)
         run: |
           printf -- '-map %s/src1/nihilc1.nihil\n' "$PWD" | build/macos/nihilc1-native > build/macos/c2.x86 2> /dev/null
-          cmp linux/build/nihilc1.x86 build/macos/c2.x86
+          cmp linux/nihilc1.x86 build/macos/c2.x86
 
       - name: Tests, natively
         run: |
