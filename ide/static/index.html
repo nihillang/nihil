@@ -132,6 +132,8 @@ select { background: var(--panel2); color: var(--text); border: 1px solid var(--
 .chat-log .empty { color: var(--dim); padding: 8px 0; }
 .msg { margin: 8px 0; line-height: 1.45; overflow-wrap: anywhere; }
 .msg.user { background: var(--sel); border-radius: 8px; padding: 6px 9px; white-space: pre-wrap; }
+.history-note { color: var(--dim); font-size: 12px; text-align: center; margin: 10px 0; }
+.history-note.end { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .msg.error { color: var(--err); white-space: pre-wrap; }
 .msg .meta { color: var(--dim); font-size: 11px; margin-top: 4px; }
 .msg pre { background: #101116; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; overflow: auto;
@@ -1414,11 +1416,63 @@ function agentDone(t, b, d) {
 const scrollEl = (el) => { const l = el.closest('.chat-log'); if (l) l.scrollTop = l.scrollHeight; };
 function showChat() {
   const t = cur(); if (!t) return;
-  applyView();
+  applyView(); loadHistory(t);
   t.unread = false;
   $('chatMode').value = t.mode; $('chatModel').value = t.model;
   setChatBusy(!!t.run);
   renderChatTabs(); renderChatInfo(); renderActivity(); renderTabs();
+}
+// the earlier messages of a tab's conversation, from Claude Code's own file of it (/api/claude/history):
+// shown above anything new when the tab is first seen after the page opens. Nothing is sent to
+// Claude, so it costs no tokens; the next message goes on with the same conversation (--resume).
+async function loadHistory(t) {
+  if (t.histDone || !t.session) return;
+  t.histDone = true;                               // once per tab; a message sent meanwhile wins
+  const sent = t.sent || 0;
+  const r = await api('/api/claude/history?session=' + encodeURIComponent(t.session));
+  if (!r.ok || !r.found || !r.lines || (t.sent || 0) !== sent) return;
+  const box = document.createElement('div'); box.className = 'history';
+  const note = (text, end) => { const n = document.createElement('div'); n.className = 'history-note' + (end ? ' end' : ''); n.textContent = text; box.appendChild(n); };
+  note(r.more ? 'Earlier messages (the oldest are not shown)' : 'Earlier messages');
+  let answer = null, shown = 0;
+  for (const line of r.lines.split('\n')) {
+    let d; try { d = JSON.parse(line); } catch (e) { continue; }
+    const m = d.message || {};
+    if (m.role === 'user' && typeof m.content === 'string') {
+      answer = null;
+      if (d.isCompactSummary) { note('The conversation was compacted here (/compact)'); continue; }
+      let text = m.content;
+      const cmd = /^<command-name>([^<]*)<\/command-name>/.exec(text.trim());
+      if (cmd) text = cmd[1];
+      else if (/^<(local-command|command-)/.test(text.trim())) continue;     // a command's own output
+      const k = text.indexOf('\n\n<ide>'); if (k >= 0) text = text.slice(0, k);   // the IDE's context, sent along
+      if (!text.trim()) continue;
+      const el = document.createElement('div'); el.className = 'msg user'; el.textContent = text.trim(); box.appendChild(el); shown++;
+      continue;
+    }
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) continue;
+    for (const b of m.content) {
+      if (!b) continue;
+      if (!answer && (b.type === 'text' || b.type === 'tool_use')) {
+        answer = document.createElement('div'); answer.className = 'msg assistant'; box.appendChild(answer); shown++;
+      }
+      if (b.type === 'text' && (b.text || '').trim()) { const el = document.createElement('div'); el.innerHTML = md(b.text); answer.appendChild(el); }
+      if (b.type !== 'tool_use') continue;
+      const inp = b.input || {};
+      if (b.name === 'ExitPlanMode' && inp.plan) {
+        const el = document.createElement('div'); el.className = 'plan'; el.innerHTML = '<div class="plan-title">Plan</div>' + md(inp.plan); answer.appendChild(el);
+      } else if (b.name === 'Bash' || b.name === 'Monitor' || b.name === 'Agent' || b.name === 'Task') {
+        const el = document.createElement('div'); el.className = 'tool';
+        el.textContent = (b.name === 'Agent' || b.name === 'Task' ? 'helper: ' : 'ran ') + (inp.description || inp.command || inp.prompt || b.name);
+        answer.appendChild(el);
+      } else toolLine(t, answer, b);
+    }
+  }
+  if (!shown) return;
+  note('Claude remembers this conversation: the next message goes on with it', true);
+  const e = t.log.querySelector('.empty'); if (e) e.remove();
+  t.log.insertBefore(box, t.log.firstChild);
+  scrollDown(t);
 }
 function renderChatTabs() {
   const bar = $('chatTabs'); bar.innerHTML = '';
@@ -2110,6 +2164,7 @@ async function chatSend(t = cur(), preset = '') {
   if (!t.title) { t.title = text.replace(/\s+/g, ' ').slice(0, 28); saveChatsOf(t.project); }
   if (t.view) setView(t, null);
   const brought = pins.map(pinName);
+  t.sent = (t.sent || 0) + 1; t.histDone = true;     // what is shown from here on is live, not history
   chatAdd('user', (brought.length ? `<div class="pinref">✦ ${esc(brought.join(', '))}</div>` : '') + esc(text), t);
   // a command goes as it is (the IDE's context would become its arguments)
   const context = slash ? '' : ideContext();
