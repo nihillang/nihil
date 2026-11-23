@@ -4,6 +4,17 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.3.2
+
+- lookups by key are faster: a program keeps in memory the last index it found to match its table, and reads the record once (on the Mac, `ITEM @{k} path` went from 70 to 40 µs; SPEC §20.5)
+  - *Why:* Every lookup re-read the index's header and read the record twice: about seven file operations where two are needed
+- the IDE's header fits any window: the path shrinks first, then the least used buttons fold into a ⋯ menu (Assembly, optimize, New folder, Open folder…, New), then the project's name shrinks
+  - *Why:* Below about 1150 px (1230 px in the app) the buttons ran past the window and the page scrolled sideways
+- Learn: chapter 12, automatic keys, and chapter 13, modeling data (the model as the schema, relations by key, joins by lookup, changing a model, what is not there yet)
+  - *Why:* Nothing explained how Nihil models data, and the automatic keys of v4.3.0 had no example
+- `bench/`: how fast tables are, for 10 000 to 1 000 000 records, and the page [Performance](https://nihil-lang.dev/performance.html) with the numbers on Linux and macOS
+  - *Why:* The costs were described in SPEC §20 but never measured
+
 ## v4.3.1
 
 - `install.sh` runs inside `main()`, called on its last line, so a download cut short runs nothing; and it refuses a `NIHIL_HOME` that is empty, `/`, your home directory, or an existing directory that is not a Nihil installation
