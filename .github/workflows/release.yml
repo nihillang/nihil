@@ -162,6 +162,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write       # build provenance attestation
+      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -170,6 +172,11 @@ jobs:
           pattern: nihil-*
           merge-multiple: true
           path: artifacts
+
+      - name: Build provenance for the packages (gh attestation verify FILE --repo nihillang/nihil)
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/*.tar.gz
 
       - name: "The release notes, from this version's part of CHANGELOG.md"
         run: |
@@ -183,6 +190,8 @@ jobs:
             echo '```'
             echo
             echo 'Linux x86_64, and macOS on Apple silicon (with the Xcode Command Line Tools).'
+            echo
+            echo 'Each package has a build provenance attestation: `gh attestation verify nihil-linux-x86_64.tar.gz --repo nihillang/nihil`.'
           } >> notes.md
           cat notes.md
 
@@ -199,6 +208,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write       # build provenance attestation
+      attestations: write
     concurrency:
       group: nightly
     steps:
@@ -209,6 +220,11 @@ jobs:
           pattern: nihil-*
           merge-multiple: true
           path: artifacts
+
+      - name: Build provenance for the packages (gh attestation verify FILE --repo nihillang/nihil)
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/*.tar.gz
 
       - name: The pre-release nightly, with this commit's packages
         env:
