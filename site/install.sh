@@ -11,7 +11,8 @@
 #   NIHIL_APPS=dir      macOS: where the copy of Nihil IDE.app goes (default ~/Applications); none: no app
 #                       copy (macOS) and no menu entry (Linux)
 #   NIHIL_BIN=dir       where to link the nihil command (default ~/.local/bin)
-#   NIHIL_VERSION=x.y.z a given release instead of the latest
+#   NIHIL_VERSION=x.y.z a given release instead of the latest; nightly: the newest build of main
+#                       (built by GitHub on every push, not a release: it may break)
 #
 # The packages carry a build provenance attestation from GitHub Actions; to check one by hand:
 #   gh attestation verify nihil-linux-x86_64.tar.gz --repo nihillang/nihil
@@ -40,7 +41,9 @@ main() {
     command -v tar >/dev/null 2>&1 || fail "tar is needed"
 
     repo=https://github.com/nihillang/nihil/releases
-    if [ -n "${NIHIL_VERSION:-}" ]; then
+    if [ "${NIHIL_VERSION:-}" = nightly ]; then
+        base=$repo/download/nightly
+    elif [ -n "${NIHIL_VERSION:-}" ]; then
         base=$repo/download/v${NIHIL_VERSION#v}
     else
         base=$repo/latest/download

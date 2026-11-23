@@ -285,11 +285,12 @@ no_comments(t = "") {
     : ls.join("\n");
 }
 
-// "#key: INT(5)" → "key|INT|5|1"; "" if it is not a field
+// "#key: INT(5)" → "key|INT|5|1" ("#+id: …" → "…|2": automatic); "" if it is not a field
 field_spec(part = "") {
     p = part.trim();
     key = "0";
     p.starts_with("#") { key = "1"; p = p.slice(1).trim(); }
+    p.starts_with("+") && key == "1" { key = "2"; p = p.slice(1).trim(); }   // #+: an automatic key
     colon? = p.find(":");
     colon == _ { : ""; }
     name = p.slice(0, colon || 0).trim();
@@ -375,6 +376,64 @@ find_models(project = "") {
     }
 }
 
+// the data model a table is read with: among the models of the programs whose lines have its
+// width, the one in a program that names the table (else the first); -1 if none fits
+pick_model(project = "", rel = "", width = 0) {
+    find_models(project);
+    base = base_name(rel);
+    chosen = -1;
+    i = 0;
+    * i < #M_NAME {
+        width < 0 || M_WIDTH[i] == width {
+            chosen < 0 { chosen = i; } || !M_TEXT[chosen].contains(base) && M_TEXT[i].contains(base) { chosen = i; }
+        }
+        i = i + 1;
+    }
+    : chosen;
+}
+
+// "model", "from_file", "fields" and "rows" of a page: its lines, cut into cells
+model_rows(chosen = 0, lines = [""], n = 0) {
+    specs = M_FIELDS[chosen].split(";");
+    fields = ["" ; #specs];
+    types = ["" ; #specs];
+    widths = [0 ; #specs];
+    i = 0;
+    * i < #specs {
+        f = specs[i].split("|");
+        types[i] = f[1];
+        widths[i] = f[2].int() || 0;
+        fields[i] = "{\"name\": " + q(f[0]) + ", \"type\": " + q(f[1]) + ", \"key\": " + $(f[3] != "0") + ", \"auto\": " + $(f[3] == "2") + ", \"width\": " + f[2] + "}";
+        i = i + 1;
+    }
+    rows = ["" ; n];
+    r = 0;
+    * r < n {
+        l = lines[r];
+        #l != M_WIDTH[chosen] { rows[r] = "{\"bad\": " + q(l) + "}"; }
+        || {
+            cells = ["" ; #specs];
+            pos = 0;
+            c = 0;
+            * c < #specs {
+                cell = l.slice(pos, pos + widths[c]);
+                pos = pos + widths[c];
+                types[c] == "STRING" {
+                    e = #cell;
+                    * e > 0 && cell[e - 1] == ' ' { e = e - 1; }
+                    cell = cell.slice(0, e);
+                } || { cell = cell.trim(); }
+                cells[c] = q(cell);
+                c = c + 1;
+            }
+            rows[r] = "{\"cells\": [" + cells.join(", ") + "]}";
+        }
+        r = r + 1;
+    }
+    : "\"model\": " + q(M_NAME[chosen]) + ", \"from_file\": " + q(M_FILE[chosen]) + ", \"fields\": ["
+      + fields.join(", ") + "], \"rows\": [" + rows.join(", ") + "]";
+}
+
 // a page of a table: rows from … from + limit - 1. Only that part of the file is read: a
 // table has lines of one width, so line i starts at i × (width + 1) and the count comes
 // from the size. Big tables (hundreds of MB) open as fast as small ones.
@@ -392,16 +451,7 @@ table_json(project = "", rel = "", from = 0, limit = 100) {
     nl? = first.find("\n");
     width = -1;
     nl != _ { width = nl || 0; } || size > 0 && size <= 65536 { width = size; }
-    find_models(project);
-    base = base_name(rel);
-    chosen = -1;
-    i = 0;
-    * i < #M_NAME {
-        width < 0 || M_WIDTH[i] == width {
-            chosen < 0 { chosen = i; } || !M_TEXT[chosen].contains(base) && M_TEXT[i].contains(base) { chosen = i; }
-        }
-        i = i + 1;
-    }
+    chosen = pick_model(project, rel, width);
     others = ["" ; 0];
     i = 0;
     * i < #M_NAME {
@@ -440,44 +490,293 @@ table_json(project = "", rel = "", from = 0, limit = 100) {
         * i < n { raw[i] = q(lines[i]); i = i + 1; }
         : head + ", \"raw\": [" + raw.join(", ") + "]}";
     }
+    : head + ", " + model_rows(chosen, lines, n) + "}";
+}
+
+// ---- queries on a table -------------------------------------------------------------------
+// The filter and the order are Nihil: the server writes a program with the table's model,
+// `rows = NAME @ path; sel = rows.where(filter).sort(order);`, compiles it with the language's
+// compiler and runs it; its output is the selected lines, a table of the same width, which the
+// page reads by pages like the table itself. The last result is kept until the query or the
+// table changes.
+Q_KEY = "";
+Q_OUT = "";
+Q_SCANNED = 0;
+Q_MS = 0;
+
+// a STRING literal of the language
+lit(s = "") {
+    : "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+}
+
+// the program of a query; `path` is how the program names the table
+query_program(chosen = 0, path = "", filter = "", order = "") {
     specs = M_FIELDS[chosen].split(";");
-    fields = ["" ; #specs];
-    types = ["" ; #specs];
-    widths = [0 ; #specs];
+    decl = ["" ; #specs];
     i = 0;
     * i < #specs {
         f = specs[i].split("|");
-        types[i] = f[1];
-        widths[i] = f[2].int() || 0;
-        fields[i] = "{\"name\": " + q(f[0]) + ", \"type\": " + q(f[1]) + ", \"key\": " + $(f[3] == "1") + ", \"width\": " + f[2] + "}";
+        k = "";
+        f[3] == "1" { k = "#"; }
+        f[3] == "2" { k = "#+"; }
+        f[1] == "BOOL" { decl[i] = k + f[0] + ": BOOL"; } || { decl[i] = k + f[0] + ": " + f[1] + "(" + f[2] + ")"; }
         i = i + 1;
     }
-    rows = ["" ; n];
-    r = 0;
-    * r < n {
-        l = lines[r];
-        #l != M_WIDTH[chosen] { rows[r] = "{\"bad\": " + q(l) + "}"; }
-        || {
-            cells = ["" ; #specs];
-            pos = 0;
-            c = 0;
-            * c < #specs {
-                cell = l.slice(pos, pos + widths[c]);
-                pos = pos + widths[c];
-                types[c] == "STRING" {
-                    e = #cell;
-                    * e > 0 && cell[e - 1] == ' ' { e = e - 1; }
-                    cell = cell.slice(0, e);
-                } || { cell = cell.trim(); }
-                cells[c] = q(cell);
-                c = c + 1;
-            }
-            rows[r] = "{\"cells\": [" + cells.join(", ") + "]}";
-        }
-        r = r + 1;
+    m = M_NAME[chosen];
+    sel = "rows";
+    #filter > 0 { sel = sel + ".where(" + filter + ")"; }
+    #order > 0 { sel = sel + ".sort(" + order + ")"; }
+    : m + " = @[" + decl.join("; ") + "];\n\nrows = " + m + " @ " + lit(path) + ";\nsel = " + sel + ";\n"
+      + ">> $(#sel) + \" of \" + $(#rows) + \" records\\n\";\n";
+}
+
+query_json(project = "", body = "") {
+    rel = (body.json("path") || "\"\"").json_text() || "";
+    filter = ((body.json("filter") || "\"\"").json_text() || "").trim();
+    order = ((body.json("sort") || "\"\"").json_text() || "").trim();
+    from = ((body.json("from") || "0").int()) || 0;
+    limit = ((body.json("limit") || "100").int()) || 100;
+    limit < 1 { limit = 1; }
+    limit > 1000 { limit = 1000; }
+    from < 0 { from = 0; }
+    !rel.ends_with(".dat") { : "{\"error\": \"not a table\"}"; }
+    full = table_file(project, rel);
+    #full == 0 { : "{\"error\": \"table not found\"}"; }
+    sz? = full.size();
+    sz == _ { : "{\"error\": \"table not found\"}"; }
+    size = sz || 0;
+    first = (full.read_from(0, 65536) || "");
+    nl? = first.find("\n");
+    width = -1;
+    nl != _ { width = nl || 0; } || size > 0 && size <= 65536 { width = size; }
+    chosen = pick_model(project, rel, width);
+    chosen < 0 || width <= 0 { : "{\"error\": " + q("no data model in the programs has lines of " + $width + " bytes, so the table cannot be queried") + "}"; }
+    (filter + order).contains("\n") || (filter + order).contains(";") || (filter + order).contains("{") || (filter + order).contains("}") {
+        : "{\"error\": \"the filter and the order are expressions: no ; { } or new lines\"}";
     }
-    : head + ", \"model\": " + q(M_NAME[chosen]) + ", \"from_file\": " + q(M_FILE[chosen]) + ", \"fields\": ["
-      + fields.join(", ") + "], \"rows\": [" + rows.join(", ") + "]}";
+    key = project + "|" + rel + "|" + $size + "|" + M_NAME[chosen] + "|" + M_FIELDS[chosen] + "|" + filter + "|" + order;
+    key != Q_KEY || !Q_OUT.is_file() {
+        Q_OUT.remove();
+        Q_KEY = "";
+        id = NEXT_RUN;
+        NEXT_RUN = NEXT_RUN + 1;
+        base = RUNS_DIR + "/query" + $id;
+        src = base + ".nihil";
+        // the program writes the selection to a file next to its output: `$sel` is its lines
+        prog = query_program(chosen, full, filter, order) + "@>> " + lit(base + ".sel") + ", sel;\n";
+        @>> src, prog;
+        t0 = now_ms();
+        ok = compile(project, src, base + ".bin", true, base);
+        src.remove();
+        !ok {
+            (base + ".bin").remove();
+            e = COMPILE_ERRORS.replace(src, "query");
+            : "{\"error\": \"the query does not compile\", \"errors\": " + e + ", \"program\": " + q(query_program(chosen, rel, filter, order)) + "}";
+        }
+        p? = [base + ".bin"].start(base + ".out", base + ".err", project);
+        p == _ { (base + ".bin").remove(); : "{\"error\": \"could not start the query\"}"; }
+        code = (p || 0).wait();
+        Q_MS = now_ms() - t0;
+        out? = @? (base + ".out");
+        err? = @? (base + ".err");
+        (base + ".bin").remove(); (base + ".out").remove(); (base + ".err").remove();
+        code != 0 {
+            (base + ".sel").remove();
+            : "{\"error\": " + q("the query stopped: " + (err || "").trim()) + "}";
+        }
+        // "n of m records"
+        said = (out || "").trim().split(" of ");
+        Q_SCANNED = 0;
+        #said > 1 { Q_SCANNED = (said[1].split(" ")[0].int()) || 0; }
+        Q_OUT = base + ".sel";
+        Q_KEY = key;
+    }
+    osz? = Q_OUT.size();
+    osize = osz || 0;
+    total = (osize + 1) / (width + 1);
+    from >= total && total > 0 { from = ((total - 1) / limit) * limit; }
+    part = Q_OUT.read_from(from * (width + 1), limit * (width + 1)) || "";
+    lines = part.split("\n");
+    n = #lines;
+    n > 0 && lines[n - 1] == "" { n = n - 1; }
+    n > limit { n = limit; }
+    : "{\"path\": " + q(rel) + ", \"query\": true, \"bytes\": " + $size + ", \"total\": " + $total + ", \"scanned\": " + $Q_SCANNED
+      + ", \"ms\": " + $Q_MS + ", \"width\": " + $width + ", \"from\": " + $from + ", \"limit\": " + $limit + ", \"others\": []"
+      + ", \"program\": " + q(query_program(chosen, rel, filter, order)) + ", " + model_rows(chosen, lines, n) + "}";
+}
+
+// ---- changing records ---------------------------------------------------------------------
+// Inserting, changing and deleting records are Nihil too: a program with the table's model
+// does it with the language's own writes. With a key field (#), by key: `@{}>>` and `= _`;
+// without one, by record number: `@[i]>>`, `@+>>`, and a delete rewrites the table (`@>>`),
+// keeping the order. Values are checked here and go into the program as literals.
+
+// the cells of a line of the table (its fields as the page shows them), joined by \x1f
+line_cells(chosen = 0, l = "") {
+    specs = M_FIELDS[chosen].split(";");
+    cells = ["" ; #specs];
+    pos = 0;
+    c = 0;
+    * c < #specs {
+        f = specs[c].split("|");
+        w = f[2].int() || 0;
+        cell = l.slice(pos, pos + w);
+        pos = pos + w;
+        f[1] == "STRING" {
+            e = #cell;
+            * e > 0 && cell[e - 1] == ' ' { e = e - 1; }
+            cell = cell.slice(0, e);
+        } || { cell = cell.trim(); }
+        cells[c] = cell;
+        c = c + 1;
+    }
+    : cells.join("\x1f");
+}
+
+VALUE_ERROR = "";
+// a value the page sent, as a literal of the field's type ("" and VALUE_ERROR if it is not one)
+value_lit(name = "", typ = "", v = "") {
+    VALUE_ERROR = "";
+    typ == "STRING" {
+        v.contains("\n") || v.contains("\r") { VALUE_ERROR = name + ": a STRING field cannot have a new line"; : ""; }
+        : lit(v);
+    }
+    t = v.trim();
+    t == "" && typ == "INT" { : "(0)"; }
+    t == "" && typ == "FLOAT" { : "0.0"; }
+    typ == "INT" {
+        n? = t.int();
+        n == _ { VALUE_ERROR = name + ": '" + t + "' is not an INT"; : ""; }
+        : "(" + $(n || 0) + ")";
+    }
+    typ == "FLOAT" {
+        x? = t.float();
+        x == _ { VALUE_ERROR = name + ": '" + t + "' is not a number"; : ""; }
+        : "(" + lit(t) + ".float() || 0.0)";
+    }
+    t == "T" || t == "true" || t == "1" { : "true"; }
+    t == "F" || t == "false" || t == "0" || t == "" { : "false"; }
+    VALUE_ERROR = name + ": '" + t + "' is not a BOOL (T or F)";
+    : "";
+}
+
+record_json(project = "", body = "") {
+    rel = (body.json("path") || "\"\"").json_text() || "";
+    op = (body.json("op") || "\"\"").json_text() || "";
+    index = ((body.json("index") || "-1").int()) || -1;
+    old = (body.json("old") || "\"\"").json_text() || "";
+    values = body.json("values") || "{}";
+    op != "insert" && op != "update" && op != "delete" { : "{\"error\": \"unknown change\"}"; }
+    !rel.ends_with(".dat") { : "{\"error\": \"not a table\"}"; }
+    full = table_file(project, rel);
+    #full == 0 { : "{\"error\": \"table not found\"}"; }
+    REPO && project == ROOT && !rel.starts_with("ide/workspace/") && !rel.starts_with("examples/") && !rel.starts_with("@db/") {
+        : "{\"error\": \"in the language repository, tables are changed in ide/workspace or examples\"}";
+    }
+    size = (full.size()) || 0;
+    first = (full.read_from(0, 65536) || "");
+    nl? = first.find("\n");
+    width = -1;
+    nl != _ { width = nl || 0; } || size > 0 && size <= 65536 { width = size; }
+    chosen = -1;
+    width < 0 {                                     // an empty table: the model is the one the page chose
+        mname = (body.json("model") || "\"\"").json_text() || "";
+        find_models(project);
+        i = 0;
+        * i < #M_NAME { M_NAME[i] == mname && chosen < 0 { chosen = i; } i = i + 1; }
+    } || { chosen = pick_model(project, rel, width); }
+    chosen < 0 { : "{\"error\": \"no data model in the programs fits this table\"}"; }
+    specs = M_FIELDS[chosen].split(";");
+    total = 0;
+    width > 0 { total = (size + 1) / (width + 1); }
+    keyf = -1;
+    i = 0;
+    * i < #specs { specs[i].split("|")[3] != "0" { keyf = i; } i = i + 1; }
+    m = M_NAME[chosen];
+    // the record as the page saw it: the change is refused if it changed since
+    op != "insert" && (keyf < 0 || index >= 0) {
+        index < 0 || index >= total { : "{\"error\": " + q("the table has no record " + $index + " now: refresh it") + "}"; }
+        now = line_cells(chosen, full.read_from(index * (width + 1), width) || "");
+        now != old { : "{\"error\": \"the record changed on disk since it was shown: refresh the table\", \"stale\": true}"; }
+    }
+    // the values: literals of each field
+    lits = ["" ; #specs];
+    cells = old.split("\x1f");
+    i = 0;
+    * i < #specs {
+        f = specs[i].split("|");
+        v? = values.json(f[0]);
+        text = "";
+        v != _ { text = (v || "\"\"").json_text() || ""; } || i < #cells { text = cells[i]; }
+        op != "delete" {
+            lits[i] = value_lit(f[0], f[1], text);
+            #VALUE_ERROR > 0 { : "{\"error\": " + q(VALUE_ERROR) + "}"; }
+        }
+        i = i + 1;
+    }
+    decl = ["" ; #specs];
+    i = 0;
+    * i < #specs {
+        f = specs[i].split("|");
+        k = "";
+        f[3] == "1" { k = "#"; }
+        f[3] == "2" { k = "#+"; }
+        f[1] == "BOOL" { decl[i] = k + f[0] + ": BOOL"; } || { decl[i] = k + f[0] + ": " + f[1] + "(" + f[2] + ")"; }
+        i = i + 1;
+    }
+    prog = m + " = @[" + decl.join("; ") + "];\nFILE = " + lit(full) + ";\n";
+    oldkey = "";
+    keyf >= 0 && op != "insert" { oldkey = value_lit("key", specs[keyf].split("|")[1], cells[keyf]); }
+    sets = "";
+    i = 0;
+    * i < #specs { sets = sets + "r." + specs[i].split("|")[0] + " = " + lits[i] + ";\n"; i = i + 1; }
+    op == "insert" {
+        prog = prog + "r = " + m + "();\n" + sets;
+        keyf >= 0 {
+            kn = specs[keyf].split("|")[0];
+            prog = prog + "had? = " + m + " @?{r." + kn + "} FILE;\nhad != _ { >> \"there is already a record with " + kn + " \" + $r." + kn + "; :: 3; }\n@{}>> FILE, r;\n>> $r." + kn + ";\n";
+        } || { prog = prog + "@+>> FILE, r;\n"; }
+    }
+    op == "update" {
+        keyf >= 0 {
+            kn = specs[keyf].split("|")[0];
+            prog = prog + "r = " + m + " @{" + oldkey + "} FILE;\n" + sets
+                 + "r." + kn + " != " + oldkey + " {\n    had? = " + m + " @?{r." + kn + "} FILE;\n    had != _ { >> \"there is already a record with " + kn + " \" + $r." + kn + "; :: 3; }\n    "
+                 + m + " @{" + oldkey + "} FILE = _;\n}\n@{}>> FILE, r;\n";
+        } || { prog = prog + "r = " + m + " @[" + $index + "] FILE;\n" + sets + "@[" + $index + "]>> FILE, r;\n"; }
+    }
+    op == "delete" {
+        keyf >= 0 { prog = prog + m + " @{" + oldkey + "} FILE = _;\n"; }
+        || {
+            prog = prog + "rows = " + m + " @ FILE;\nkeep = [" + m + "() ; #rows - 1];\nj = 0;\ni = 0;\n* i < #rows {\n    i != " + $index
+                 + " { keep[j] = rows[i]; j = j + 1; }\n    i = i + 1;\n}\n@>> FILE, keep;\n";
+        }
+    }
+    id = NEXT_RUN;
+    NEXT_RUN = NEXT_RUN + 1;
+    base = RUNS_DIR + "/record" + $id;
+    src = base + ".nihil";
+    @>> src, prog;
+    ok = compile(project, src, base + ".bin", true, base);
+    src.remove();
+    !ok {
+        (base + ".bin").remove();
+        es = COMPILE_ERRORS;
+        : "{\"error\": \"the change does not compile\", \"errors\": " + es + "}";
+    }
+    p? = [base + ".bin"].start(base + ".out", base + ".err", project);
+    p == _ { (base + ".bin").remove(); : "{\"error\": \"could not start the change\"}"; }
+    code = (p || 0).wait();
+    out? = @? (base + ".out");
+    err? = @? (base + ".err");
+    (base + ".bin").remove(); (base + ".out").remove(); (base + ".err").remove();
+    Q_KEY = "";                                     // a query result is old now
+    code != 0 {
+        msg = (out || "").trim();
+        #msg == 0 { msg = (err || "").trim().replace(full, rel); }
+        : "{\"error\": " + q(msg) + "}";
+    }
+    : "{\"ok\": true, \"keyed\": " + $(keyf >= 0) + ", \"key\": " + q((out || "").trim()) + "}";
 }
 
 // ---- compiling ------------------------------------------------------------------------
@@ -945,6 +1244,8 @@ handle(c = 0, req = "") {
         c.respond(200, "application/json", t);
         :;
     }
+    path == "/api/record" { c.respond(200, "application/json", record_json(project, body)); :; }
+    path == "/api/query" { c.respond(200, "application/json", query_json(project, body)); :; }
     path == "/api/file" && method == "GET" {
         rel = req.http_param("path") || "";
         t? = "";
@@ -986,6 +1287,37 @@ handle(c = 0, req = "") {
             c.respond(400, "application/json", "{\"error\": " + q(msg) + "}"); :;
         }
         !(project + "/" + rel).make_dir() { c.respond(500, "application/json", "{\"error\": " + q("could not make " + rel) + "}"); :; }
+        c.respond(200, "application/json", "{\"ok\": true, \"path\": " + q(rel) + "}");
+        :;
+    }
+    // the file tree's menu: rename (or duplicate) and delete a program of the project
+    path == "/api/rename" {
+        from = (body.json("from") || "\"\"").json_text() || "";
+        to = (body.json("to") || "\"\"").json_text() || "";
+        keep = (body.json("keep") || "false") == "true";       // duplicate: the original stays
+        !editable(project, from) || !editable(project, to) {
+            c.respond(400, "application/json", "{\"error\": " + q("only .nihil files inside the project can be renamed") + "}"); :;
+        }
+        text? = @? (project + "/" + from);
+        text == _ { c.respond(404, "application/json", "{\"error\": " + q(from + " not found") + "}"); :; }
+        (project + "/" + to).is_file() || (project + "/" + to).is_dir() {
+            c.respond(409, "application/json", "{\"error\": " + q(to + " already exists") + "}"); :;
+        }
+        last = 0;
+        i = 0;
+        * i < #to { to[i] == '/' { last = i; } i = i + 1; }
+        last > 0 { (project + "/" + to.slice(0, last)).make_dir(); }
+        @>> project + "/" + to, text || "";
+        !keep { (project + "/" + from).remove(); }
+        c.respond(200, "application/json", "{\"ok\": true, \"path\": " + q(to) + "}");
+        :;
+    }
+    path == "/api/delete" {
+        rel = (body.json("path") || "\"\"").json_text() || "";
+        !editable(project, rel) {
+            c.respond(400, "application/json", "{\"error\": " + q("only .nihil files inside the project can be deleted") + "}"); :;
+        }
+        !(project + "/" + rel).remove() { c.respond(500, "application/json", "{\"error\": " + q("could not delete " + rel) + "}"); :; }
         c.respond(200, "application/json", "{\"ok\": true, \"path\": " + q(rel) + "}");
         :;
     }

@@ -3,7 +3,9 @@
 #
 #   nihil PROGRAM.nihil [OUT]        compile into a native executable (OUT: PROGRAM without .nihil)
 #   nihil run PROGRAM.nihil [ARG…]   compile into a temporary file and run it
-#   nihil ide [--no-window]          the IDE, in an app window (workspace: ~/Nihil)
+#   nihil ide [--no-window]          the IDE, in an app window (workspace: ~/Nihil); its server
+#                                    runs in the background (--foreground: in this terminal)
+#   nihil ide stop                   stop the IDE's server
 #   nihil version                    the version installed
 #
 #   NIHIL_O0=1   no optimizations
@@ -26,7 +28,7 @@ home=$(cd "$(dirname "$self")/.." && pwd -P)
 lib=$home/libexec/nihil
 
 usage() {
-    echo "usage: nihil PROGRAM.nihil [OUT] | nihil run PROGRAM.nihil [ARG…] | nihil ide | nihil version" >&2
+    echo "usage: nihil PROGRAM.nihil [OUT] | nihil run PROGRAM.nihil [ARG…] | nihil ide [stop] | nihil version" >&2
     exit 2
 }
 
@@ -75,12 +77,22 @@ open_window() {
     fi
 }
 
-# the IDE: its server (in Nihil) in the foreground, the window opened once it answers
+# the IDE: in a terminal, its server (in Nihil) starts in the background and the prompt comes back
+# (`nihil ide stop` stops it); with --foreground, or when the output is not a terminal (the macOS
+# app, scripts), it runs in the foreground instead. The window opens once the server answers.
 ide() {
     server=$lib/ide-server
     [ -x "$server" ] || { echo "nihil: this installation has no IDE" >&2; exit 1; }
     window=true
-    [ "${1:-}" = "--no-window" ] && window=false
+    foreground=false
+    for a in "$@"; do
+        case $a in
+            --no-window) window=false ;;
+            --foreground) foreground=true ;;
+            *) usage ;;
+        esac
+    done
+    [ -t 1 ] || foreground=true
     ws=${NIHIL_WORKSPACE:-$HOME/Nihil}
     port=${NIHIL_IDE_PORT:-8730}
     url=http://127.0.0.1:$port/
@@ -88,8 +100,47 @@ ide() {
     # the examples are copied once, so they are the user's to change
     [ -e "$ws/examples" ] || cp -R "$home/share/nihil/examples" "$ws/examples"
     if curl -fs -o /dev/null "$url" 2>/dev/null; then
-        echo "The IDE is already running: $url"
+        echo "The IDE is already running: $url   (nihil ide stop stops it)"
         "$window" && open_window "$url"
+        exit 0
+    fi
+    if ! "$foreground"; then
+        state=$ws/.nihil-ide
+        log=$state/server.log
+        mkdir -p "$state"
+        cd "$ws"
+        NIHIL_IDE_INSTALL=$home NIHIL_IDE_ROOT=$ws NIHIL_IDE_PORT=$port nohup "$server" >> "$log" 2>&1 < /dev/null &
+        server_pid=$!
+        echo "$server_pid" > "$state/server.pid"
+        i=0
+        until curl -fs -o /dev/null "$url" 2>/dev/null; do
+            if ! kill -0 "$server_pid" 2>/dev/null || [ $i -ge 50 ]; then
+                tail -n 5 "$log" >&2
+                echo "nihil: the IDE did not start (log: $log)" >&2
+                kill "$server_pid" 2>/dev/null || true
+                rm -f "$state/server.pid"
+                exit 1
+            fi
+            sleep 0.2
+            i=$((i + 1))
+        done
+        echo "Nihil IDE: $url   (workspace: $ws)"
+        echo "Running in the background, log in $log; nihil ide stop stops it"
+        "$window" || exit 0
+        if [ "$(uname -s)" = Darwin ]; then
+            open_window "$url"
+        else
+            # Linux: the IDE's own browser; closing its window stops the server, as in the foreground
+            (
+                trap '' HUP
+                started=$(date +%s)
+                open_window "$url"
+                if [ $(($(date +%s) - started)) -gt 3 ] && [ -n "${profile:-}" ]; then
+                    kill "$server_pid" 2>/dev/null || true
+                    rm -f "$state/server.pid"
+                fi
+            ) > /dev/null 2>&1 &
+        fi
         exit 0
     fi
     if "$window"; then
@@ -115,6 +166,30 @@ ide() {
     echo "Nihil IDE: $url   (workspace: $ws; Ctrl+C stops it)"
     cd "$ws"
     NIHIL_IDE_INSTALL=$home NIHIL_IDE_ROOT=$ws NIHIL_IDE_PORT=$port exec "$server"
+}
+
+# stops the IDE's server: the one `nihil ide` started in the background, or the one on the port
+ide_stop() {
+    ws=${NIHIL_WORKSPACE:-$HOME/Nihil}
+    port=${NIHIL_IDE_PORT:-8730}
+    file=$ws/.nihil-ide/server.pid
+    pid=$(cat "$file" 2>/dev/null || true)
+    if [ -z "$pid" ] || ! ps -p "$pid" -o command= 2>/dev/null | grep -q ide-server; then
+        pid=$(lsof -t -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)
+        if [ -z "$pid" ] || ! ps -p "$pid" -o command= 2>/dev/null | grep -q ide-server; then
+            rm -f "$file"
+            echo "The IDE is not running"
+            return 0
+        fi
+    fi
+    kill "$pid"
+    i=0
+    while kill -0 "$pid" 2>/dev/null && [ $i -lt 25 ]; do
+        sleep 0.2
+        i=$((i + 1))
+    done
+    rm -f "$file"
+    echo "Stopped the IDE (process $pid)"
 }
 
 # compile SRC into OUT
@@ -150,11 +225,11 @@ case $1 in
         echo "nihil $(cat "$home/VERSION" 2>/dev/null || echo unknown)"
         ;;
     help|--help|-h)
-        sed -n '2,9p' "$self" | sed 's/^# \{0,1\}//'
+        sed -n '2,12p' "$self" | sed 's/^# \{0,1\}//'
         ;;
     ide)
         shift
-        ide "$@"
+        if [ "${1:-}" = stop ]; then ide_stop; else ide "$@"; fi
         ;;
     run)
         [ $# -ge 2 ] || usage

@@ -106,6 +106,7 @@ parse_model() {
     m_first[m] = n_fields;
     m_n[m] = 0;
     m_key[m] = -1;
+    m_auto[m] = false;
     n_models = n_models + 1;
     next_token();                        // name → "="
     next_token();                        // → "@"
@@ -113,9 +114,11 @@ parse_model() {
     next_token();
     * tok_type != ']' {
         is_key = tok_type == '#';
+        is_auto = false;
         is_key {
             m_key[m] >= 0 { error("a data model has only one key field (#)"); }
             next_token();
+            tok_type == '+' { is_auto = true; next_token(); }
         }
         tok_type != T_IDENT { error_expected("a field: name: TYPE(width)"); }
         fs = tok_start; fl = tok_len; fn = tok_line; fli = tok_lstart;
@@ -175,7 +178,11 @@ parse_model() {
             restore_pos(fs, fl, fn, fli);
             error("the key field (#) must be INT or STRING");
         }
-        is_key { m_key[m] = m_n[m]; }
+        is_auto && ty != TYPE_INT {
+            restore_pos(fs, fl, fn, fli);
+            error("an automatic key (#+) must be INT: it is numbered 1, 2, 3, …");
+        }
+        is_key { m_key[m] = m_n[m]; m_auto[m] = is_auto; }
         n_fields >= MAX_FIELD { error("too many fields in the data models"); }
         f_start[n_fields] = fs;
         f_len[n_fields] = fl;
@@ -794,7 +801,7 @@ cmd_put_key() {
         emit(0xB8);                        // mov eax, key field ; push rax
         emit_d(kf);
         emit(0x50);
-        call_prelude("__nihil_key_put", 48);
+        m_auto[m] { call_prelude("__nihil_key_put_auto", 48); } || { call_prelude("__nihil_key_put", 48); }
     } || {
         t != TYPE_UNKNOWN {
             restore_pos(pi, pl, pn, pli);

@@ -19,6 +19,12 @@ jobs:
       - name: Build (stage 0 in assembly, stage 1 in Nihil)
         run: make
 
+      - name: The runtime's bytes in src1/ are src/runtime.asm's
+        run: make runtime-check
+
+      - name: Stage 1 from the latest release's compiler is the same as from stage 0
+        run: make seedcheck
+
       - name: Tests, stage 0
         run: make test
 
@@ -39,3 +45,19 @@ jobs:
 
       - name: Garbage collector under pressure
         run: make gcstress
+
+  # what someone without nasm gets: stage 1 from the latest release's compiler, then its tests
+  without-nasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: No nasm on this machine
+        run: "! command -v nasm"
+
+      - name: Build (stage 1 from a seed)
+        run: make && test -x build/nihilc1 && test ! -e build/nihilc
+
+      - name: Tests, stage 1
+        run: make test1

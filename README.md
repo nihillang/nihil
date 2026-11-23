@@ -98,14 +98,26 @@ nihil run hello.nihil        # compile and run: Hello, Nihil!
 nihil hello.nihil            # or compile into ./hello, a native executable
 nihil version
 nihil ide                    # the IDE, in an app window (your workspace: ~/Nihil)
+nihil ide stop               # stop the IDE's server, which runs in the background
 ```
 
 Releases and checksums: [github.com/nihillang/nihil/releases](https://github.com/nihillang/nihil/releases).
 
+The newest build of `main`, made by GitHub on every push (not a release: it may break):
+`curl -fsSL https://nihil-lang.dev/install.sh | NIHIL_VERSION=nightly sh`. The packages of any
+push are also kept with its run in Actions (Artifacts), for 90 days.
+
 ## Building from source
 
-You need Linux on x86_64, `nasm`, `ld` (binutils) and `make`. `python3` is only
-used by `make floatcheck` and the IDE.
+You need Linux on x86_64, `make` and `curl`. `python3` is only used by `make floatcheck`
+and the IDE.
+
+With `nasm` and `ld` (binutils) installed, `make` builds stage 0 (the compiler in assembly)
+and compiles stage 1 with it. Without them, it downloads the latest release's compiler
+(`dist/seed.sh`, checked against its `.sha256`), which compiles stage 1, and the result
+compiles it again: the same bytes stage 0 gives (`make seedcheck`). The runtime that goes
+into every executable is kept assembled in `src1/runtime_bin.nihil`; only a change to
+`src/runtime.asm` needs `nasm` (`make runtime`).
 
 ```sh
 git clone https://github.com/nihillang/nihil.git && cd nihil
@@ -153,7 +165,9 @@ program.
 `ide/` is a small IDE whose server is written in Nihil (`ide/server.nihil`). With Nihil
 installed, `nihil ide` starts it and opens it in an app window (Chrome, Edge, Brave or
 Chromium with `--app`; the default browser otherwise). Its workspace is `~/Nihil`, where
-the examples are copied the first time. From the repository:
+the examples are copied the first time. The server runs in the background, with its log in
+`~/Nihil/.nihil-ide/server.log`, and `nihil ide stop` stops it; `nihil ide --foreground` keeps
+it in the terminal instead (Ctrl+C stops it). From the repository:
 
 ```sh
 make ide && ./build/ide-server             # then open http://127.0.0.1:8730

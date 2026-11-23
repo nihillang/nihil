@@ -1,0 +1,2 @@
+P = @[#+code: STRING(4); name: STRING(6)];
+p = P();

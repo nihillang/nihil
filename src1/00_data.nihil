@@ -201,6 +201,7 @@ m_schema = [0 ; MAX_MODEL];   // constant: ARRAY of INT [n, type1, width1, type2
 m_names = [0 ; MAX_MODEL];    // constant: STRING with the field names separated by spaces
 m_title = [0 ; MAX_MODEL];    // constant: STRING with the model's name
 m_key = [0 ; MAX_MODEL];      // the key field (#name), or -1
+m_auto = [false ; MAX_MODEL]; // the key is automatic (#+name): @{}>> numbers a record whose key is 0
 n_models = 0;
 f_start = [0 ; MAX_FIELD];
 f_len = [0 ; MAX_FIELD];

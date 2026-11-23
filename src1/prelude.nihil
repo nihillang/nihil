@@ -628,6 +628,57 @@ __nihil_key_put(path = "", r = 0, schema = [0], names = "", model = "", kf = 0) 
     __nihil_pwrite_ns(__idx, 0, __nihil_key_header(path));   // if lost: rebuilt
 }
 
+// @{}>> path, r for a model with an automatic key (#+): a record whose key is 0
+// gets the next number first, and r keeps it. The last number given is kept in
+// "<path>.nihil-seq", so the numbers of deleted records are not given again. If
+// that file is lost, or behind because records were written some other way,
+// the number found taken leads to the largest key of the table + 1. A key
+// written by hand past the counter moves the counter there.
+__nihil_key_put_auto(path = "", r = 0, schema = [0], names = "", model = "", kf = 0) {
+    __f = __nihil_arr_at(r);
+    __seq = path + ".nihil-seq";
+    __t? = @? __seq;
+    __last = 0;
+    __t != _ {
+        __v? = __nihil_s_int(__t || "");
+        __v != _ { __last = __v || 0; }
+    }
+    __f[kf] == 0 {
+        __next = __last + 1;
+        __size = __nihil_fsize(path);
+        __size > 0 {
+            __g = __nihil_key_find(__nihil_int_text(__next), path, __size, __nihil_fstamp(path), schema, names, model, kf);
+            __g[0] >= 0 {
+                __next = __nihil_key_max(path, schema, names, model, kf) + 1;
+                __next <= __last { __next = __last + 1; }
+            }
+        }
+        __f[kf] = __next;
+        __nihil_key_put(path, r, schema, names, model, kf);
+        @>> __seq, __nihil_int_text(__next) + "\n";
+        :;
+    }
+    __nihil_key_put(path, r, schema, names, model, kf);
+    __f[kf] > __last { @>> __seq, __nihil_int_text(__f[kf]) + "\n"; }
+}
+
+// the largest INT key of the table (0 if it has no records)
+__nihil_key_max(path = "", schema = [0], names = "", model = "", kf = 0) {
+    __size = __nihil_fsize(path);
+    __n = __nihil_rec_count(path, __size, schema, model);
+    __w = __nihil_rec_width(schema) + 1;
+    __text = "";
+    __size > 0 { __text = __nihil_str_at(__nihil_pread(path, 0, __size)); }
+    __m = 0;
+    __i = 0;
+    * __i < __n {
+        __v? = __nihil_s_int(__nihil_key_at(__text, __i * __w, schema, names, path, __i + 1, kf));
+        (__v || 0) > __m { __m = __v || 0; }
+        __i = __i + 1;
+    }
+    : __m;
+}
+
 // @[i]>> path, r for a model with a key: the index stays right when the key
 // of line i does not change, and is marked old (rebuilt later) when it does
 __nihil_key_write_at(i = 0, path = "", r = 0, schema = [0], names = "", model = "", kf = 0) {

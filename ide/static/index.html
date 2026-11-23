@@ -31,6 +31,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 header { display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--panel);
   border-bottom: 1px solid var(--line); }
 header .logo { font-weight: 700; letter-spacing: .5px; margin-right: 10px; }
+/* in Nihil IDE.app the window has no title bar: the header is the top of the window, with the
+   window's buttons (close, minimize, full screen) at its left and dragging it moves the window */
+html.in-app header { padding-left: 84px; }
+html.in-app.full-screen header { padding-left: 12px; }
 header .logo { display: flex; align-items: center; gap: 8px; }
 header .logo img { width: 26px; height: 26px; }
 header .logo span { color: #19e3e8; font-weight: 600; }
@@ -46,6 +50,17 @@ label.opt { display: flex; gap: 5px; align-items: center; color: var(--dim); mar
 #table .head .pager { display: inline-flex; gap: 4px; }
 #table .head .pager button { padding: 1px 8px; }
 #table .head select { padding: 1px 6px; }
+#table .qbar { display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 37px; z-index: 1; color: var(--dim); flex-wrap: wrap; }
+#table .qbar input { font: 12px/1.4 ui-monospace, monospace; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+#table .qbar #qFilter { flex: 1; min-width: 220px; }
+#table .qbar #qSort { width: 140px; }
+#table .qbar button { padding: 3px 10px; }
+#table .qbar .on { color: var(--text); }
+#table .qbar .bad { color: var(--bad, #f87171); }
+#table .qbar small { font: 11px ui-monospace, monospace; }
+#table.queried th { top: 75px; }
 select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
   padding: 5px 8px; font: inherit; max-width: 240px; cursor: pointer; }
 #current { color: var(--dim); font-family: ui-monospace, monospace; }
@@ -199,6 +214,12 @@ aside .db-group { padding: 4px 12px 0 14px; font-size: 11px; color: var(--dim); 
 #table td.bool-T { color: var(--ok); } #table td.bool-F { color: var(--dim); }
 #table tr.bad td { color: var(--err); }
 #table tr:hover td { background: #22252e; }
+#table td input.cell { font: inherit; width: 100%; min-width: 60px; box-sizing: border-box; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--accent, #22d3ee); border-radius: 4px; padding: 1px 4px; margin: -2px 0; }
+#table td.num input.cell { text-align: right; }
+#table tr.newrow td { background: #1d2a2e; }
+#table tr.saving td { opacity: .5; }
+#table .head .editnote { font-size: 11px; }
 #work { display: grid; grid-template-rows: 1fr 6px 38%; min-height: 0; min-width: 0; }
 #editorPane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 #editor { flex: 1; min-height: 0; }
@@ -253,6 +274,19 @@ dialog { background: var(--panel); color: var(--text); border: 1px solid var(--l
 dialog input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 5px;
   padding: 6px 8px; font: 13px ui-monospace, monospace; width: 320px; }
 dialog::backdrop { background: rgba(0,0,0,.5); }
+#chatPins { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+#chatPins:empty { display: none; }
+#chatPins .pin { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--panel2); font: 12px ui-monospace, Menlo, monospace; color: var(--accent); }
+#chatPins .pin button { border: 0; background: none; padding: 0 4px; color: var(--dim); cursor: pointer; }
+.msg .pinref { font: 11px ui-monospace, Menlo, monospace; color: var(--dim); margin-bottom: 4px; }
+#ctxMenu { position: fixed; z-index: 1000; min-width: 190px; padding: 4px; background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+#ctxMenu div { display: flex; justify-content: space-between; gap: 24px; padding: 5px 10px; border-radius: 5px; cursor: default; }
+#ctxMenu div:hover { background: var(--sel); }
+#ctxMenu div.off { color: var(--dim); pointer-events: none; }
+#ctxMenu div span { color: var(--dim); }
+#ctxMenu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
 </style>
 </head>
 <body>
@@ -308,6 +342,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
       <details id="activity" open><summary>Activity <span class="live" id="actSummary"></span></summary><div id="actBody"></div></details>
       <div id="chatPane"><div id="chatViews" hidden></div><div id="chatLogs"><div id="shellView" class="chat-log shell-view" hidden></div></div></div>
       <div class="chat-input"><div id="cmdPop" hidden></div>
+        <div id="chatPins" title="Code that goes with the next message (right-click a selection: Ask Claude, or Cmd+L)"></div>
         <textarea id="chatText" rows="3" placeholder="Message (Enter sends, Shift+Enter: new line)"></textarea>
         <div class="chat-buttons"><button id="chatSend" class="primary">Send</button><button id="chatStop" disabled title="Stop Claude in this tab">■ Stop</button></div>
         <div class="chat-opts">
@@ -385,6 +420,7 @@ const editor = CodeMirror($('editor'), {
   extraKeys: {
     'Ctrl-S': save, 'Cmd-S': save, 'Ctrl-Enter': run, 'Cmd-Enter': run,
     'Ctrl-/': 'toggleComment', 'Cmd-/': 'toggleComment',
+    'Ctrl-L': () => pinSelection(), 'Cmd-L': () => pinSelection(),
     Tab: (cm) => cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    '),
   },
 });
@@ -549,7 +585,7 @@ function renderTree() {
       el.style.paddingLeft = (8 + depth * 14) + 'px'; el.title = path;
       const caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = open ? '▾' : '▸';
       const icon = document.createElement('span'); icon.className = 'icon'; icon.textContent = open ? '📂' : '📁';
-      el.append(caret, icon, name);
+      el.append(caret, icon, name); el.dataset.folder = path;
       el.onclick = () => {
         selectedFolder = path;
         if (collapsed.has(path)) collapsed.delete(path); else collapsed.add(path);
@@ -563,7 +599,7 @@ function renderTree() {
       const active = it.table ? it.path === tableOpen : it.path === current;
       el.className = 'file' + (it.table ? ' table' : '') + (active ? ' active' : '');
       el.style.paddingLeft = (22 + depth * 14) + 'px';
-      el.textContent = it.path.slice(it.path.lastIndexOf('/') + 1); el.title = it.path;
+      el.textContent = it.path.slice(it.path.lastIndexOf('/') + 1); el.title = it.path; el.dataset.file = it.path;
       el.onclick = () => { selectedFolder = dirOf(it.path); it.table ? showTable(it.path) : open(it.path); };
       box.appendChild(el);
     }
@@ -596,6 +632,7 @@ function drawDatabase(box) {
     el.style.paddingLeft = '22px'; el.title = `${t.path} · ${t.records.toLocaleString('en-US')} records · ${fmtSize(t.bytes)}`;
     const meta = document.createElement('span'); meta.className = 'meta'; meta.textContent = t.records.toLocaleString('en-US');
     el.append(meta, t.path.slice(t.path.lastIndexOf('/') + 1));
+    el.dataset.table = t.path; el.dataset.records = t.records;
     el.onclick = () => showTable(t.path);
     box.appendChild(el);
   }
@@ -621,16 +658,155 @@ const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>'
 // a table opens with its first 100 records; the buttons page through it (the server reads
 // only the lines shown, so a table of hundreds of MB opens at once)
 let tablePage = 100;
+// a filter and an order, written in Nihil over the fields (rows.where(…).sort(…)), for the table open
+let tableQ = { path: '', filter: '', sort: '' };
+const queryOn = (path) => tableQ.path === path && (tableQ.filter || tableQ.sort);
+const qHistKey = (path) => 'nihil-ide-query:' + project + ':' + path;
+function qHistory(path) { try { return JSON.parse(localStorage.getItem(qHistKey(path)) || '[]'); } catch (e) { return []; } }
+function qRemember(path, filter, sort) {
+  if (!filter && !sort) return;
+  const h = [{ filter, sort }, ...qHistory(path).filter((x) => x.filter !== filter || x.sort !== sort)].slice(0, 12);
+  try { localStorage.setItem(qHistKey(path), JSON.stringify(h)); } catch (e) {}
+}
+function queryBar(path, r) {
+  const fields = r.fields ? r.fields.map((f) => f.name).join(' ') : '';
+  const hist = qHistory(path);
+  const info = r.error ? `<span class="bad">${esc(r.queryError || r.error)}</span>`
+    : r.query ? `<span class="on">${r.total.toLocaleString('en-US')} of ${r.scanned.toLocaleString('en-US')} records · ${r.ms} ms</span>`
+    : `<small>fields: ${esc(fields)}</small>`;
+  return `<div class="qbar"><span>where</span>` +
+    `<input id="qFilter" list="qHist" spellcheck="false" placeholder="${esc(r.fields ? sampleFilter(r.fields) : 'a BOOL expression of the fields')}" value="${esc(tableQ.path === path ? tableQ.filter : '')}">` +
+    `<datalist id="qHist">${hist.filter((x) => x.filter).map((x) => `<option value="${esc(x.filter)}">${x.sort ? 'sort ' + esc(x.sort) : ''}</option>`).join('')}</datalist>` +
+    `<span>sort</span><input id="qSort" spellcheck="false" placeholder="${esc(r.fields ? '-' + (r.fields.find((f) => f.type !== 'BOOL') || r.fields[0]).name : '')}" value="${esc(tableQ.path === path ? tableQ.sort : '')}">` +
+    `<button id="qRun" title="Enter">Filter</button><button id="qClear" ${queryOn(path) ? '' : 'disabled'}>Clear</button>` +
+    `<button id="qCopy" title="Copy the query as a Nihil program">Copy as program</button>${info}</div>`;
+}
+// an example of the language for the placeholder, from the model's own fields
+function sampleFilter(fields) {
+  const parts = [];
+  const num = fields.find((f) => f.type === 'FLOAT') || fields.find((f) => f.type === 'INT' && !f.key), str = fields.find((f) => f.type === 'STRING'), b = fields.find((f) => f.type === 'BOOL');
+  if (num) parts.push(`${num.name} > ${num.type === 'FLOAT' ? '10.0' : '10'}`);
+  if (b) parts.push(b.name);
+  if (str && parts.length < 2) parts.push(`${str.name}.starts_with("A")`);
+  return parts.join(' && ') || fields[0].name;
+}
+function queryProgram(path, r) {
+  if (r.program) return r.program + '>> $sel;\n';
+  const f = r.fields.map((x) => (x.key ? '#' : '') + x.name + ': ' + (x.type === 'BOOL' ? 'BOOL' : `${x.type}(${x.width})`)).join('; ');
+  return `${r.model} = @[${f}];\n\nrows = ${r.model} @ ${JSON.stringify(path)};\n>> $rows;\n`;
+}
+function wireQueryBar(path, r) {
+  const go = () => {
+    tableQ = { path, filter: $('qFilter').value.trim(), sort: $('qSort').value.trim() };
+    qRemember(path, tableQ.filter, tableQ.sort);
+    showTable(path, true, 0);
+  };
+  $('qFilter').onkeydown = $('qSort').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
+  $('qFilter').oninput = () => {       // a remembered filter brings its order back
+    const h = qHistory(path).find((x) => x.filter === $('qFilter').value);
+    if (h && !$('qSort').value) $('qSort').value = h.sort;
+  };
+  $('qRun').onclick = go;
+  $('qClear').onclick = () => { tableQ = { path, filter: '', sort: '' }; showTable(path, true, 0); };
+  $('qCopy').onclick = () => { if (r.fields || r.program) { clipWrite(queryProgram(path, r)); status('Copied the query as a program: paste it in a new file and run it'); } };
+}
+// ---- changing records: double click a cell to change it, + Record to add one, right click a row
+// to duplicate or delete it. The server does it with a Nihil program (/api/record): by key when
+// the model has one (#), else by record number; a record changed on disk since it was shown is
+// not overwritten.
+let shownTable = null;                            // {path, r, from}: the page of the table shown
+const keyed = (r) => r.fields && r.fields.some((f) => f.key);
+const canEdit = (r) => r.fields && (!r.query || keyed(r));
+function editNote(r) {
+  if (!canEdit(r)) return 'filtered: changes need a key (#) in the model; clear the filter to edit';
+  return 'double click a cell to edit · right click a row' + (keyed(r) ? ' · by key' : '');
+}
+async function changeRecord(op, i, values) {
+  const { path, r, from } = shownTable;
+  const row = i >= 0 ? r.rows[i] : null;
+  const body = { path, op, model: r.model, values: values || {},
+    index: row && !r.query ? from + i : -1, old: row ? row.cells.join('\x1f') : '' };
+  const res = await api('/api/record', body);
+  if (res.error) { status((res.errors && res.errors[0] ? res.errors[0].message : res.error), 'bad'); if (res.stale) showTable(path, true, from); return false; }
+  const kf = r.fields.find((f) => f.key);
+  status({ insert: 'Added a record to ', update: 'Changed a record of ', delete: 'Deleted a record of ' }[op] + path
+    + (op === 'insert' && kf && res.key ? ` (${kf.name} ${res.key})` : ''));
+  await loadFiles();
+  await showTable(path, true, from);
+  return true;
+}
+function editCell(td) {
+  if (!shownTable || !canEdit(shownTable.r) || td.querySelector('input')) return;
+  const i = +td.parentElement.dataset.i, j = +td.dataset.c, f = shownTable.r.fields[j];
+  const was = shownTable.r.rows[i].cells[j];
+  if (f.type === 'BOOL') { changeRecord('update', i, { [f.name]: was === 'T' ? 'F' : 'T' }); return; }
+  const inp = document.createElement('input'); inp.className = 'cell'; inp.value = was; inp.spellcheck = false;
+  if (f.type === 'STRING') inp.maxLength = f.width;
+  td.replaceChildren(inp); inp.focus(); inp.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    if (!save || inp.value === was) { td.textContent = was; return; }
+    td.parentElement.classList.add('saving');
+    if (!(await changeRecord('update', i, { [f.name]: inp.value }))) { td.parentElement.classList.remove('saving'); td.textContent = was; }
+  };
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } if (e.key === 'Escape') finish(false); };
+  inp.onblur = () => finish(true);
+}
+function newRecordRow(copyOf) {
+  if (!shownTable || !canEdit(shownTable.r)) return status('Clear the filter to add records (or give the model a key)', 'bad');
+  const r = shownTable.r, table = $('table').querySelector('table');
+  if (table.querySelector('tr.newrow')) return table.querySelector('tr.newrow input').focus();
+  const tr = document.createElement('tr'); tr.className = 'newrow';
+  tr.innerHTML = `<td class="i"><button title="Save (Enter)">✓</button></td>` + r.fields.map((f, j) =>
+    `<td class="${f.type === 'INT' || f.type === 'FLOAT' ? 'num' : ''}"><input class="cell" data-f="${esc(f.name)}" spellcheck="false" ` +
+    `placeholder="${esc(f.auto ? 'auto' : f.name)}" ${f.type === 'STRING' ? `maxlength="${f.width}"` : ''} value="${esc(copyOf && !f.auto ? copyOf[j] : f.type === 'BOOL' ? 'T' : '')}"></td>`).join('');
+  table.querySelector('tr').after(tr);
+  const save = async () => {
+    const values = {}; tr.querySelectorAll('input').forEach((x) => values[x.dataset.f] = x.value);
+    tr.classList.add('saving');
+    if (!(await changeRecord('insert', -1, values))) tr.classList.remove('saving');
+  };
+  tr.querySelector('button').onclick = save;
+  tr.querySelectorAll('input').forEach((x) => x.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') tr.remove(); });
+  tr.querySelector('input').focus();
+}
+function recordMenu(i) {
+  const r = shownTable.r, row = r.rows[i], ok = canEdit(r);
+  return [
+    { label: 'Duplicate Record', off: !ok, act: () => newRecordRow(row.cells) },
+    { label: 'Delete Record…', off: !ok, act: () => {
+      if (confirm(`Delete this record of ${shownTable.path}?\n\n${row.cells.join('  ·  ')}\n\nThe table file changes on disk.` + (keyed(r) ? '\n(By key: the last record moves into its place.)' : ''))) changeRecord('delete', i);
+    } },
+    '-',
+    { label: 'Add Record', off: !ok, act: () => newRecordRow() },
+    { label: 'Copy Values', act: () => clipWrite(row.cells.join('\t')) },
+  ];
+}
+$('table').addEventListener('dblclick', (e) => { const td = e.target.closest('tr[data-i] td[data-c]'); if (td) editCell(td); });
 async function showTable(path, quiet, from = 0) {
-  const r = await api('/api/table?path=' + encodeURIComponent(path) + '&from=' + from + '&limit=' + tablePage);
+  if (tableQ.path !== path) tableQ = { path, filter: '', sort: '' };
+  const q = queryOn(path);
   const box = $('table');
+  if (q) box.querySelector('.qbar span:last-child')?.replaceChildren('filtering…');
+  const r = q ? await api('/api/query', { path, filter: tableQ.filter, sort: tableQ.sort, from, limit: tablePage })
+              : await api('/api/table?path=' + encodeURIComponent(path) + '&from=' + from + '&limit=' + tablePage);
+  if (r.error && q) {
+    const e = (r.errors || [])[0];
+    r.queryError = e ? `${e.message}` : r.error;
+    box.classList.add('queried');
+    box.innerHTML = `<div class="head"><b>${esc(path)}</b><span>the query was not run</span></div>` + queryBar(path, r);
+    wireQueryBar(path, r); $('qFilter').focus();
+    if (!quiet) showTab('table');
+    return;
+  }
   if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
   tableOpen = path;
   renderTree();
   const shown = r.fields ? r.rows.length : r.raw.length;
   const first = r.from, last = r.from + shown, lastPage = Math.max(0, Math.floor((r.total - 1) / r.limit) * r.limit);
   const n = (x) => x.toLocaleString('en-US');
-  const count = r.total ? `records ${n(first + (shown ? 1 : 0))}–${n(last)} of ${n(r.total)}` : 'no records';
+  const count = r.total ? `${r.query ? 'matches' : 'records'} ${n(first + (shown ? 1 : 0))}–${n(last)} of ${n(r.total)}` : r.query ? 'no matches' : 'no records';
   const pager = r.total > shown ? `<span class="pager">` +
     `<button data-go="0" ${first === 0 ? 'disabled' : ''} title="first page">⏮</button>` +
     `<button data-go="${Math.max(0, first - r.limit)}" ${first === 0 ? 'disabled' : ''} title="previous ${r.limit}">◀</button>` +
@@ -642,19 +818,23 @@ async function showTable(path, quiet, from = 0) {
     html = `<div class="head"><b>${esc(path)}</b><span>${count}</span>${pager}${size}<span>no data model in the programs has lines of ${r.width} bytes</span></div>` +
       `<table>${r.raw.map((l, i) => `<tr><td class="i">${first + i}</td><td>${esc(l)}</td></tr>`).join('')}</table>`;
   } else {
-    const head = r.fields.map((f) => `<th class="${f.key ? 'key' : ''}">${f.key ? '#' : ''}${esc(f.name)}<small>${f.type}${f.type === 'BOOL' ? '' : '(' + f.width + ')'}</small></th>`).join('');
+    const head = r.fields.map((f) => `<th class="${f.key ? 'key' : ''}" title="${f.auto ? 'automatic key (#+): numbered by the table' : f.key ? 'key (#): unique' : ''}">${f.auto ? '#+' : f.key ? '#' : ''}${esc(f.name)}<small>${f.type}${f.type === 'BOOL' ? '' : '(' + f.width + ')'}</small></th>`).join('');
     const body = r.rows.map((row, i) => row.bad !== undefined
       ? `<tr class="bad"><td class="i">${first + i}</td><td colspan="${r.fields.length}">does not fit ${esc(r.model)}: ${esc(row.bad)}</td></tr>`
-      : `<tr><td class="i">${first + i}</td>${row.cells.map((c, j) => {
+      : `<tr data-i="${i}"><td class="i">${first + i}</td>${row.cells.map((c, j) => {
           const t = r.fields[j].type;
           const cls = t === 'INT' || t === 'FLOAT' ? 'num' : t === 'BOOL' ? 'bool-' + c : '';
-          return `<td class="${cls}">${esc(c)}</td>`; }).join('')}</tr>`).join('');
+          return `<td class="${cls}" data-c="${j}">${esc(c)}</td>`; }).join('')}</tr>`).join('');
     const others = r.others.length ? `<span title="${esc(r.others.join(', '))}">also fits: ${r.others.length}</span>` : '';
     html = `<div class="head"><b>${esc(path)}</b><span>${esc(r.model)} from ${esc(r.from_file)}</span><span>${count}</span>${pager}${size}` +
-      `<span>${r.width + 1} bytes per line · ${(r.bytes / 1048576).toFixed(1)} MB</span>${others}</div>` +
-      `<table><tr><th></th>${head}</tr>${body}</table>`;
+      `<span>${r.width + 1} bytes per line · ${(r.bytes / 1048576).toFixed(1)} MB</span>${others}` +
+      `<button id="recAdd" title="Add a record">+ Record</button><span class="editnote">${esc(editNote(r))}</span></div>` + queryBar(path, r) +
+      `<table><tr><th>${r.query ? '#' : ''}</th>${head}</tr>${body}</table>`;
   }
+  box.classList.toggle('queried', !!r.fields);
   box.innerHTML = html;
+  if (r.fields) { wireQueryBar(path, r); shownTable = { path, r, from: first }; $('recAdd').onclick = () => newRecordRow(); }
+  else shownTable = null;
   box.querySelectorAll('.pager button').forEach((b) => b.onclick = () => showTable(path, true, +b.dataset.go));
   $('tablePage').onchange = (e) => { tablePage = +e.target.value; showTable(path, true, Math.floor(first / tablePage) * tablePage); };
   if (!quiet) showTab('table');
@@ -900,6 +1080,183 @@ $('splitter').onmousedown = (e) => {
   addEventListener('mousemove', move); addEventListener('mouseup', up);
 };
 addEventListener('beforeunload', (e) => { if (tabs.some((t) => t.dirty)) e.preventDefault(); });
+// ---------------------------------------------------------------- right-click menu
+// The IDE's own menu: never the browser's (Back, Reload, Inspect…). Cut, copy and paste go through the
+// app (Nihil IDE.app: the system's own commands, no permission asked) or the clipboard API (a browser).
+const mac = /Mac/.test(navigator.platform);
+const shortcut = (k) => (mac ? '⌘' : 'Ctrl+') + k;
+const appBridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nihil;
+function nativeEdit(what) { appBridge.postMessage({ edit: what }); }
+if (appBridge) {
+  document.documentElement.classList.add('in-app');
+  // the header's empty parts move the window (a double click zooms it, as a title bar does)
+  const header = document.querySelector('header');
+  const empty = (e) => !e.target.closest('button, select, input, textarea, label, a, [contenteditable="true"]');
+  header.addEventListener('mousedown', (e) => { if (e.button === 0 && e.detail === 1 && empty(e)) appBridge.postMessage({ window: 'drag' }); });
+  header.addEventListener('dblclick', (e) => { if (empty(e)) appBridge.postMessage({ window: 'zoom' }); });
+}
+async function clipText() {
+  try { return await navigator.clipboard.readText(); } catch (e) { toast('Paste with ' + shortcut('V')); return ''; }
+}
+function clipWrite(text) { if (text) navigator.clipboard.writeText(text).catch(() => toast('Copy with ' + shortcut('C'))); }
+function toast(text) { const st = document.querySelector('#status') || document.body; if (st.id === 'status') st.textContent = text; }
+function closeMenu() { const m = $('ctxMenu'); if (m) m.remove(); }
+function openMenu(x, y, items) {
+  closeMenu();
+  const m = document.createElement('div'); m.id = 'ctxMenu';
+  for (const it of items) {
+    if (it === '-') { m.appendChild(document.createElement('hr')); continue; }
+    const d = document.createElement('div'); if (it.off) d.className = 'off';
+    d.innerHTML = '<b style="font-weight:400"></b><span></span>';
+    d.firstChild.textContent = it.label; d.lastChild.textContent = it.key || '';
+    d.addEventListener('mousedown', (e) => e.preventDefault());       // the focus stays where it was
+    d.addEventListener('click', () => { closeMenu(); it.act(); });
+    m.appendChild(d);
+  }
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(x, innerWidth - r.width - 4) + 'px';
+  m.style.top = Math.min(y, innerHeight - r.height - 4) + 'px';
+}
+addEventListener('mousedown', (e) => { if (!e.target.closest('#ctxMenu')) closeMenu(); });
+addEventListener('blur', closeMenu);
+addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+function editorMenu() {
+  const sel = editor.somethingSelected();
+  return [
+    { label: 'Cut', key: shortcut('X'), off: !sel, act: () => { editor.focus(); if (appBridge) nativeEdit('cut'); else { clipWrite(editor.getSelection()); editor.replaceSelection(''); } } },
+    { label: 'Copy', key: shortcut('C'), off: !sel, act: () => { editor.focus(); if (appBridge) nativeEdit('copy'); else clipWrite(editor.getSelection()); } },
+    { label: 'Paste', key: shortcut('V'), act: async () => { editor.focus(); if (appBridge) nativeEdit('paste'); else editor.replaceSelection(await clipText()); } },
+    '-',
+    { label: 'Select All', key: shortcut('A'), act: () => { editor.focus(); editor.execCommand('selectAll'); } },
+    { label: 'Comment / Uncomment', key: shortcut('/'), act: () => { editor.focus(); editor.execCommand('toggleComment'); } },
+    ...(sel ? ['-',
+      { label: '✦ Ask Claude about this', key: shortcut('L'), act: () => pinSelection() },
+      { label: '✦ Explain it', act: () => askAboutSelection('Explain this code.') },
+      { label: '✦ Find problems in it', act: () => askAboutSelection('Find bugs or problems in this code, and say how to fix them.') },
+    ] : []),
+    '-',
+    { label: 'Save', key: shortcut('S'), act: () => save() },
+    { label: 'Run', key: shortcut('↵'), act: () => run() },
+  ];
+}
+function terminalMenu() {
+  const sel = term.hasSelection();
+  return [
+    { label: 'Copy', key: shortcut('C'), off: !sel, act: () => { clipWrite(term.getSelection()); term.focus(); } },
+    { label: 'Paste', key: shortcut('V'), act: async () => { term.focus(); if (appBridge) nativeEdit('paste'); else term.paste(await clipText()); } },
+    '-',
+    { label: 'Select All', act: () => term.selectAll() },
+    { label: 'Clear', act: () => term.clear() },
+  ];
+}
+function fieldMenu(f) {
+  const sel = f.selectionStart !== f.selectionEnd;
+  const put = (t) => { f.setRangeText(t, f.selectionStart, f.selectionEnd, 'end'); f.dispatchEvent(new Event('input', { bubbles: true })); };
+  return [
+    { label: 'Cut', key: shortcut('X'), off: !sel || f.readOnly, act: () => { f.focus(); if (appBridge) nativeEdit('cut'); else { clipWrite(f.value.slice(f.selectionStart, f.selectionEnd)); put(''); } } },
+    { label: 'Copy', key: shortcut('C'), off: !sel, act: () => { f.focus(); if (appBridge) nativeEdit('copy'); else clipWrite(f.value.slice(f.selectionStart, f.selectionEnd)); } },
+    { label: 'Paste', key: shortcut('V'), off: f.readOnly, act: async () => { f.focus(); if (appBridge) nativeEdit('paste'); else put(await clipText()); } },
+    '-',
+    { label: 'Select All', key: shortcut('A'), act: () => { f.focus(); f.select(); } },
+  ];
+}
+// the file tree: a program, a folder, or the empty space below them
+function fileMenu(path) {
+  return [
+    { label: 'Open', act: () => open(path) },
+    { label: 'Run', act: async () => { await open(path); run(); } },
+    '-',
+    { label: 'Rename…', act: () => renameFile(path, false) },
+    { label: 'Duplicate…', act: () => renameFile(path, true) },
+    { label: 'Delete', act: () => deleteFile(path) },
+    '-',
+    { label: 'Copy Path', act: () => clipWrite(path) },
+    { label: '✦ Ask Claude about this file', act: () => pinFile(path) },
+  ];
+}
+function folderMenu(path) {
+  const shut = collapsed.has(path);
+  return [
+    { label: 'New File Here…', act: () => { selectedFolder = path; $('btnNew').click(); } },
+    { label: 'New Folder Here…', act: () => { selectedFolder = path; $('btnFolder').click(); } },
+    '-',
+    { label: shut ? 'Expand' : 'Collapse', act: () => { shut ? collapsed.delete(path) : collapsed.add(path); saveCollapsed(); renderTree(); } },
+    { label: 'Copy Path', act: () => clipWrite(path) },
+  ];
+}
+function treeMenu() {
+  return [
+    { label: 'New File…', act: () => { selectedFolder = ''; $('btnNew').click(); } },
+    { label: 'New Folder…', act: () => { selectedFolder = ''; $('btnFolder').click(); } },
+    '-',
+    { label: 'Refresh', act: () => loadFiles() },
+  ];
+}
+// the Database area: a table, or the empty space around the tables
+function tableMenu(path, records) {
+  return [
+    { label: 'Open', act: () => showTable(path) },
+    { label: 'Copy Path', act: () => clipWrite(path) },
+    '-',
+    { label: '✦ Ask Claude about this table', act: () => askAboutTable(path, records) },
+    '-',
+    { label: 'Refresh', act: () => loadFiles() },
+  ];
+}
+function dbMenu() { return [{ label: 'Refresh', act: () => loadFiles() }]; }
+// a table is binary (.dat), so it is not pinned like a file: the question names it, and Claude reads it
+function askAboutTable(path, records) {
+  toggleChat(true);
+  const f = $('chatText'), n = Number(records || 0).toLocaleString('en-US');
+  f.value = (f.value ? f.value.replace(/\s*$/, '\n') : '') + `About the table ${path} (${n} record${n === '1' ? '' : 's'}): `;
+  f.focus(); f.setSelectionRange(f.value.length, f.value.length);
+  f.dispatchEvent(new Event('input'));
+}
+async function renameFile(path, keep) {
+  const t = tabs.find((x) => x.path === path);
+  if (!keep && t && t.dirty) { status(`Save ${path} before renaming it`, 'bad'); return; }
+  let to = prompt(keep ? `Duplicate ${path} as:` : `Rename ${path} to:`, keep ? path.replace(/\.nihil$/, '-copy.nihil') : path);
+  if (!to || (to = to.trim()) === path) return;
+  if (!to.endsWith('.nihil')) to += '.nihil';
+  const r = await api('/api/rename', { from: path, to, keep });
+  if (r.error) return status(r.error, 'bad');
+  if (!keep && t) {
+    t.path = r.path;
+    if (current === path) { current = r.path; $('current').textContent = r.path; }
+    renderTabs();
+  }
+  await loadFiles();
+  if (keep) open(r.path);
+  status((keep ? 'Duplicated as ' : 'Renamed to ') + r.path);
+}
+async function deleteFile(path) {
+  if (!confirm(`Delete ${path}?\n\nThe file is removed from the disk; this cannot be undone.`)) return;
+  const r = await api('/api/delete', { path });
+  if (r.error) return status(r.error, 'bad');
+  const t = tabs.find((x) => x.path === path);
+  if (t) { t.dirty = false; closeTab(t); }
+  await loadFiles(); status('Deleted ' + path);
+}
+function pinFile(path) {
+  if (!pins.some((p) => p.file === path && p.whole)) pins.push({ file: path, whole: true });
+  renderPins(); toggleChat(true); $('chatText').focus();
+}
+addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const t = e.target;
+  const row = t.closest('#files [data-file], #files [data-folder]');
+  if (row) openMenu(e.clientX, e.clientY, row.dataset.file ? fileMenu(row.dataset.file) : folderMenu(row.dataset.folder));
+  else if (t.closest('#files')) openMenu(e.clientX, e.clientY, treeMenu());
+  else if (t.closest('#table tr[data-i]') && shownTable && !t.closest('input')) openMenu(e.clientX, e.clientY, recordMenu(+t.closest('#table tr[data-i]').dataset.i));
+  else if (t.closest('#table') && shownTable && !t.closest('input')) openMenu(e.clientX, e.clientY, [{ label: 'Add Record', off: !canEdit(shownTable.r), act: () => newRecordRow() }, { label: 'Refresh', act: () => showTable(shownTable.path, true, shownTable.from) }]);
+  else if (t.closest('#db [data-table]')) { const r = t.closest('#db [data-table]'); openMenu(e.clientX, e.clientY, tableMenu(r.dataset.table, r.dataset.records)); }
+  else if (t.closest('#db')) openMenu(e.clientX, e.clientY, dbMenu());
+  else if (t.closest('.CodeMirror')) openMenu(e.clientX, e.clientY, editorMenu());
+  else if (t.closest('.xterm')) openMenu(e.clientX, e.clientY, terminalMenu());
+  else if (t.matches('textarea, input:not([type=checkbox]):not([type=radio]):not([type=button])')) openMenu(e.clientX, e.clientY, fieldMenu(t));
+  else closeMenu();
+});
 addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(); }
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
@@ -1312,6 +1669,40 @@ $('chatSend').onclick = () => chatSend();
 $('chatStop').onclick = async () => { const t = cur(); if (t && t.run) await api('/api/stop', { id: t.run }); };
 
 // what is open in the IDE, for the message
+// ---- code taken to Claude: a selection kept as it was (file, lines, text) until the next message
+let pins = [];
+function selectionSnapshot() {
+  if (!current || !editor.somethingSelected()) return null;
+  const s = editor.listSelections()[0];
+  const from = s.from(), to = s.to();
+  // a selection that ends at the start of a line does not take that line
+  const a = from.line + 1, b = to.line + (to.ch === 0 && to.line > from.line ? 0 : 1);
+  return { file: current, a, b, text: editor.getSelection() };
+}
+const pinName = (p) => p.whole ? p.file : p.file + ':' + (p.a === p.b ? p.a : p.a + '–' + p.b);
+function renderPins() {
+  const box = $('chatPins'); box.innerHTML = '';
+  pins.forEach((p, i) => {
+    const c = document.createElement('span'); c.className = 'pin'; c.textContent = pinName(p);
+    const x = document.createElement('button'); x.textContent = '×'; x.title = 'Remove';
+    x.onclick = () => { pins.splice(i, 1); renderPins(); };
+    c.appendChild(x); box.appendChild(c);
+  });
+}
+function pinSelection() {
+  const p = selectionSnapshot();
+  if (!p) return false;
+  if (!pins.some((q) => q.file === p.file && q.a === p.a && q.b === p.b && q.text === p.text)) pins.push(p);
+  renderPins(); toggleChat(true); $('chatText').focus();
+  return true;
+}
+function askAboutSelection(question) {
+  if (!pinSelection()) return;
+  const t = cur();
+  if (t && t.run) { $('chatText').value = question; return; }     // busy: it waits in the box
+  chatSend(t, question);
+}
+
 function ideContext() {
   const parts = ['Project: ' + project];
   const fence = (t) => '```nihil\n' + t + (t.endsWith('\n') ? '' : '\n') + '```';
@@ -1321,11 +1712,12 @@ function ideContext() {
     const t = tabs.find((x) => x.path === current);
     if (t && t.dirty) parts.push('The active file has unsaved changes; the text in the editor is:\n' + fence(editor.getValue()));
   }
-  if ($('ctxSel').checked && current && editor.somethingSelected()) {
-    const s = editor.listSelections()[0];
-    const a = Math.min(s.anchor.line, s.head.line) + 1, b = Math.max(s.anchor.line, s.head.line) + 1;
-    parts.push(`Selected in ${current}, line${a === b ? ' ' + a : 's ' + a + '–' + b}:\n` + fence(editor.getSelection()));
-  }
+  const lines = (p) => `line${p.a === p.b ? ' ' + p.a : 's ' + p.a + '–' + p.b}`;
+  for (const p of pins) parts.push(p.whole ? `File the user brought to this message: ${p.file} (read it in the project)`
+    : `Code the user brought to this message, from ${p.file}, ${lines(p)}:\n` + fence(p.text));
+  const live = $('ctxSel').checked ? selectionSnapshot() : null;
+  if (live && !pins.some((p) => p.file === live.file && p.a === live.a && p.b === live.b))
+    parts.push(`Selected in ${live.file}, ${lines(live)}:\n` + fence(live.text));
   if ($('ctxTabs').checked && tabs.length) parts.push('Open tabs: ' + tabs.map((t) => t.path + (t.dirty ? ' (unsaved)' : '')).join(', '));
   if ($('ctxErr').checked && lastErrors.length)
     parts.push('Last compile errors:\n' + lastErrors.map((e) => (e.line ? `${e.file}:${e.line}:${e.col}: ` : '') + e.message).join('\n'));
@@ -1673,9 +2065,12 @@ async function chatSend(t = cur(), preset = '') {
   }
   if (!t.title) { t.title = text.replace(/\s+/g, ' ').slice(0, 28); saveChatsOf(t.project); }
   if (t.view) setView(t, null);
-  chatAdd('user', esc(text), t);
+  const brought = pins.map(pinName);
+  chatAdd('user', (brought.length ? `<div class="pinref">✦ ${esc(brought.join(', '))}</div>` : '') + esc(text), t);
   // a command goes as it is (the IDE's context would become its arguments)
-  const r = await api('/api/claude', { message: text, context: slash ? '' : ideContext(), session: t.session, mode: t.mode, model: t.model, name: t.title, allow: t.allow.join(' ') });
+  const context = slash ? '' : ideContext();
+  if (!slash) { pins = []; renderPins(); }
+  const r = await api('/api/claude', { message: text, context, session: t.session, mode: t.mode, model: t.model, name: t.title, allow: t.allow.join(' ') });
   if (!r.ok) { chatAdd('error', esc(r.error || 'could not start Claude'), t); renderChatTabs(); return; }
   runStarted(t, r.run, 'starting…');
   const run = r.run, mode = t.mode;
