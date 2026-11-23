@@ -1092,6 +1092,47 @@ claude_json(project = "", body = "") {
 }
 
 // ---- the account Claude Code uses (the panel's /login, /logout and /status) ----------------
+// the earlier messages of a conversation, from the file Claude Code keeps of it
+// (CLAUDE_DIR/projects/<folder>/<session>.jsonl): what was typed and what Claude answered, without
+// the tools' results nor the helpers' work, the latest HISTORY_MAX bytes of them. Reading it asks
+// Claude nothing, so it costs no tokens: the panel shows it when a tab with a conversation opens.
+HISTORY_MAX = 1500000;
+claude_history_json(session = "") {
+    !session_ok(session) { : "{\"ok\": false, \"error\": \"not a conversation\"}"; }
+    home = CLAUDE_DIR;
+    CLAUDE_DIR == "shared" { home = HOME + "/.claude"; }
+    base = home + "/projects";
+    ds? = base.list();
+    dl = ds || ["" ; 0];
+    file = "";
+    i = 0;
+    * i < #dl && #file == 0 {
+        f = base + "/" + dl[i] + "/" + session + ".jsonl";
+        !dl[i].starts_with(".") && f.is_file() { file = f; }
+        i = i + 1;
+    }
+    #file == 0 { : "{\"ok\": true, \"found\": false, \"more\": false, \"lines\": \"\"}"; }
+    size = file.size() || 0;
+    from = 0;
+    size > 8 * HISTORY_MAX { from = size - 8 * HISTORY_MAX; }      // a very long one: only its end
+    t = file.read_from(from) || "";
+    ls = t.split("\n");
+    keep = ["" ; 0];
+    total = 0;
+    more = from > 0;
+    k = #ls - 1;
+    * k >= 0 {
+        l = ls[k];
+        // the first line of a read from the middle is cut: left out
+        ok = (k > 0 || from == 0) && l.contains("\"isSidechain\":false") && !l.contains("\"isMeta\":true")
+             && (l.contains("\"role\":\"assistant\"") || l.contains("\"role\":\"user\",\"content\":\""));
+        ok && total + #l > HISTORY_MAX { more = true; ok = false; k = 0; }
+        ok { keep = keep + [l]; total = total + #l + 1; }
+        k = k - 1;
+    }
+    : "{\"ok\": true, \"found\": true, \"more\": " + $more + ", \"lines\": " + q(keep.reverse().join("\n")) + "}";
+}
+
 // `claude -p` cannot sign in, but `claude auth login` can without a screen: it opens the browser
 // on this machine, prints the sign-in link, and reads the code from its input when the page asks
 // for one. It runs like a program (kind "login"): the page reads its output with /api/output,
@@ -1337,6 +1378,7 @@ handle(c = 0, req = "") {
         c.respond(200, "application/json", "{\"out\": " + q(t) + ", \"bytes\": " + $#t + "}");
         :;
     }
+    path == "/api/claude/history" { c.respond(200, "application/json", claude_history_json(req.http_param("session") || "")); :; }
     path == "/api/claude/mcp" { c.respond(200, "application/json", claude_mcp_json(project)); :; }
     path == "/api/claude/logout" { c.respond(200, "application/json", claude_logout_json()); :; }
     path == "/api/check" { c.respond(200, "application/json", check_json(project, body)); :; }
