@@ -4,6 +4,19 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.4.0
+
+- `std:time.nihil`: `now_us()` and `now_ms()`, microseconds and milliseconds on the monotonic clock, to time something; `unix_time()`, seconds since 1970 by the system clock
+  - *Why:* A program could only read /proc/uptime, which ticks every 10 ms: too coarse to time anything short
+- tables are faster, closer to C and Go (bench/compare, Linux, 1 000 000 records): writing a table from 1.3 s to 0.76 s (C: 0.90 s), a lookup by key from 15 to 3 µs (C: 1.5 µs), a record by its number from 3 to 1.3 µs, building the index from 480 to 360 ms
+  - the runtime keeps up to four files open between reads, and checks with a stat of the path that each is still the file there: a table replaced by a rename (an editor, another program) is opened again, a removed one forgotten (SPEC §20.5)
+  - the key operations keep the table and its index open themselves: a lookup is one stat and two reads
+  - a FLOAT with at most 3 decimals (a price, a measure, a whole number) is turned into text with exact integer arithmetic instead of big integers, 8 times faster; the text is the same, checked on 200,000 values against the general algorithm and against Python
+  - building the index hashes each key straight from its line and no longer works a key out again at each collision
+  - *Why:* Measured against C and Go doing the same work, Nihil was 2 to 7 times slower on tables, mostly from opening files on every read and from turning prices into text with big integers
+- `make runtime` and `make runtime-check` work on macOS (the runtime's bytes are written with `tr`, not `xargs`)
+  - *Why:* macOS's xargs breaks the line, so the bytes did not match the ones made on Linux
+
 ## v4.3.3
 
 - the IDE's Claude panel shows a tab's earlier messages when the IDE is opened again: they are read from the file Claude Code keeps of the conversation (the latest 1.5 MB, without the tools' results), so it costs no tokens, and the next message goes on with the same conversation
