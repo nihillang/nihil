@@ -373,7 +373,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
         <label><input type="checkbox" id="ctxFile" checked>active file</label>
         <label><input type="checkbox" id="ctxTabs" checked>tabs</label>
         <label><input type="checkbox" id="ctxErr" checked>errors</label></div>
-      <details id="activity" open><summary>Activity <span class="live" id="actSummary"></span></summary><div id="actBody"></div></details>
+      <details id="activity"><summary title="What Claude and the IDE are doing (closed, the count of what is working shows here)">Activity <span class="live" id="actSummary"></span></summary><div id="actBody"></div></details>
       <div id="chatPane"><div id="chatViews" hidden></div><div id="chatLogs"><div id="shellView" class="chat-log shell-view" hidden></div></div></div>
       <div class="chat-input"><div id="cmdPop" hidden></div>
         <div id="chatPins" title="Code that goes with the next message (right-click a selection: Ask Claude, or Cmd+L)"></div>
@@ -1721,6 +1721,9 @@ function toggleChat(on) {
   let o = null; try { o = localStorage.getItem('nihil-ide-chat-open'); } catch (e) {}
   chatOpen = o === '1'; layout(); }
 $('btnClaude').onclick = () => toggleChat();
+// Activity starts closed (its summary still says what is working); opened, it stays open next time
+{ let o = null; try { o = localStorage.getItem('nihil-ide-activity-open'); } catch (e) {} $('activity').open = o === '1'; }
+$('activity').addEventListener('toggle', () => remember('nihil-ide-activity-open', $('activity').open ? '1' : '0'));
 $('chatAccount').onclick = async () => {
   const s = await showAccount(), t = cur();
   if (s && s.ok && !s.status.loggedIn && t && !t.run) { chatAdd('user', '/login', t); chatLogin(t, false); }
