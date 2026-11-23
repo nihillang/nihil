@@ -39,7 +39,7 @@ jobs:
             done
           done
           echo "== new, GC_STATS (mark = while the program goes on; sweep = the pause)" | tee -a $W/r.txt
-          N=1000000 SYNCED=20 DIR=$W/data $W/tables-newstats 2>&1 >/dev/null | grep '^gc' | tail -8 | tee -a $W/r.txt
+          N=1000000 SYNCED=20 DIR=$W/data $W/tables-newstats 2>&1 >/dev/null | grep '^gc' | tail -12 | tee -a $W/r.txt
           echo "== the final table, Nihil (new) against C, byte for byte" | tee -a $W/r.txt
           cc -O2 -o $W/c bench/compare/tables.c
           mkdir -p $W/same

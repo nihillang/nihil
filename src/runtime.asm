@@ -1162,11 +1162,14 @@ rt_error:
 %define GC_FORK_MIN   (1 << 20)
 %define GC_POLL       (256 << 10)
 %define GC_SWEEP_STEP 4
+%define GC_GIVE_STEP  4
 %else
 %define GC_FORK_MIN   (64 << 20)
 %define GC_POLL       (4 << 20)
 %define GC_SWEEP_STEP 64            ; pages swept at a time after a forked marking (4 MiB)
+%define GC_GIVE_STEP  256           ; free pages given back to the kernel at a time (16 MiB)
 %endif
+%define RUN_PENDING   63            ; a run's bit: its pages were not given back yet (not zero)
 %define PD_SMALL 1
 %define PD_LARGE 2
 %define PD_CONT  3
@@ -1381,7 +1384,9 @@ gc_small_page:
     ret
 
 ; rcx = pages → rax = the first one (zeroed memory), or 0 if there is no room.
-; First fit among the runs of free pages, else new pages. Keeps rcx; uses rdx, r9, r10.
+; First fit among the runs of free pages, else new pages. Pages of a run still pending (RUN_PENDING:
+; freed by a sweep and not given back to the kernel yet) are given back first, so they come zero.
+; Keeps rcx; uses rdx, r9, r10.
 gc_get_pages:
     mov r9, [GC_RUNS]
     xor r10d, r10d
@@ -1391,16 +1396,22 @@ gc_get_pages:
     mov rax, r10
     shl rax, 4
     mov rdx, [r9 + rax + 8]         ; its pages
+    btr rdx, RUN_PENDING
     cmp rdx, rcx
     jae .take
     inc r10
     jmp .find
 .take:
     add r9, rax                     ; the run
+    push qword [r9 + 8]             ; whether it is pending (its bit)
     mov rax, [r9]                   ; its first page
     sub rdx, rcx
     jz .whole
-    mov [r9 + 8], rdx               ; what is left starts after the pages taken
+    mov r10, [rsp]                  ; what is left starts after the pages taken (pending as it was)
+    shr r10, RUN_PENDING
+    shl r10, RUN_PENDING
+    or rdx, r10
+    mov [r9 + 8], rdx
     lea rdx, [rax + rcx]
     mov [r9], rdx
     jmp .address
@@ -1417,6 +1428,26 @@ gc_get_pages:
 .address:
     shl rax, GC_PAGE_SHIFT
     add rax, [GC_HEAP_BASE]
+    pop rdx
+    bt rdx, RUN_PENDING
+    jnc .ready
+    push rax                        ; pending: given back now, so the pages come zero
+    push rcx
+    push rsi
+    push rdi
+    push r11
+    mov rdi, rax
+    mov rsi, rcx
+    shl rsi, GC_PAGE_SHIFT
+    mov eax, 28                     ; sys_madvise(pages, bytes, MADV_DONTNEED)
+    mov edx, 4
+    syscall
+    pop r11
+    pop rdi
+    pop rsi
+    pop rcx
+    pop rax
+.ready:
     ret
 .new:
     mov rax, [GC_BUMP]
@@ -1683,6 +1714,24 @@ gc_collect:
 .not_sweeping:
     cmp qword [GC_CHILD], 0
     jne .running
+    cmp qword [GC_GIVING], 0
+    je .decide
+    mov rax, [GC_ALLOCATED]         ; free pages to give back: another step, unless no page is left
+    cmp rax, [GC_THRESHOLD]         ; or the next collection is due
+    jbe .decide
+    mov eax, GC_GIVE_STEP
+    call gc_give_step
+    mov rax, [GC_ALLOCATED]
+    cmp rax, [GC_LIMIT]
+    jae .decide
+    add rax, GC_POLL
+    cmp rax, [GC_LIMIT]
+    jbe .give_later
+    mov rax, [GC_LIMIT]
+.give_later:
+    mov [GC_THRESHOLD], rax
+    jmp .out
+.decide:
     mov rax, [GC_ALLOCATED]
     cmp rax, [GC_THRESHOLD]
     jbe .now                        ; called because no page is left: collect here, now
@@ -1728,7 +1777,67 @@ gc_threshold:
     mov eax, GC_MIN
 %endif
 .set:
+    mov [GC_LIMIT], rax
+    cmp qword [GC_GIVING], 0        ; pages to give back: gc_collect comes back sooner for them
+    je .threshold
+    cmp rax, GC_POLL
+    jbe .threshold
+    mov eax, GC_POLL
+.threshold:
     mov [GC_THRESHOLD], rax
+    ret
+
+; gives back to the kernel the pages of pending runs, up to rax pages (-1: all); when no run is left
+; to look at, GC_GIVING ends. A pending run that moved (gc_get_pages) is zeroed when it is taken.
+; Keeps every register.
+gc_give_step:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r11
+    mov r8, rax                     ; pages still to give back in this step
+    mov rbx, [GC_GIVE_POS]
+.run:
+    cmp rbx, [GC_NRUNS]
+    jae .all
+    test r8, r8
+    jle .paused
+    mov r9, rbx
+    shl r9, 4
+    add r9, [GC_RUNS]
+    mov rsi, [r9 + 8]
+    btr rsi, RUN_PENDING
+    jnc .next                       ; given back already
+    mov [r9 + 8], rsi
+    sub r8, rsi
+    mov rdi, [r9]
+    shl rdi, GC_PAGE_SHIFT
+    add rdi, [GC_HEAP_BASE]
+    shl rsi, GC_PAGE_SHIFT
+    mov eax, 28                     ; sys_madvise(pages, bytes, MADV_DONTNEED)
+    mov edx, 4
+    syscall
+.next:
+    inc rbx
+    jmp .run
+.all:
+    mov qword [GC_GIVING], 0
+.paused:
+    mov [GC_GIVE_POS], rbx
+    pop r11
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
     ret
 
 ; a collection with the program stopped: mark, then sweep
@@ -1950,6 +2059,41 @@ gc_unmap:
     mov qword [GC_MAP], 0
 .none:
     ret
+
+%ifdef GC_STATS
+; after a step of the sweep: counts it and keeps the longest; after the last one, on stderr:
+; "gc sweep: N steps, the longest X us"
+gc_step_stats:
+    call gc_now_us
+    sub rax, [GC_STAT_STEPT0]
+    inc qword [GC_STAT_STEPS]
+    cmp rax, [GC_STAT_STEPMAX]
+    jbe .kept
+    mov [GC_STAT_STEPMAX], rax
+.kept:
+    cmp qword [GC_SWEEPING], 0
+    jne .done
+    mov edi, 2
+    lea rsi, [rel s_gcs_steps]
+    mov edx, s_gcs_steps_len
+    call rt_write_fd
+    mov rax, [GC_STAT_STEPS]
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_longest]
+    mov edx, s_gcs_longest_len
+    call rt_write_fd
+    mov rax, [GC_STAT_STEPMAX]
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_us]
+    mov edx, s_gcs_us_len
+    call rt_write_fd
+    mov qword [GC_STAT_STEPS], 0
+    mov qword [GC_STAT_STEPMAX], 0
+.done:
+    ret
+%endif
 
 ; on exit: a child still marking is stopped (its work is no longer needed)
 gc_stop_child:
@@ -2261,6 +2405,12 @@ gc_sweep_step:
     push r12
     push r13
     push r14
+%ifdef GC_STATS
+    push rax
+    call gc_now_us
+    mov [GC_STAT_STEPT0], rax
+    pop rax
+%endif
     mov r12, [GC_DESC]
     mov r14, [GC_HEAP_BASE]
     mov r11, [GC_SWEEP_END]         ; pages to sweep in all
@@ -2296,7 +2446,10 @@ gc_sweep_step:
     inc rbx
     jmp .page
 .give:
-    mov qword [r12 + rbx * 8], 0    ; free: given back with its run
+    mov qword [r12 + rbx * 8], 0    ; free: a pending run the program can use at once
+    mov rdx, rbx
+    mov r10d, 1
+    call .add_run
     inc rbx
     jmp .page
 .large:
@@ -2324,11 +2477,25 @@ gc_sweep_step:
     add rbx, r9
     jmp .page
 .free_large:
+    mov rdx, rbx                    ; its pages, free: a pending run the program can use at once
+    mov r10, r9
+.free_large_page:
     mov qword [r12 + rbx * 8], 0
     inc rbx
     dec r9
-    jnz .free_large
+    jnz .free_large_page
+    call .add_run
     jmp .page
+.add_run:                           ; rdx = first page, r10 = pages: appended, pending
+    mov rax, [GC_NRUNS]
+    shl rax, 4
+    add rax, [GC_RUNS]
+    mov [rax], rdx
+    mov rcx, r10
+    bts rcx, RUN_PENDING
+    mov [rax + 8], rcx
+    inc qword [GC_NRUNS]
+    ret
 .small:
     mov r10, r9
     shr r10, 8                      ; class
@@ -2388,8 +2555,8 @@ gc_sweep_step:
     mov [GC_FREE + r10 * 8], r8
     inc rbx
     jmp .page
-.runs:                              ; the free pages, in runs; the last run goes back to new
-    mov qword [GC_NRUNS], 0
+.runs:                              ; the free pages, in runs, pending: given back to the kernel in
+    mov qword [GC_NRUNS], 0         ; steps (gc_give_step), or when taken (gc_get_pages)
     xor ebx, ebx
 .run_find:
     cmp rbx, r11
@@ -2412,30 +2579,26 @@ gc_sweep_step:
     mov [rdx], r10
     mov rax, rbx
     sub rax, r10
+    bts rax, RUN_PENDING
     mov [rdx + 8], rax
     inc qword [GC_NRUNS]
-    call .give_back
     jmp .run_find
-.run_last:                          ; a run at the end: those pages count as never used
-    cmp qword [GC_TAIL], 0
-    je .run_tail
-    mov rdx, [GC_NRUNS]             ; unless pages after it are in use: then an ordinary run
+.run_last:                          ; a run at the end of the swept pages: pending too
+    mov rdx, [GC_NRUNS]
     shl rdx, 4
     add rdx, [GC_RUNS]
     mov [rdx], r10
     mov rax, rbx
     sub rax, r10
+    bts rax, RUN_PENDING
     mov [rdx + 8], rax
     inc qword [GC_NRUNS]
-    call .give_back
-    jmp .runs_done
-.run_tail:
-    call .give_back
-    mov rax, r10
-    shl rax, GC_PAGE_SHIFT
-    add rax, r14
-    mov [GC_BUMP], rax
 .runs_done:
+    mov qword [GC_GIVE_POS], 0      ; give them back in steps from now on
+    xor eax, eax
+    cmp qword [GC_NRUNS], 0
+    setne al
+    mov [GC_GIVING], rax
     mov rax, [GC_TAIL]
     add [GC_LIVE], rax              ; the pages handed out since the sweep began count as in use
     mov qword [GC_TAIL], 0
@@ -2447,6 +2610,9 @@ gc_sweep_step:
 .no_map:
     call gc_threshold
 .out:
+%ifdef GC_STATS
+    call gc_step_stats
+%endif
     pop r14
     pop r13
     pop r12
@@ -2484,19 +2650,6 @@ gc_sweep_step:
 .fresh_next:
     inc rbx
     jmp .fresh
-.give_back:                         ; madvise(pages r10 … rbx, MADV_DONTNEED)
-    push r11
-    mov rdi, r10
-    shl rdi, GC_PAGE_SHIFT
-    add rdi, r14
-    mov rsi, rbx
-    sub rsi, r10
-    shl rsi, GC_PAGE_SHIFT
-    mov eax, 28                     ; sys_madvise
-    mov edx, 4                      ; MADV_DONTNEED
-    syscall
-    pop r11
-    ret
 
 rt_array_rep:                       ; rcx = n, rdx = value → rax = [value ; n]
     push rdx
@@ -3427,6 +3580,12 @@ s_gcs_marked: db " KB, marked "
 s_gcs_marked_len equ $ - s_gcs_marked
 s_gcs_end:    db " blocks", 10
 s_gcs_end_len equ $ - s_gcs_end
+s_gcs_steps:  db "gc sweep: "
+s_gcs_steps_len equ $ - s_gcs_steps
+s_gcs_longest: db " steps, the longest "
+s_gcs_longest_len equ $ - s_gcs_longest
+s_gcs_us:     db " us", 10
+s_gcs_us_len  equ $ - s_gcs_us
 %endif
 %macro REASON 2
     db %1, %%e - %%s
