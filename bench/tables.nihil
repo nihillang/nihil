@@ -22,7 +22,20 @@ rnd(n = 1) {                            // a fixed pseudo-random sequence: the s
 }
 
 T0 = 0;
-start() { T0 = now_us(); }
+// the operations on one record are also timed LAP at a time: a garbage collection (SPEC §12.4) stops
+// the program while it goes over everything in memory, which with a million records takes a tenth of
+// a second or more, and the one that falls inside a measurement is spread over all its operations.
+// typical() prints the median lap, without it, and the slowest one.
+LAP = 1000;
+LAPS = [0 ; 100];
+laps = 0;
+L0 = 0;
+start() { T0 = now_us(); L0 = T0; laps = 0; }
+lap() {
+    lap_end = now_us();
+    laps < #LAPS { LAPS[laps] = lap_end - L0; laps = laps + 1; }
+    L0 = lap_end;
+}
 // n hundredths as text: 1234 → "12.34" (digits after the point: 1 or 2)
 decimal(n = 0, digits = 2) {
     scale = 10;
@@ -36,6 +49,17 @@ done(what = "", count = 0) {
     us = now_us() - T0;
     count > 0 { >> what + ": " + decimal(us / 100, 1) + " ms (" + $count + ", " + decimal(us * 100 / count, 2) + " µs each)\n"; :; }
     >> what + ": " + decimal(us / 100, 1) + " ms\n";
+}
+
+// after done(): the typical time of one operation (the median lap) and the slowest lap
+typical() {
+    laps < 3 { :; }
+    sorted_laps = [0 ; laps];
+    j = 0;
+    * j < laps { sorted_laps[j] = LAPS[j]; j = j + 1; }
+    sorted_laps = sorted_laps.sort();
+    >> "  typical: " + decimal(sorted_laps[laps / 2] * 100 / LAP, 2) + " µs each (the median of " + $laps + " laps of " + $LAP
+       + "); the slowest lap took " + decimal(sorted_laps[laps - 1] / 100, 1) + " ms\n";
 }
 
 DIR.make_dir();
@@ -85,13 +109,15 @@ done("first key lookup (reads the table, builds the index)", 0);
 
 start();
 k = 0;
-* k < OPS { r = ITEM @{rnd(N) + 1} FILE; k = k + 1; }
+* k < OPS { r = ITEM @{rnd(N) + 1} FILE; k = k + 1; k % LAP == 0 { lap(); } }
 done("lookup by key (ITEM @{k})", OPS);
+typical();
 
 start();
 k = 0;
-* k < OPS { r = ITEM @[rnd(N)] FILE; k = k + 1; }
+* k < OPS { r = ITEM @[rnd(N)] FILE; k = k + 1; k % LAP == 0 { lap(); } }
 done("read record i (ITEM @[i])", OPS);
+typical();
 
 start();
 k = 0;
