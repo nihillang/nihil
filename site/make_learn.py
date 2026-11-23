@@ -23,7 +23,7 @@ old = OLD @ &quot;customers.dat&quot;;
 new = [NEW() ; #old];
 i = 0;
 * i &lt; #old { new[i] = NEW(old[i].id, old[i].name, &quot;&quot;); i = i + 1; }
-@&gt;&gt; &quot;customers.dat&quot;, new;               // the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields than the key, and several programs writing one table at the same time (a table is meant for one writer). The full rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>."""),
+@&gt;&gt; &quot;customers.dat&quot;, new;               // the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields than the key, and several programs writing one table at the same time (a table is meant for one writer). How fast all this is, from a thousand records to a million: <a href="performance.html">Performance</a>. The full rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>."""),
 ]
 toc = []; body = []
 for slug, title, intro in chapters:
@@ -51,6 +51,7 @@ page = f'''<!doctype html>
   <a class="brand" href="index.html"><picture><source media="(prefers-color-scheme: dark)" srcset="icon-dark-64.png"><img src="icon-64.png" alt=""></picture>Nihil</a>
   <a class="here" href="learn.html">Learn</a>
   <a href="library.html">Library</a>
+  <a href="performance.html">Performance</a>
   <a href="https://github.com/nihillang">GitHub</a>
 </div></nav>
 <main class="doc"><div class="wrap">
