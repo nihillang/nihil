@@ -1171,6 +1171,7 @@ rt_error:
 %define PD_LARGE 2
 %define PD_CONT  3
 %define PD_DIRTY 4
+%define PD_FRESH 0x80               ; a small page handed out ahead of a sweep in steps (gc_small_page)
 %define GC_KEEP  (GC_MIN >> GC_PAGE_SHIFT)   ; empty small pages kept: 16 MiB
 
 rt_alloc:                           ; rcx = n → rax (keeps every register but rax, rdx, r8)
@@ -1346,6 +1347,14 @@ gc_small_page:
     mov r10, r8
     shl r10, 8
     or r10, PD_SMALL
+    cmp qword [GC_SWEEPING], 0      ; a page ahead of a sweep in steps: its blocks go in the list now,
+    je .desc                        ; so that sweep must not put them there again; it skips the page
+    cmp rcx, [GC_SWEEP_POS]         ; (PD_FRESH), and its last step clears the mark
+    jb .desc
+    cmp rcx, [GC_SWEEP_END]
+    jae .desc
+    or r10, PD_FRESH
+.desc:
     mov [r9 + rcx * 8], r10
     lea r9, [rel gc_class_size]
     mov r9, [r9 + r8 * 8]           ; block size
@@ -2462,7 +2471,19 @@ gc_sweep_step:
     shl rdx, GC_PAGE_SHIFT
     sub rax, rdx
     mov [GC_TAIL], rax
-    jmp .runs
+    xor ebx, ebx                    ; the pages handed out ahead of the sweep: in use, and no longer
+.fresh:                             ; marked (a collection reads the kind of every page)
+    cmp rbx, r11
+    jae .runs
+    mov rax, [r12 + rbx * 8]
+    test al, PD_FRESH
+    jz .fresh_next
+    and rax, ~PD_FRESH
+    mov [r12 + rbx * 8], rax
+    add qword [GC_LIVE], GC_PAGE
+.fresh_next:
+    inc rbx
+    jmp .fresh
 .give_back:                         ; madvise(pages r10 … rbx, MADV_DONTNEED)
     push r11
     mov rdi, r10
