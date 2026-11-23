@@ -20,7 +20,7 @@ r.name = "deux";
 
 // replaced by another program, in place and by a rename
 ["sh", "-c", "printf '   1eins    \\n   2zwei    \\n' > " + FILE].run();
->> (ITEM @[1] FILE).name + "\n";                         // zwei
+>> (ITEM @[1] FILE).name + " " + (ITEM @{1} FILE).name + "\n";   // zwei eins (the index is rebuilt)
 ["sh", "-c", "printf '   1un      \\n   2deux    \\n' > " + FILE + ".new && mv " + FILE + ".new " + FILE].run();
 >> (ITEM @{1} FILE).name + " " + (ITEM @[1] FILE).name + "\n";   // un deux
 

@@ -1158,10 +1158,14 @@ i64 nh_syscall(const i64 *a) {
         if (fstatat(at_dir(x[1]), (const char *)x[2], &st, (x[4] & 0x100) ? AT_SYMLINK_NOFOLLOW : 0) != 0) return -errno;
         unsigned char *b = (unsigned char *)x[3];
         memset(b, 0, 144);
-        u64 ino = st.st_ino; uint32_t mode = st.st_mode; i64 size = st.st_size;
+        u64 dev = (u64)st.st_dev, ino = st.st_ino; uint32_t mode = st.st_mode; i64 size = st.st_size;
+        i64 msec = st.st_mtimespec.tv_sec, mnsec = st.st_mtimespec.tv_nsec;
+        memcpy(b + 0, &dev, 8);
         memcpy(b + 8, &ino, 8);
         memcpy(b + 24, &mode, 4);
         memcpy(b + 48, &size, 8);
+        memcpy(b + 88, &msec, 8);                     // st_mtime, st_mtime_nsec
+        memcpy(b + 96, &mnsec, 8);
         return 0;
     }
     case 263: return res(unlinkat(at_dir(x[1]), (const char *)x[2], (x[3] & 0x200) ? AT_REMOVEDIR : 0));

@@ -266,7 +266,57 @@ __nihil_ft_digits_shortest(b = 0) {
 }
 
 // bits → text: "0.1", "3.0", "-2.5e-10", "1.0e+21", "inf", "-inf", "nan"
+// A FLOAT with at most 3 decimals (a price, a measure, a whole number) as its text, worked out
+// with exact integers, or "" when it is not one (then the general algorithm runs). For
+// v = mant / 2^s and k = 0 … 3: m is the integer nearest to v·10^k, and m / 10^k reads back as
+// v when it is less than half an ulp of v away: |m·2^s − mant·10^k| < 10^k / 2. The first k that
+// works gives the fewest digits, and m is the nearest of them, as the general algorithm gives.
+// Ties, numbers from 2^53 up (where the last digits can round away), powers of two below 2^52
+// (whose ulp is smaller on one side) and subnormals take that way.
+__nihil_ft_fast(b = 0) {
+    __ex = (b >> 52) & 0x7FF;
+    __ex == 0 { : ""; }
+    __f = b & 0xFFFFFFFFFFFFF;
+    __mant = __f | 0x10000000000000;
+    __e = __ex - 1075;
+    __e > 0 { : ""; }                               // 2^53 and up: the last digits may round away
+    __e == 0 { : $__mant + ".0"; }                  // a whole number from 2^52 to 2^53
+    __f == 0 { : ""; }
+    __s = -__e;
+    __s > 60 { : ""; }
+    __unit = 1 << __s;
+    __half = 1 << (__s - 1);
+    __p = 1;
+    __k = 0;
+    * __k <= 3 {
+        __t = __mant * __p;
+        __q = __t >> __s;
+        __r = __t - (__q << __s);
+        __r == __half { : ""; }                     // a tie: the general algorithm decides
+        __m = __q;
+        __diff = __r;
+        __r > __half { __m = __q + 1; __diff = __unit - __r; }
+        __diff * 2 < __p {
+            __k == 0 { : $__m + ".0"; }
+            __frac = $(__m % __p);
+            * #__frac < __k { __frac = "0" + __frac; }
+            : $(__m / __p) + "." + __frac;
+        }
+        __p = __p * 10;
+        __k = __k + 1;
+    }
+    : "";
+}
+
+__nihil_ft_general = false;          // true: always the general algorithm (tests/float compares the two)
+
 __nihil_ft_text(b = 0) {
+    __fast = "";
+    !__nihil_ft_general { __fast = __nihil_ft_fast(b & 0x7FFFFFFFFFFFFFFF); }
+    #__fast > 0 {
+        b < 0 { : "-" + __fast; }
+        : __fast;
+    }
     __buf = __nihil_ft_buf;
     __n = 0;
     b < 0 { __buf[__n] = '-'; __n = __n + 1; }
