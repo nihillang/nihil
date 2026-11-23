@@ -1946,12 +1946,19 @@ gc_fork:
     cmp rax, -4096
     jae .failed
     mov [GC_MAP], rax
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_STEPT0], rax
+%endif
     mov eax, 57                     ; sys_fork
     syscall
     test rax, rax
     js .unmap
     jz .child
     mov [GC_CHILD], rax
+%ifdef GC_STATS
+    call gc_fork_stats
+%endif
     mov qword [GC_ALLOCATED], 0
     mov qword [GC_THRESHOLD], GC_POLL
     xor eax, eax
@@ -2061,6 +2068,29 @@ gc_unmap:
     ret
 
 %ifdef GC_STATS
+; after a fork, on stderr: "gc fork: X us (the program stopped), Y MB of heap"
+gc_fork_stats:
+    call gc_now_us
+    sub rax, [GC_STAT_STEPT0]
+    push rax
+    mov edi, 2
+    lea rsi, [rel s_gcs_fork]
+    mov edx, s_gcs_fork_len
+    call rt_write_fd
+    pop rax
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_forkmb]
+    mov edx, s_gcs_forkmb_len
+    call rt_write_fd
+    mov rax, [GC_SNAP]
+    shr rax, 20
+    call rt_error_int
+    mov edi, 2
+    lea rsi, [rel s_gcs_mbheap]
+    mov edx, s_gcs_mbheap_len
+    jmp rt_write_fd
+
 ; after a step of the sweep: counts it and keeps the longest; after the last one, on stderr:
 ; "gc sweep: N steps, the longest X us"
 gc_step_stats:
@@ -2637,15 +2667,25 @@ gc_sweep_step:
     shl rdx, GC_PAGE_SHIFT
     sub rax, rdx
     mov [GC_TAIL], rax
-    xor ebx, ebx                    ; the pages handed out ahead of the sweep: in use, and no longer
-.fresh:                             ; marked (a collection reads the kind of every page)
-    cmp rbx, r11
+    mov qword [GC_LIVE], 0          ; the bytes in use, counted again from the pages' kinds (pages
+    xor ebx, ebx                    ; reused behind the sweep were not counted as it went), and the
+.fresh:                             ; pages handed out ahead of it no longer marked (a collection
+    cmp rbx, r11                    ; reads the kind of every page)
     jae .runs
     mov rax, [r12 + rbx * 8]
     test al, PD_FRESH
-    jz .fresh_next
+    jz .counted
     and rax, ~PD_FRESH
     mov [r12 + rbx * 8], rax
+.counted:
+    movzx ecx, al
+    cmp ecx, PD_SMALL
+    je .in_use
+    cmp ecx, PD_LARGE
+    je .in_use
+    cmp ecx, PD_CONT
+    jne .fresh_next
+.in_use:
     add qword [GC_LIVE], GC_PAGE
 .fresh_next:
     inc rbx
@@ -3586,6 +3626,12 @@ s_gcs_longest: db " steps, the longest "
 s_gcs_longest_len equ $ - s_gcs_longest
 s_gcs_us:     db " us", 10
 s_gcs_us_len  equ $ - s_gcs_us
+s_gcs_fork:   db "gc fork: "
+s_gcs_fork_len equ $ - s_gcs_fork
+s_gcs_forkmb: db " us (the program stopped), "
+s_gcs_forkmb_len equ $ - s_gcs_forkmb
+s_gcs_mbheap: db " MB of heap", 10
+s_gcs_mbheap_len equ $ - s_gcs_mbheap
 %endif
 %macro REASON 2
     db %1, %%e - %%s
