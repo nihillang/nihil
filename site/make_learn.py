@@ -15,11 +15,12 @@ chapters = [
  ("09_tables", "Tables on disk", "A data model describes a record of fixed width; <code>#</code> marks its key. A table is a plain text file, one record per line, with a hash index on disk for reading, writing and deleting by key. Queries like <code>where</code>, <code>sort</code> and <code>sum</code> take an expression of the fields."),
  ("10_std", "The standard library", "Libraries that ship with the compiler are included with <code>@ \"std:name.nihil\";</code>: <code>std:env.nihil</code> (configuration from <code>.env</code> and the environment), <code>std:json.nihil</code> (writing JSON) and <code>std:mcp.nihil</code> (an MCP server for AI agents). Reading JSON is built into the library: a JSON value stays text, and each call takes a part of it."),
  ("11_globals", "Globals and locals: the one rule to remember", "Variables assigned at the top level are <b>globals</b>, and a name that belongs to a global always means that global, even inside a method: there, <code>total = …</code> changes the global instead of creating a local. Give locals names no global uses. Only a parameter may share a global's name, and then it hides the global inside its method."),
+ ("12_auto_keys", "Automatic keys", "A key marked <code>#+</code> is numbered by the table: write a record with key 0 by key (<code>@{}&gt;&gt;</code>) and it gets the next number, which the record then holds. The counter is kept next to the table, so a deleted number is never given again and a second run goes on from where the first stopped. In the IDE, <code>orders.dat</code> then appears under Database, where its records can be filtered, added, changed and deleted."),
 ]
 toc = []; body = []
 for slug, title, intro in chapters:
     src = open(os.path.join(L, slug + ".nihil")).read().rstrip("\n")
-    for junk in ("products.dat", "products.dat.nihil-idx", "notes.txt"):
+    for junk in ("products.dat", "products.dat.nihil-idx", "notes.txt", "orders.dat", "orders.dat.nihil-idx", "orders.dat.nihil-seq"):
         try: os.remove(os.path.join(L, junk))
         except FileNotFoundError: pass
     r = subprocess.run([NIHIL, "run", slug + ".nihil"], cwd=L, input="Ana\n", capture_output=True, text=True)
@@ -33,7 +34,7 @@ page = f'''<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Learn Nihil</title>
-<meta name="description" content="Nihil in eleven short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk and the standard library.">
+<meta name="description" content="Nihil in twelve short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys and the standard library.">
 <link rel="icon" type="image/png" href="icon-64.png">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -46,7 +47,7 @@ page = f'''<!doctype html>
 </div></nav>
 <main class="doc"><div class="wrap">
 <h1>Learn Nihil</h1>
-<p>Eleven short chapters. Every example is a complete program, and the output under it is what it prints.
+<p>Twelve short chapters. Every example is a complete program, and the output under it is what it prints.
 The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC.md</a>.</p>
 <ol class="toc">
 {chr(10).join(toc)}

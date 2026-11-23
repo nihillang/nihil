@@ -9,3 +9,4 @@ ide/projects.txt
 .DS_Store
 examples/learn/products.dat*
 examples/learn/notes.txt
+examples/learn/orders.dat*
