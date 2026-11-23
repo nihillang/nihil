@@ -39,14 +39,14 @@ million records takes less than the clock's 10 ms.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>Linux, 100 000</th><th>Linux, 1 000 000</th><th>macOS, 1 000 000</th></tr></thead>
 <tbody>
-<tr><td>write the table: <code>@&gt;&gt; path, rows</code> (atomic, synced)</td><td>130 ms</td><td>1.4 s</td><td>1.0 s</td></tr>
-<tr><td>read the whole table: <code>ITEM @ path</code></td><td>20 ms</td><td>230 ms</td><td>80 ms</td></tr>
+<tr><td>write the table: <code>@&gt;&gt; path, rows</code> (atomic, synced)</td><td>90 ms</td><td>1.0 s</td><td>1.0 s</td></tr>
+<tr><td>read the whole table: <code>ITEM @ path</code></td><td>20 ms</td><td>200 ms</td><td>80 ms</td></tr>
 <tr><td><code>where(active &amp;&amp; price &lt; 200.0)</code></td><td>&lt; 10 ms</td><td>&lt; 10 ms</td><td>&lt; 10 ms</td></tr>
 <tr><td><code>count(category == 7)</code>, <code>sum(price * .qty)</code></td><td>&lt; 10 ms</td><td>≤ 10 ms</td><td>≤ 10 ms</td></tr>
-<tr><td><code>sort(-price)</code></td><td>20 ms</td><td>270 ms</td><td>160 ms</td></tr>
-<tr><td>the first key operation (reads the table and builds the index)</td><td>30 ms</td><td>470 ms</td><td>250 ms</td></tr>
+<tr><td><code>sort(-price)</code></td><td>20 ms</td><td>210 ms</td><td>170 ms</td></tr>
+<tr><td>the first key operation (reads the table and builds the index)</td><td>20 ms</td><td>400 ms</td><td>240 ms</td></tr>
 <tr><td>size of the table / of its index</td><td>4.8 MB / 1 MB</td><td>48 MB / 8 MB</td><td>48 MB / 8 MB</td></tr>
-<tr><td>peak memory of the whole run</td><td>52 MB</td><td>392 MB</td><td>394 MB</td></tr>
+<tr><td>peak memory of the whole run</td><td>49 MB</td><td>392 MB</td><td>394 MB</td></tr>
 </tbody></table></div>
 
 <h2 id="one">One record at a time</h2>
@@ -55,18 +55,18 @@ index on disk, so the rest of the table is never read.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>Linux</th><th>macOS</th></tr></thead>
 <tbody>
-<tr><td>read record <i>i</i>: <code>ITEM @[i] path</code></td><td>4 µs</td><td>9 µs</td></tr>
-<tr><td>find by key: <code>ITEM @{k} path</code></td><td>29 µs</td><td>70 µs</td></tr>
-<tr><td>change by key: find it, then <code>@{}&gt;&gt; path, r</code></td><td>0.37 ms</td><td>5.1 ms</td></tr>
-<tr><td>add by key: <code>@{}&gt;&gt; path, r</code> with a new key</td><td>0.5–0.6 ms</td><td>9.2–9.6 ms</td></tr>
-<tr><td>delete by key: <code>ITEM @{k} path = _</code></td><td>0.6–0.7 ms</td><td>9.3–9.7 ms</td></tr>
+<tr><td>read record <i>i</i>: <code>ITEM @[i] path</code></td><td>1 µs</td><td>9 µs</td></tr>
+<tr><td>find by key: <code>ITEM @{k} path</code></td><td>5–6 µs</td><td>39–44 µs</td></tr>
+<tr><td>change by key: find it, then <code>@{}&gt;&gt; path, r</code></td><td>0.13–0.2 ms</td><td>5.0 ms</td></tr>
+<tr><td>add by key: <code>@{}&gt;&gt; path, r</code> with a new key</td><td>0.27–0.33 ms</td><td>9.4–9.8 ms</td></tr>
+<tr><td>delete by key: <code>ITEM @{k} path = _</code></td><td>0.27–0.3 ms</td><td>9.7–9.9 ms</td></tr>
 </tbody></table></div>
 
 <h2 id="reading">Reading the numbers</h2>
 <ul>
   <li><b>A write by key waits for the disk.</b> Each one calls <code>fsync</code> twice, once for the table and once for the index, so
-  that a crash never leaves them out of step; that is almost all of its time, and the disk decides it (about 0.2 ms on the Linux runner,
-  about 5 ms on the Mac's SSD). To change thousands of records at once, change them in memory and write the table once with
+  that a crash never leaves them out of step; that is almost all of its time, and the disk decides it (a tenth of a millisecond or two
+  on the Linux runner, about 5 ms on the Mac's SSD). To change thousands of records at once, change them in memory and write the table once with
   <code>@&gt;&gt;</code>: a million records take about a second.</li>
   <li><b>Reading by key or by number is cheap at any size</b>, so a program can work on a large table one record at a time without loading it.</li>
   <li><b>In memory a record is bigger than on disk:</b> each field takes an 8-byte slot, and a text its own bytes besides. This run holds two
@@ -74,10 +74,15 @@ index on disk, so the rest of the table is never read.</p>
   two to three times the file's size.</li>
   <li><b>One writer at a time.</b> A table is a file, not a server: two programs writing the same table at the same moment are not
   coordinated.</li>
+  <li><b>The Mac is slower on one record</b> because each read opens the file, which costs more on macOS, and because the code is
+  translated from x86-64; on whole tables, where the time goes into the program's own loops, it is as fast or faster.</li>
+  <li><b>GitHub's runners are not all the same machine:</b> an earlier run on another one took 4 µs to read record <i>i</i> and
+  0.37 ms to change one by key. Compare numbers from the same run; the Mac is the same machine every time.</li>
   <li><b>The clock</b> has a resolution of 10 ms, so the operations on one record are timed thousands at a time (20 000 reads, 300 writes)
   and divided. “&lt; 10 ms” means less than one tick.</li>
 </ul>
-<p>The numbers come from the run of 23 November 2026 (Nihil 4.3.1). The rules behind them are in
+<p>The numbers come from the runs of 23 November 2026, with Nihil 4.3.2, where a lookup by key keeps the index it has checked
+in memory and reads the record once (on the Mac, from 70 µs to 40 µs). The rules behind them are in
 <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
 </div></main>
 <footer><div class="wrap row"><span>Nihil · MIT License</span><span><a href="index.html">nihil-lang.dev</a></span></div></footer>
