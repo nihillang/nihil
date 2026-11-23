@@ -3,8 +3,10 @@
 //
 //   N=100000 OPS=20000 SYNCED=300 DIR=/tmp/nihil-bench nihil run bench/tables.nihil
 //
-// The clock is /proc/uptime (10 ms), so the single-record operations are timed OPS at a time.
+// The clock is std:time's now_us (microseconds); the single-record operations are timed OPS
+// (and SYNCED) at a time, and divided.
 @ "std:env.nihil";
+@ "std:time.nihil";
 
 N = env_int("N", 100000);
 OPS = env_int("OPS", 20000);         // lookups and reads of one record
@@ -13,11 +15,6 @@ DIR = env("DIR", "/tmp/nihil-bench");
 ITEM = @[#code: INT(8); name: STRING(20); category: INT(4); price: FLOAT(10); qty: INT(6); active: BOOL];
 FILE = DIR + "/items.dat";
 
-now_ms() {
-    up = (@ "/proc/uptime").split(" ");
-    : #((up[0].float() || 0.0) * 1000.0 + 0.5);
-}
-
 seed = 12345;
 rnd(n = 1) {                            // a fixed pseudo-random sequence: the same data on every run
     seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -25,18 +22,20 @@ rnd(n = 1) {                            // a fixed pseudo-random sequence: the s
 }
 
 T0 = 0;
-start() { T0 = now_ms(); }
-// one line of the report: the time, and per record or per operation
+start() { T0 = now_us(); }
+// n hundredths as text: 1234 → "12.34" (digits after the point: 1 or 2)
+decimal(n = 0, digits = 2) {
+    scale = 10;
+    digits == 2 { scale = 100; }
+    frac = $(n % scale);
+    * #frac < digits { frac = "0" + frac; }
+    : $(n / scale) + "." + frac;
+}
+// one line of the report: the time, and per record or per operation (as bench/compare prints it)
 done(what = "", count = 0) {
-    ms = now_ms() - T0;
-    each = "";
-    count > 0 {
-        us = ms * 1000 / count;
-        each = $us + " µs each";
-        us == 0 { each = "< 1 µs each"; }
-    }
-    count > 0 { >> what + ": " + $ms + " ms (" + $count + ", " + each + ")\n"; :; }
-    >> what + ": " + $ms + " ms\n";
+    us = now_us() - T0;
+    count > 0 { >> what + ": " + decimal(us / 100, 1) + " ms (" + $count + ", " + decimal(us * 100 / count, 2) + " µs each)\n"; :; }
+    >> what + ": " + decimal(us / 100, 1) + " ms\n";
 }
 
 DIR.make_dir();

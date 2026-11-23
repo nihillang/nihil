@@ -42,6 +42,13 @@
 %define ERR_CAPTURE     (BASE_DATA + 0xE8)     ; 1: a runtime error is being written into the text
 %define ERR_LEN         (BASE_DATA + 0xF0)     ; bytes of that text
 %define GC_FREE         (BASE_DATA + 0x100)    ; 21 free lists, one per size class
+; files kept open by rt_read_at, so a table read one record at a time is not opened each time:
+; FD_CACHE_NEXT is the slot to use next (0 … 3); each of the 4 slots (FD_SLOT bytes) holds
+; [fd + 1 (0: empty), st_dev, st_ino, path length, path (up to 256 bytes)]
+%define FD_CACHE_NEXT   (BASE_DATA + 0x1F8)
+%define FD_CACHE        (BASE_DATA + 0x200)
+%define FD_SLOT         288
+%define FD_SLOTS        4
 %define OUTPUT_BUF       (BASE_DATA + 0x1000)   ; standard output buffer
 %define OUTPUT_CAP       65536
 %define IN_BUF         (BASE_DATA + 0x11000)  ; standard input buffer

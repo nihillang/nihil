@@ -1,0 +1,53 @@
+// rt_read_at keeps a file open between reads; it must still see the file as it is now:
+// written in place, replaced (a rename, by this program or another one), removed, made again
+ITEM = @[#code: INT(4); name: STRING(8)];
+FILE = "/tmp/nihil-kept-open.dat";
+FILE.remove();
+(FILE + ".nihil-idx").remove();
+
+@{}>> FILE, ITEM(1, "one");
+@{}>> FILE, ITEM(2, "two");
+>> (ITEM @{2} FILE).name + "\n";                         // two
+
+r = ITEM @{2} FILE;                                     // written in place (the same file)
+r.name = "deux";
+@{}>> FILE, r;
+>> (ITEM @{2} FILE).name + "\n";                         // deux
+>> (ITEM @[1] FILE).name + "\n";                         // deux
+
+@>> FILE, [ITEM(1, "uno"), ITEM(2, "dos")];             // replaced by this program (a rename)
+>> (ITEM @{2} FILE).name + " " + (ITEM @[0] FILE).name + "\n";   // dos uno
+
+// replaced by another program, in place and by a rename
+["sh", "-c", "printf '   1eins    \\n   2zwei    \\n' > " + FILE].run();
+>> (ITEM @[1] FILE).name + " " + (ITEM @{1} FILE).name + "\n";   // zwei eins (the index is rebuilt)
+["sh", "-c", "printf '   1un      \\n   2deux    \\n' > " + FILE + ".new && mv " + FILE + ".new " + FILE].run();
+>> (ITEM @{1} FILE).name + " " + (ITEM @[1] FILE).name + "\n";   // un deux
+
+FILE.remove();                                          // removed: no record, no file
+q? = ITEM @?[0] FILE;
+>> $(q == _) + " " + $(ITEM @# FILE) + "\n";            // true 0
+@{}>> FILE, ITEM(7, "again");                           // made again
+>> (ITEM @{7} FILE).name + "\n";                         // again
+
+// more files than are kept open (4): each still reads right
+i = 0;
+* i < 6 {
+    @>> FILE + "." + $i, $ITEM(i, "f" + $i);
+    i = i + 1;
+}
+i = 0;
+* i < 6 {
+    >> (ITEM @[0] (FILE + "." + $i)).name + " ";
+    i = i + 1;
+}
+>> "\n";
+i = 5;
+* i >= 0 {
+    >> (ITEM @[0] (FILE + "." + $i)).name + " ";
+    (FILE + "." + $i).remove();
+    i = i - 1;
+}
+>> "\n";
+FILE.remove();
+(FILE + ".nihil-idx").remove();

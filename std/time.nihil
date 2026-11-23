@@ -1,0 +1,27 @@
+// =============================================================================
+// std/time.nihil — clocks: how long something takes, and the time now.
+// Include it with @ "std:time.nihil"; (SPEC §16).
+//   now_us()     INT: microseconds on the monotonic clock, from an arbitrary start: subtract two
+//                readings to time something (it never goes back, whatever the system clock does)
+//   now_ms()     INT: the same, in milliseconds
+//   unix_time()  INT: seconds since 1970-01-01 00:00 UTC, by the system clock
+// =============================================================================
+
+// a clock in microseconds (0: the system clock, 1: the monotonic one), from clock_gettime
+__time_us(clock = 0) {
+    __b = " ".repeat(16);                                    // struct timespec: seconds, nanoseconds
+    __nihil_syscall([228, clock, __nihil_addr(__b)]);
+    __s = 0;
+    __ns = 0;
+    __k = 7;
+    * __k >= 0 {
+        __s = __s * 256 + __b[__k];
+        __ns = __ns * 256 + __b[8 + __k];
+        __k = __k - 1;
+    }
+    : __s * 1000000 + __ns / 1000;
+}
+
+now_us() { : __time_us(1); }
+now_ms() { : __time_us(1) / 1000; }
+unix_time() { : __time_us(0) / 1000000; }
