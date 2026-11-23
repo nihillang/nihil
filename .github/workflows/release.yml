@@ -55,7 +55,6 @@ jobs:
             dist/out/
             build/nihilc1.x86
             build/nihilc1.map
-            build/runtime.nihil
             build/prelude_text.nihil
             build/std_text.nihil
 
@@ -74,7 +73,7 @@ jobs:
       - name: The compiler translated to ARM64
         run: |
           mkdir -p build/macos
-          cp linux/build/runtime.nihil linux/build/prelude_text.nihil linux/build/std_text.nihil build/
+          cp linux/build/prelude_text.nihil linux/build/std_text.nihil build/
           python3 macos/translate.py linux/build/nihilc1.x86 linux/build/nihilc1.map build/macos/nihilc1.s
           clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
           clang -arch arm64 -o build/macos/nihilc1-native build/macos/nihilc1.s build/macos/rt.o

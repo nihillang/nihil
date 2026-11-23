@@ -105,8 +105,15 @@ Releases and checksums: [github.com/nihillang/nihil/releases](https://github.com
 
 ## Building from source
 
-You need Linux on x86_64, `nasm`, `ld` (binutils) and `make`. `python3` is only
-used by `make floatcheck` and the IDE.
+You need Linux on x86_64, `make` and `curl`. `python3` is only used by `make floatcheck`
+and the IDE.
+
+With `nasm` and `ld` (binutils) installed, `make` builds stage 0 (the compiler in assembly)
+and compiles stage 1 with it. Without them, it downloads the latest release's compiler
+(`dist/seed.sh`, checked against its `.sha256`), which compiles stage 1, and the result
+compiles it again: the same bytes stage 0 gives (`make seedcheck`). The runtime that goes
+into every executable is kept assembled in `src1/runtime_bin.nihil`; only a change to
+`src/runtime.asm` needs `nasm` (`make runtime`).
 
 ```sh
 git clone https://github.com/nihillang/nihil.git && cd nihil
