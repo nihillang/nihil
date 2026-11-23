@@ -1,5 +1,6 @@
 // Harness: each input line is "bits text" (bits as a signed decimal).
-// Output per line: "<text generated from bits> <bits parsed from text>"
+// Output per line: "<text generated from bits> <bits parsed from text> <1 if the general algorithm
+// gives the same text, 0 if not>"
 @ "../../src1/bigint.nihil";
 @ "../../src1/float_text.nihil";
 
@@ -29,6 +30,12 @@ line = read_line_bytes();
     rest = [0 ; #line - i];
     j = 0;
     #line - i { rest[j] = line[i + j]; j = j + 1; }
-    >> __nihil_ft_text(v); >> " "; >> __nihil_ft_text_to_bits($rest); >> "\n";
+    t = __nihil_ft_text(v);
+    __nihil_ft_general = true;                  // the general algorithm gives the same text
+    g = __nihil_ft_text(v);
+    __nihil_ft_general = false;
+    same = 0;
+    t == g { same = 1; }
+    >> t; >> " "; >> __nihil_ft_text_to_bits($rest); >> " "; >> same; >> "\n";
     line = read_line_bytes();
 }

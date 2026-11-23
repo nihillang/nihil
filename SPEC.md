@@ -1016,7 +1016,10 @@ twice as many slots as records and doubles when it gets half full.
 key operations): each read asks the kernel what is at the path now (`stat`) and uses the open
 file only while it is the same one (device and inode). A file written in place is the same file;
 one replaced by a rename (`@>>`, an editor, another program) is opened again, and one removed is
-forgotten. So a read still sees the table as it is now, without opening it each time.
+forgotten. So a read still sees the table as it is now, without opening it each time. The key
+operations go further: they keep the table and its index open themselves, so a lookup is
+one `stat` of the table (its size and stamp) and two reads, the index slot and the record;
+the index is read through the open file only while it is known to match the table.
 
 A program also keeps, in memory, the last index it found to match its table (the
 table's size and stamp, and the index's capacity): a key operation on a table
