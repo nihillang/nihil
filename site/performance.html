@@ -96,8 +96,8 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   <li><b>Reading by key or by number is cheap at any size</b>: the runtime keeps the files open between reads, and a lookup by key is
   one <code>stat</code> of the table and two reads, about 1 µs and 2 µs at a hundred thousand records or a million.</li>
   <li><b>A garbage collection stops the program</b> while it goes over everything in memory (<a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#124-memory-and-the-garbage-collector">SPEC §12.4</a>).
-  With a million records the program holds about 380 MB, and one collection takes about 150 ms: timed 1 000 at a time, 19 of
-  the 20 laps of reads take 1 to 2.5 ms and one takes 150 ms. Spread over the 20 000 operations, that one pause made reading
+  With a million records the program holds about 380 MB, and one collection takes 70 to 150 ms, depending on the machine:
+  timed 1 000 at a time, 19 of the 20 laps of reads take 1 to 2.5 ms and one takes about 150 ms (Linux, an i7-1255U). Spread over the 20 000 operations, that one pause made reading
   record <i>i</i> measure 7 to 9 µs, where it typically takes 1 µs. The benchmark prints the median lap and the slowest after each
   measurement of one record at a time, and the comparison shows both where they differ. A program that keeps hundreds of MB
   of values pays such a pause now and then (a batch job hardly notices; a server answering requests sees it as an occasional
