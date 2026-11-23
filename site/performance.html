@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nihil Performance</title>
-<meta name="description" content="How fast Nihil's tables are: writing, reading and querying a million records, and the cost of one record by key, measured on Linux and macOS.">
+<meta name="description" content="How fast Nihil's tables are: writing, reading, querying and changing a million records, measured on Linux and macOS and compared with C and Go doing the same work.">
 <link rel="icon" type="image/png" href="icon-64.png">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -19,70 +19,95 @@
 <main class="doc"><div class="wrap">
 <h1>Performance of tables</h1>
 <p>How long Nihil's tables (<a href="learn.html#tables">Learn §9</a>, <a href="learn.html#modeling">§13</a>) take to write, read,
-query and change, measured by <a href="https://github.com/nihillang/nihil/blob/main/bench/tables.nihil">bench/tables.nihil</a>.
-The records are synthetic, made from a fixed pseudo-random sequence so every run has the same data, and each one has six fields
-in 50 bytes:</p>
+query and change, measured by <a href="https://github.com/nihillang/nihil/blob/main/bench/tables.nihil">bench/tables.nihil</a>,
+and how that compares with the same work written in C and in Go. The records are synthetic, made from a fixed pseudo-random sequence
+so every run has the same data, and each one has six fields in 50 bytes:</p>
 <pre class="nihil">ITEM = @[#code: INT(8); name: STRING(20); category: INT(4); price: FLOAT(10); qty: INT(6); active: BOOL];</pre>
-<p>The machines: <b>Linux</b>, a GitHub Actions runner (AMD EPYC 7763, 4 CPUs, Ubuntu 24.04), where Nihil runs natively; and
-<b>macOS</b>, an Apple M4, where the compiler's x86-64 code is translated to ARM64. To measure your own machine, run
-<code>bench/run.sh</code> in the repository (or <code>bench/run.sh ./nihilc1.sh</code> from a build).</p>
+<p>The machines: <b>Linux</b>, a GitHub Actions runner (Intel Xeon 6975P-C, 4 CPUs, Ubuntu 24.04), where Nihil, C and Go all run
+natively; and <b>macOS</b>, an Apple M4, where Nihil's x86-64 code is translated to ARM64. To measure your own machine, run
+<code>bench/run.sh</code> or, for the comparison, <code>bench/compare/run.sh</code> in the repository.</p>
 
 <ol class="toc">
+  <li><a href="#compared">Compared with C and Go</a></li>
   <li><a href="#whole">The whole table</a></li>
   <li><a href="#one">One record at a time</a></li>
   <li><a href="#reading">Reading the numbers</a></li>
 </ol>
 
+<h2 id="compared">Compared with C and Go</h2>
+<p><a href="https://github.com/nihillang/nihil/tree/main/bench/compare">bench/compare</a> holds the same program in C (<code>cc -O2</code>)
+and in Go: the same records, the same text table, the same hash index on disk and the same number of disk syncs. Run with
+<code>KEEP=1</code>, the three leave byte-for-byte the same table after every change, addition and deletion. Linux, all three native,
+1 000 000 records:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>Nihil</th><th>C</th><th>Go</th></tr></thead>
+<tbody>
+<tr><td>write the table (atomic, synced)</td><td>381 ms</td><td>535 ms</td><td>421 ms</td></tr>
+<tr><td>read the whole table</td><td>201 ms</td><td>112 ms</td><td>110 ms</td></tr>
+<tr><td><code>where(active &amp;&amp; price &lt; 200.0)</code></td><td>8.4 ms</td><td>5.1 ms</td><td>5.9 ms</td></tr>
+<tr><td><code>sum(price * .qty)</code></td><td>5.6 ms</td><td>4.0 ms</td><td>3.2 ms</td></tr>
+<tr><td><code>sort(-price)</code></td><td>215 ms</td><td>208 ms</td><td>762 ms</td></tr>
+<tr><td>build the key index</td><td>128 ms</td><td>93 ms</td><td>83 ms</td></tr>
+<tr><td>find by key (each)</td><td>2.2 µs</td><td>1.1 µs</td><td>1.2 µs</td></tr>
+<tr><td>change by key (each, 1 fsync)</td><td>0.15 ms</td><td>0.07 ms</td><td>0.07 ms</td></tr>
+<tr><td>peak memory</td><td>384 MB</td><td>187 MB</td><td>329 MB</td></tr>
+</tbody></table></div>
+<p>Nihil writes the table faster than C and Go, sorts as fast as C, and is within about twice their time on the rest. The C and
+Go programs keep their two files open and trust that nobody else changes them; Nihil checks the table at the path on every
+operation (one <code>stat</code>), so it still sees what another program or an editor did to it.</p>
+
 <h2 id="whole">The whole table</h2>
-<p>Writing, reading and querying grow with the table. The queries are compiled into loops where they are called, so going through a
-million records takes less than the clock's 10 ms.</p>
+<p>Writing, reading and querying grow with the table. The queries are compiled into loops where they are called.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>Linux, 100 000</th><th>Linux, 1 000 000</th><th>macOS, 1 000 000</th></tr></thead>
 <tbody>
-<tr><td>write the table: <code>@&gt;&gt; path, rows</code> (atomic, synced)</td><td>90 ms</td><td>1.0 s</td><td>1.0 s</td></tr>
-<tr><td>read the whole table: <code>ITEM @ path</code></td><td>20 ms</td><td>200 ms</td><td>80 ms</td></tr>
-<tr><td><code>where(active &amp;&amp; price &lt; 200.0)</code></td><td>&lt; 10 ms</td><td>&lt; 10 ms</td><td>&lt; 10 ms</td></tr>
-<tr><td><code>count(category == 7)</code>, <code>sum(price * .qty)</code></td><td>&lt; 10 ms</td><td>≤ 10 ms</td><td>≤ 10 ms</td></tr>
-<tr><td><code>sort(-price)</code></td><td>20 ms</td><td>210 ms</td><td>170 ms</td></tr>
-<tr><td>the first key operation (reads the table and builds the index)</td><td>20 ms</td><td>400 ms</td><td>240 ms</td></tr>
+<tr><td>make the records in memory</td><td>19 ms</td><td>211 ms</td><td>109 ms</td></tr>
+<tr><td>write the table: <code>@&gt;&gt; path, rows</code> (atomic, synced)</td><td>35 ms</td><td>382 ms</td><td>322 ms</td></tr>
+<tr><td>read the whole table: <code>ITEM @ path</code></td><td>17 ms</td><td>199 ms</td><td>79 ms</td></tr>
+<tr><td><code>where(active &amp;&amp; price &lt; 200.0)</code></td><td>0.7 ms</td><td>8.2 ms</td><td>6.3 ms</td></tr>
+<tr><td><code>count(category == 7)</code></td><td>0.3 ms</td><td>5.2 ms</td><td>1.2 ms</td></tr>
+<tr><td><code>sum(price * .qty)</code></td><td>0.4 ms</td><td>5.4 ms</td><td>3.4 ms</td></tr>
+<tr><td><code>sort(-price)</code></td><td>16 ms</td><td>210 ms</td><td>163 ms</td></tr>
+<tr><td>the first key operation (reads the table and builds the index)</td><td>17 ms</td><td>112 ms</td><td>69 ms</td></tr>
 <tr><td>size of the table / of its index</td><td>4.8 MB / 1 MB</td><td>48 MB / 8 MB</td><td>48 MB / 8 MB</td></tr>
-<tr><td>peak memory of the whole run</td><td>49 MB</td><td>392 MB</td><td>394 MB</td></tr>
+<tr><td>peak memory of the whole run</td><td>59 MB</td><td>384 MB</td><td>388 MB</td></tr>
 </tbody></table></div>
 
 <h2 id="one">One record at a time</h2>
-<p>These cost the same with 10 000, 100 000 or 1 000 000 records: a record's place comes from its number (fixed width) or from the
-index on disk, so the rest of the table is never read.</p>
+<p>A record's place comes from its number (fixed width) or from the index on disk, so the rest of the table is never read.
+100 000 records:</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>Linux</th><th>macOS</th></tr></thead>
 <tbody>
-<tr><td>read record <i>i</i>: <code>ITEM @[i] path</code></td><td>1 µs</td><td>9 µs</td></tr>
-<tr><td>find by key: <code>ITEM @{k} path</code></td><td>5–6 µs</td><td>39–44 µs</td></tr>
-<tr><td>change by key: find it, then <code>@{}&gt;&gt; path, r</code></td><td>0.13–0.2 ms</td><td>5.0 ms</td></tr>
-<tr><td>add by key: <code>@{}&gt;&gt; path, r</code> with a new key</td><td>0.27–0.33 ms</td><td>9.4–9.8 ms</td></tr>
-<tr><td>delete by key: <code>ITEM @{k} path = _</code></td><td>0.27–0.3 ms</td><td>9.7–9.9 ms</td></tr>
+<tr><td>read record <i>i</i>: <code>ITEM @[i] path</code></td><td>0.9 µs</td><td>1.6 µs</td></tr>
+<tr><td>find by key: <code>ITEM @{k} path</code></td><td>2.0 µs</td><td>2.2 µs</td></tr>
+<tr><td>change by key: find it, then <code>@{}&gt;&gt; path, r</code> (1 fsync)</td><td>0.16 ms</td><td>4.7 ms</td></tr>
+<tr><td>add by key: <code>@{}&gt;&gt; path, r</code> with a new key (2 fsyncs)</td><td>0.30 ms</td><td>9.2 ms</td></tr>
+<tr><td>delete by key: <code>ITEM @{k} path = _</code> (2 fsyncs)</td><td>0.31 ms</td><td>9.6 ms</td></tr>
 </tbody></table></div>
 
 <h2 id="reading">Reading the numbers</h2>
 <ul>
-  <li><b>A write by key waits for the disk.</b> Each one calls <code>fsync</code> twice, once for the table and once for the index, so
-  that a crash never leaves them out of step; that is almost all of its time, and the disk decides it (a tenth of a millisecond or two
-  on the Linux runner, about 5 ms on the Mac's SSD). To change thousands of records at once, change them in memory and write the table once with
-  <code>@&gt;&gt;</code>: a million records take about a second.</li>
-  <li><b>Reading by key or by number is cheap at any size</b>, so a program can work on a large table one record at a time without loading it.</li>
-  <li><b>In memory a record is bigger than on disk:</b> each field takes an 8-byte slot, and a text its own bytes besides. This run holds two
-  copies of the records (the ones it made and the ones it read), about 190 bytes per record each. Reading a table needs, at its peak,
-  two to three times the file's size.</li>
+  <li><b>A write by key waits for the disk.</b> A change in place syncs the table; an addition or a deletion syncs the table and
+  the index, so that a crash never leaves them out of step. That is almost all of its time, and the disk decides it (tenths of a
+  millisecond on the Linux runner, 5 to 9 ms on the Mac's SSD, where the sync goes through the drive's cache). To change thousands
+  of records at once, change them in memory and write the table once with <code>@&gt;&gt;</code>: a million records take under half
+  a second.</li>
+  <li><b>Reading by key or by number is cheap at any size</b>: the runtime keeps the files open between reads, and a lookup by key is
+  one <code>stat</code> of the table and two reads. With a million records, reading record <i>i</i> measured 7 µs on Linux: by then the
+  program holds about 380 MB of records, and a garbage collection over them most likely fell inside that measurement.</li>
+  <li><b>In memory a record is bigger than on disk:</b> each field takes an 8-byte slot, and a text its own bytes besides. This run
+  holds two copies of the records (the ones it made and the ones it read). Reading a table needs, at its peak, two to three times
+  the file's size.</li>
   <li><b>One writer at a time.</b> A table is a file, not a server: two programs writing the same table at the same moment are not
   coordinated.</li>
-  <li><b>The Mac is slower on one record</b> because each read opens the file, which costs more on macOS, and because the code is
-  translated from x86-64; on whole tables, where the time goes into the program's own loops, it is as fast or faster.</li>
-  <li><b>GitHub's runners are not all the same machine:</b> an earlier run on another one took 4 µs to read record <i>i</i> and
-  0.37 ms to change one by key. Compare numbers from the same run; the Mac is the same machine every time.</li>
-  <li><b>The clock</b> has a resolution of 10 ms, so the operations on one record are timed thousands at a time (20 000 reads, 300 writes)
-  and divided. “&lt; 10 ms” means less than one tick.</li>
+  <li><b>On the Mac</b>, Nihil's code is translated from x86-64 to ARM64, which costs most on small, frequent operations.</li>
+  <li><b>GitHub's runners are not all the same machine</b>, and a shared server under load gives noisier numbers still. Compare
+  numbers from the same run.</li>
+  <li><b>The clock</b> is <code>std:time</code>'s <code>now_us()</code>, in microseconds. The operations on one record are timed
+  thousands at a time (20 000 reads, 300 writes) and divided.</li>
 </ul>
-<p>The numbers come from the runs of 23 November 2026, with Nihil 4.3.2, where a lookup by key keeps the index it has checked
-in memory and reads the record once (on the Mac, from 70 µs to 40 µs). The rules behind them are in
+<p>The numbers come from the runs of 23 November 2026, with Nihil 4.4.0. The rules behind them are in
 <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
 </div></main>
 <footer><div class="wrap row"><span>Nihil · MIT License</span><span><a href="index.html">nihil-lang.dev</a></span></div></footer>
