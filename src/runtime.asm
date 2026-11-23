@@ -1271,6 +1271,12 @@ rt_alloc:                           ; rcx = n → rax (keeps every register but 
 gc_class_size:
     dq 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072
     dq 4096, 6144, 8192, 12288, 16384, 24576, 32768
+; ceil(2^32 / size) for each class: (offset × it) >> 32 is offset / size, exactly, for every offset
+; in a 64 KiB page (checked for all 65536 of them), so marking needs no div
+gc_class_recip:
+    dq 134217728, 89478486, 67108864, 44739243, 33554432, 22369622, 16777216
+    dq 11184811, 8388608, 5592406, 4194304, 2796203, 2097152, 1398102
+    dq 1048576, 699051, 524288, 349526, 262144, 174763, 131072
 
 ; r8 = class: puts a new page of free blocks of that class in its list
 ; (collecting first if there is no page left). Keeps every register but rax.
@@ -1646,6 +1652,12 @@ gc_collect:
     cmp r15, [GC_MSTACK]
     je .sweep
     sub r15, 8
+    lea rax, [r15 - 64]             ; the block 8 entries down the mark stack: into the cache now,
+    cmp rax, [GC_MSTACK]            ; so it is there when its turn comes
+    jb .drain_block
+    mov rax, [rax]
+    prefetcht0 [rax]
+.drain_block:
     mov rbx, [r15]
     mov rcx, [rbx]
     shr rcx, 8                      ; n
@@ -1789,6 +1801,15 @@ gc_scan:
     lea rax, [rsi + 8]
     cmp rax, rdi
     ja .done
+    lea rax, [rsi + 64]             ; the value 8 qwords on: if it points into the heap, its block
+    cmp rax, rdi                    ; is fetched into the cache now, so it is there when it is marked
+    jae .no_prefetch
+    mov rax, [rax]
+    sub rax, r14
+    cmp rax, r13
+    jae .no_prefetch
+    prefetcht0 [r14 + rax - 16]
+.no_prefetch:
     mov rax, [rsi]
     add rsi, 8
     sub rax, r14
@@ -1811,12 +1832,14 @@ gc_scan:
     lea r9, [r14 + r8]
     jmp .mark
 .small:
-    shr r9, 8
+    shr r9, 8                       ; the class
+    lea rcx, [rel gc_class_recip]
+    mov rdx, [rcx + r9 * 8]
     lea rcx, [rel gc_class_size]
     mov r9, [rcx + r9 * 8]          ; block size
     and eax, GC_PAGE - 1            ; offset in the page
-    xor edx, edx
-    div r9
+    imul rax, rdx
+    shr rax, 32                     ; offset / size (gc_class_recip)
     imul rax, r9                    ; offset of the block
     lea rcx, [rax + r9]
     cmp rcx, GC_PAGE
