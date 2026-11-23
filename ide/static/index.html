@@ -386,7 +386,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
             <option value="plan" title="Reads and writes a plan; no edits and no commands until you accept it">plan</option>
             <option value="auto" title="Claude Code's auto mode: it decides its steps, including edits in this project and shell commands">auto</option></select></label>
           <label title="The model for this tab's next message">model <select id="chatModel">
-            <option value="">default</option><option value="fable">fable</option><option value="opus">opus</option>
+            <option value="opus">opus</option><option value="fable">fable</option>
             <option value="sonnet">sonnet</option><option value="haiku">haiku</option></select></label></div>
       </div>
     </section>
@@ -1333,12 +1333,13 @@ const chatsByProject = new Map();     // project → { tabs, active }: kept whil
 let chats = { tabs: [], active: '' }, runningNow = [], nextChat = 1;
 const cur = () => chats.tabs.find((t) => t.id === chats.active) || chats.tabs[0];
 const chatTitle = (t) => t.title || 'new chat';
+const DEFAULT_MODEL = 'opus';          // a tab's model until another is chosen (tabs saved with "default" too)
 function newChat(saved) {
   const s = saved || {};
   const log = document.createElement('div'); log.className = 'chat-log'; log.hidden = true; log.innerHTML = EMPTY_CHAT;
   $('chatLogs').appendChild(log);
   return { id: s.id || 'c' + Date.now().toString(36) + nextChat++, title: s.title || '', session: s.session || '',
-    mode: MODES[s.mode] ? s.mode : 'ask', model: s.model || '', usedModel: s.usedModel || '', allow: Array.isArray(s.allow) ? s.allow : [],
+    mode: MODES[s.mode] ? s.mode : 'ask', model: s.model || DEFAULT_MODEL, usedModel: s.usedModel || '', allow: Array.isArray(s.allow) ? s.allow : [],
     run: null, step: '', now: '', agents: [], files: new Map(), shells: new Map(), tasks: new Map(), log, project, unread: false, closed: false };
 }
 function chatKey(p = project) { return 'nihil-ide-claude:' + p; }
@@ -1563,7 +1564,7 @@ function renderChatInfo() {
   const t = cur(); if (!t) return;
   const used = t.usedModel ? prettyModel(t.usedModel) : '';
   const next = t.model && !(t.usedModel || '').includes(t.model) ? t.model + (used ? ' from the next message' : '') : '';
-  $('chatState').textContent = (next || used || 'default model') + ' · ' + MODES[t.mode];
+  $('chatState').textContent = (next || used || DEFAULT_MODEL) + ' · ' + MODES[t.mode];
   $('chatState').title = (t.usedModel ? 'Model of the last answer: ' + t.usedModel : 'The model is confirmed by the first answer')
     + (t.session ? ' · conversation ' + t.session.slice(0, 8) : '');
 }
@@ -2080,7 +2081,7 @@ async function chatMcp(t) {
 // ---- commands: the panel's own, and Claude Code's (from its init event), for "/" autocomplete
 const PANEL_CMDS = {
   clear: 'a new conversation in this tab', new: 'a new tab', rename: 'rename this tab (and its session)',
-  model: 'the model of this tab: opus, sonnet, haiku, fable, default', mcp: 'the MCP servers and their state',
+  model: 'the model of this tab: opus, sonnet, haiku, fable', mcp: 'the MCP servers and their state',
   status: 'the account in use', login: 'sign in (/login console for an API account)', logout: 'sign out', help: 'what the panel answers itself',
 };
 const TERMINAL_ONLY = new Set(['doctor', 'color', 'focus', 'reload-plugins']);
@@ -2184,12 +2185,12 @@ async function chatSend(t = cur(), preset = '') {
     if (name === 'mcp') return chatMcp(t);
     if (name === 'status' || name === 'account') { const s = await api('/api/claude/auth'); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
     if (name === 'model') {
-      const m = text.slice(slash[0].length).trim().toLowerCase(), v = m === 'default' ? '' : m;
-      if (!m) { chatAdd('assistant', `This tab uses <b>${esc(t.model || 'the default model')}</b>` + (t.usedModel ? ` (last answer: ${esc(prettyModel(t.usedModel))})` : '') + '. To change it: <code>/model opus</code>, <code>sonnet</code>, <code>haiku</code>, <code>fable</code> or <code>default</code>.', t); return; }
-      if (!/^[a-z0-9-]+$/.test(v || 'x')) { chatAdd('error', 'A model is an alias (opus, sonnet, haiku, fable) or a name like claude-opus-5-5.', t); return; }
+      const m = text.slice(slash[0].length).trim().toLowerCase(), v = m === 'default' ? DEFAULT_MODEL : m;
+      if (!m) { chatAdd('assistant', `This tab uses <b>${esc(t.model || DEFAULT_MODEL)}</b>` + (t.usedModel ? ` (last answer: ${esc(prettyModel(t.usedModel))})` : '') + '. To change it: <code>/model opus</code>, <code>sonnet</code>, <code>haiku</code> or <code>fable</code>.', t); return; }
+      if (!/^[a-z0-9-]+$/.test(v)) { chatAdd('error', 'A model is an alias (opus, sonnet, haiku, fable) or a name like claude-opus-5-5.', t); return; }
       if (v && ![...$('chatModel').options].some((o) => o.value === v)) { const o = document.createElement('option'); o.value = o.textContent = v; $('chatModel').appendChild(o); }
       t.model = v; saveChatsOf(t.project); if (t === cur()) { $('chatModel').value = v; renderChatInfo(); }
-      chatAdd('assistant', `Model of this tab: <b>${esc(v || 'default')}</b>, from the next message.`, t); return;
+      chatAdd('assistant', `Model of this tab: <b>${esc(v)}</b>, from the next message.`, t); return;
     }
     if (name === 'help') {
       chatAdd('assistant', 'The panel itself answers ' + Object.keys(PANEL_CMDS).map((k) => '<code>/' + k + '</code>').join(', ')
