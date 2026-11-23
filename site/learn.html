@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Learn Nihil</title>
-<meta name="description" content="Nihil in twelve short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys and the standard library.">
+<meta name="description" content="Nihil in thirteen short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys, modeling data and the standard library.">
 <link rel="icon" type="image/png" href="icon-64.png">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -17,7 +17,7 @@
 </div></nav>
 <main class="doc"><div class="wrap">
 <h1>Learn Nihil</h1>
-<p>Twelve short chapters. Every example is a complete program, and the output under it is what it prints.
+<p>Thirteen short chapters. Every example is a complete program, and the output under it is what it prints.
 The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC.md</a>.</p>
 <ol class="toc">
 <li><a href="#hello">Hello</a></li>
@@ -32,6 +32,7 @@ The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC
 <li><a href="#std">The standard library</a></li>
 <li><a href="#globals">Globals and locals: the one rule to remember</a></li>
 <li><a href="#auto_keys">Automatic keys</a></li>
+<li><a href="#modeling">Modeling data</a></li>
 </ol>
 <h2 id="hello">1. Hello</h2>
 <p>Install Nihil (see the <a href="index.html#install">home page</a>), save this as <code>hello.nihil</code> and run <code>nihil run hello.nihil</code>. <code>&gt;&gt;</code> writes to the standard output and adds no line break of its own. <code>nihil hello.nihil</code> compiles it into a native executable, <code>./hello</code>, instead.</p>
@@ -306,6 +307,80 @@ i = 0;
 Carla&#x27;s order is #3
   #1 Ana: 42.5
   #3 Carla: 7.25</pre>
+<h2 id="modeling">13. Modeling data</h2>
+<p>There is no database apart from the program and no schema file: <b>the model is the schema</b>, declared in the code, and each model is a type, so the compiler checks every field name. A <b>table</b> is a text file in which every line is one record of the same width: it opens in an editor, goes into git, and record <i>i</i> starts at byte <i>i</i> × the width, so one record is read or changed without loading the rest. Next to it, <code>.nihil-idx</code> (the index of the key) and <code>.nihil-seq</code> (the counter of an automatic key) are caches that are rebuilt when they are missing or out of date.</p><p><b>Relations</b> are keys: a field holds the key of a record in another table (<code>customer</code> below holds a <code>CUSTOMER</code> id). The table does not enforce the link, so the program checks it when it writes (<code>sell</code>), and a <b>join</b> is a lookup by key (<code>CUSTOMER @{s.customer} CUSTOMERS</code>), a few small reads through the index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and <code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of its lines, so the old table no longer reads with the new model. Convert it once, reading it with the old model and writing it with the new one:</p><pre class="nihil">OLD = @[#id: INT(4); name: STRING(12)];
+NEW = @[#id: INT(4); name: STRING(12); city: STRING(14)];
+
+old = OLD @ &quot;customers.dat&quot;;
+new = [NEW() ; #old];
+i = 0;
+* i &lt; #old { new[i] = NEW(old[i].id, old[i].name, &quot;&quot;); i = i + 1; }
+@&gt;&gt; &quot;customers.dat&quot;, new;               // the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields than the key, and several programs writing one table at the same time (a table is meant for one writer). The full rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
+<pre class="nihil">// Two models, and the link between them: a sale names its customer by the customer&#x27;s key.
+CUSTOMER = @[#id: INT(4); name: STRING(12); city: STRING(14)];
+SALE = @[#+id: INT(6); customer: INT(4); total: FLOAT(8); paid: BOOL];
+
+CUSTOMERS = &quot;customers.dat&quot;;
+SALES = &quot;sales.dat&quot;;
+
+// a method of a model: what a customer owes, from the sales that point to it
+CUSTOMER.owes(c = CUSTOMER(), sales = [SALE()]) {
+    : sales.where(customer == c.id &amp;&amp; !paid).sum(total);
+}
+
+// a fresh start on every run: the customers rewritten, the sales (and their counter) removed
+@&gt;&gt; CUSTOMERS, [CUSTOMER(1, &quot;Ana&quot;, &quot;Lajeado&quot;),
+               CUSTOMER(2, &quot;Bruno&quot;, &quot;Porto Alegre&quot;),
+               CUSTOMER(3, &quot;Carla&quot;, &quot;Lajeado&quot;)];
+SALES.remove();
+(SALES + &quot;.nihil-seq&quot;).remove();
+
+sell(customer = 0, total = 0.0, paid = false) {
+    known? = CUSTOMER @?{customer} CUSTOMERS;          // the link is checked here
+    known == _ { &gt;&gt; &quot;no customer &quot; + $customer + &quot;: sale refused\n&quot;; :; }
+    @{}&gt;&gt; SALES, SALE(0, customer, total, paid);
+}
+sell(1, 120.0, true);
+sell(3, 45.5, false);
+sell(1, 80.0, false);
+sell(2, 300.0, true);
+sell(9, 10.0, false);                   // refused: there is no customer 9
+
+// a join by hand: each sale finds its customer by key (a few small reads, through the index)
+sales = SALE @ SALES;
+i = 0;
+* i &lt; #sales {
+    s = sales[i];
+    c = CUSTOMER @{s.customer} CUSTOMERS;
+    status = &quot;open&quot;;
+    s.paid { status = &quot;paid&quot;; }
+    &gt;&gt; &quot;sale #&quot; + $s.id + &quot;  &quot; + c.name.trim() + &quot; (&quot; + c.city.trim() + &quot;)  &quot;;
+    &gt;&gt; $s.total + &quot;  &quot; + status + &quot;\n&quot;;
+    i = i + 1;
+}
+
+// per customer: the model&#x27;s method, and queries over the sales
+customers = CUSTOMER @ CUSTOMERS;
+i = 0;
+* i &lt; #customers {
+    c = customers[i];
+    n = sales.count(customer == c.id);
+    &gt;&gt; c.name.trim() + &quot;: &quot; + $n + &quot; sale(s), owes &quot; + $c.owes(sales) + &quot;\n&quot;;
+    i = i + 1;
+}
+// a join inside a query: the city of each sale&#x27;s customer
+lajeado = sales.where((CUSTOMER @{customer} CUSTOMERS).city == &quot;Lajeado&quot;);
+&gt;&gt; &quot;sold in Lajeado: &quot; + $lajeado.sum(total) + &quot;\n&quot;;</pre>
+<p class="out">Output:</p>
+<pre class="output">no customer 9: sale refused
+sale #1  Ana (Lajeado)  120.0  paid
+sale #2  Carla (Lajeado)  45.5  open
+sale #3  Ana (Lajeado)  80.0  open
+sale #4  Bruno (Porto Alegre)  300.0  paid
+Ana: 2 sale(s), owes 80.0
+Bruno: 1 sale(s), owes 0.0
+Carla: 1 sale(s), owes 45.5
+sold in Lajeado: 245.5</pre>
 <h2 id="next">Next</h2>
 <p>The <a href="library.html">library reference</a> lists every call on texts, arrays, tables, JSON and maps.
 Questions: <a href="mailto:contact@nihil-lang.dev">contact@nihil-lang.dev</a>.</p>
