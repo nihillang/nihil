@@ -45,6 +45,16 @@
 ; files kept open by rt_read_at, so a table read one record at a time is not opened each time:
 ; FD_CACHE_NEXT is the slot to use next (0 … 3); each of the 4 slots (FD_SLOT bytes) holds
 ; [fd + 1 (0: empty), st_dev, st_ino, path length, path (up to 256 bytes)]
+; a collection marked by a child process (gc_fork): its pid (0: none), the map it marks in (a byte
+; for every 32 bytes of the heap, shared with it) and its length, the heap's bytes when it forked,
+; how the map is used (1: the child marks in it, 2: the sweep reads it) and whether pages were
+; handed out after the fork (the sweep then stops before them)
+%define GC_CHILD        (BASE_DATA + 0x1A8)
+%define GC_MAP          (BASE_DATA + 0x1B0)
+%define GC_MAP_LEN      (BASE_DATA + 0x1B8)
+%define GC_SNAP         (BASE_DATA + 0x1C0)
+%define GC_MAPMODE      (BASE_DATA + 0x1C8)
+%define GC_TAIL         (BASE_DATA + 0x1D0)
 ; make … NASMFLAGS=-DGC_STATS (a diagnostic build): the times of the collection under way, in µs,
 ; and the blocks it marked
 %define GC_STAT_T0      (BASE_DATA + 0x1D8)
