@@ -1021,6 +1021,16 @@ operations go further: they keep the table and its index open themselves, so a l
 one `stat` of the table (its size and stamp) and two reads, the index slot and the record;
 the index is read through the open file only while it is known to match the table.
 
+**Writers wait for each other.** A write by key (`@{}>>`, adding, changing or numbering a record,
+and `NAME @{k} path = _`) reads the table and the index and then changes them, so it holds an
+exclusive lock (`flock`) on `<path>.nihil-lock` from the lookup to the last write: two programs
+writing the same table by key run one after the other, and an automatic number is never given
+twice. The lock is a file of its own because `@>>` replaces the table. Reads take no lock (the
+`stat` before each one shows them what a writer did). The lock is cooperative: a program that does
+not take it, such as an editor, is not held back, and `@>>`, `@+>>` and `@[i]>>` do not take it
+(a whole-table write is atomic, so with two of them at once the last one wins). A failure caught
+by a protected call (§25) may leave the lock held until the program's next operation by key.
+
 A program also keeps, in memory, the last index it found to match its table (the
 table's size and stamp, and the index's capacity): a key operation on a table
 that has not changed since reads only the slots and the record, not the index's
@@ -1071,8 +1081,8 @@ o = ORDER(0, "Ana", 99.9);
   of the table + 1 (found by reading the table once).
 - Only `@{}>>` numbers records; `@[i]>>` and `@+>>` write the key as it is.
 - The key must be INT: `an automatic key (#+) must be INT`. The counter is
-  read and written by each numbered write, so it is meant for one writer at a
-  time, like the rest of a table.
+  read and written by each numbered write under the table's lock (see
+  *Writers wait for each other* above), so two programs never take one number.
 
 ### 20.6 Methods of a model
 
