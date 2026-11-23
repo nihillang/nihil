@@ -10,3 +10,5 @@ ide/projects.txt
 examples/learn/products.dat*
 examples/learn/notes.txt
 examples/learn/orders.dat*
+examples/learn/customers.dat*
+examples/learn/sales.dat*

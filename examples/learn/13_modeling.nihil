@@ -1,0 +1,55 @@
+// Two models, and the link between them: a sale names its customer by the customer's key.
+CUSTOMER = @[#id: INT(4); name: STRING(12); city: STRING(14)];
+SALE = @[#+id: INT(6); customer: INT(4); total: FLOAT(8); paid: BOOL];
+
+CUSTOMERS = "customers.dat";
+SALES = "sales.dat";
+
+// a method of a model: what a customer owes, from the sales that point to it
+CUSTOMER.owes(c = CUSTOMER(), sales = [SALE()]) {
+    : sales.where(customer == c.id && !paid).sum(total);
+}
+
+// a fresh start on every run: the customers rewritten, the sales (and their counter) removed
+@>> CUSTOMERS, [CUSTOMER(1, "Ana", "Lajeado"),
+               CUSTOMER(2, "Bruno", "Porto Alegre"),
+               CUSTOMER(3, "Carla", "Lajeado")];
+SALES.remove();
+(SALES + ".nihil-seq").remove();
+
+sell(customer = 0, total = 0.0, paid = false) {
+    known? = CUSTOMER @?{customer} CUSTOMERS;          // the link is checked here
+    known == _ { >> "no customer " + $customer + ": sale refused\n"; :; }
+    @{}>> SALES, SALE(0, customer, total, paid);
+}
+sell(1, 120.0, true);
+sell(3, 45.5, false);
+sell(1, 80.0, false);
+sell(2, 300.0, true);
+sell(9, 10.0, false);                   // refused: there is no customer 9
+
+// a join by hand: each sale finds its customer by key (a few small reads, through the index)
+sales = SALE @ SALES;
+i = 0;
+* i < #sales {
+    s = sales[i];
+    c = CUSTOMER @{s.customer} CUSTOMERS;
+    status = "open";
+    s.paid { status = "paid"; }
+    >> "sale #" + $s.id + "  " + c.name.trim() + " (" + c.city.trim() + ")  ";
+    >> $s.total + "  " + status + "\n";
+    i = i + 1;
+}
+
+// per customer: the model's method, and queries over the sales
+customers = CUSTOMER @ CUSTOMERS;
+i = 0;
+* i < #customers {
+    c = customers[i];
+    n = sales.count(customer == c.id);
+    >> c.name.trim() + ": " + $n + " sale(s), owes " + $c.owes(sales) + "\n";
+    i = i + 1;
+}
+// a join inside a query: the city of each sale's customer
+lajeado = sales.where((CUSTOMER @{customer} CUSTOMERS).city == "Lajeado");
+>> "sold in Lajeado: " + $lajeado.sum(total) + "\n";
