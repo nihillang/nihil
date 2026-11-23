@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/file.h>
 #include <unistd.h>
 #include <setjmp.h>
 #include <pthread.h>
@@ -1131,6 +1132,7 @@ i64 nh_syscall(const i64 *a) {
         return 0;
     case 17: return res(pread((int)x[1], (void *)x[2], (size_t)x[3], x[4]));
     case 18: return res(pwrite((int)x[1], (const void *)x[2], (size_t)x[3], x[4]));
+    case 73: return res(flock((int)x[1], (int)x[2]));    // flock: LOCK_EX 2, LOCK_UN 8 (the same values)
     case 74: return full_sync((int)x[1]) == 0 ? 0 : -errno;  // fsync, through the drive's cache as the runtime's
     case 21: return res(access((const char *)x[1], (int)x[2]));
     case 33: return res(dup2((int)x[1], (int)x[2]));
