@@ -1,0 +1,24 @@
+# The table benchmark (bench/run.sh) on Linux x86-64, natively: run it by hand (Actions → bench →
+# Run workflow); the numbers are in the log and in the run's summary. docs/performance.md has them.
+name: bench
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build (stage 1, from the latest release's compiler)
+        run: make
+
+      - name: GNU time, for the peak memory
+        run: command -v /usr/bin/time || (sudo apt-get update -q && sudo apt-get install -y -q time)
+
+      - name: The benchmark
+        run: |
+          bench/run.sh ./nihilc1.sh | tee bench.txt
+          { echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
