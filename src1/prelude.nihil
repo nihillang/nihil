@@ -608,8 +608,10 @@ __nihil_kt_fd = -1;
 __nihil_kt_dev = 0;
 __nihil_kt_ino = 0;
 __nihil_kt_stamp = 0;
+__nihil_kt_rw = false;                          // the table's fd can write (else read only)
 __nihil_ki_path = "";
 __nihil_ki_fd = -1;
+__nihil_ki_rw = false;
 
 // one stat of the table: its size (-1: no file), its stamp in __nihil_kt_stamp, computed as the
 // runtime's (mtime in nanoseconds + inode × 0x9E3779B97F4A7C15), and the table open in __nihil_kt_fd
@@ -626,7 +628,12 @@ __nihil_key_stat(path = "") {
     __stamp = __nihil_le_at(__b, 88, 8) * 1000000000 + __nihil_le_at(__b, 96, 8) + __ino * -7046029254386353131;
     !(__nihil_kt_path == path && __nihil_kt_fd >= 0 && __nihil_kt_dev == __dev && __nihil_kt_ino == __ino) {
         __nihil_key_forget();
-        __fd = __nihil_syscall([257, -100, __nihil_addr(__p), 0x80000]);           // openat(O_RDONLY | O_CLOEXEC)
+        __nihil_kt_rw = true;
+        __fd = __nihil_syscall([257, -100, __nihil_addr(__p), 0x80002]);           // openat(O_RDWR | O_CLOEXEC)
+        __fd < 0 {
+            __nihil_kt_rw = false;                                                 // a table it may only read
+            __fd = __nihil_syscall([257, -100, __nihil_addr(__p), 0x80000]);       // O_RDONLY | O_CLOEXEC
+        }
         __fd >= 0 {
             __nihil_kt_path = path;
             __nihil_kt_fd = __fd;
@@ -646,6 +653,29 @@ __nihil_key_forget() {
     __nihil_kt_fd = -1;
     __nihil_ki_path = "";
     __nihil_ki_fd = -1;
+}
+
+// text written at an offset of path, through fd when it can write (-1: no), synced if sync: as the
+// runtime's __nihil_pwrite / __nihil_pwrite_ns, which it falls back on (and which reports a failure)
+__nihil_key_write(path = "", fd = -1, at = 0, text = "", sync = true) {
+    fd >= 0 && __nihil_syscall([18, fd, __nihil_addr(text), #text, at]) == #text {     // pwrite64
+        !sync || __nihil_syscall([74, fd]) == 0 { :; }                                  // fsync
+    }
+    sync { __nihil_pwrite(path, at, text); } || { __nihil_pwrite_ns(path, at, text); }
+}
+
+// the index's header after a write by key: one stat of the table (its size and stamp), written
+// through the index's fd; then the index is known to match the table (key_find reads no header)
+__nihil_key_note(path = "") {
+    __size = __nihil_key_stat(path);
+    __size < 0 { :; }
+    __ifd = -1;
+    __nihil_ki_path == path && __nihil_ki_rw { __ifd = __nihil_ki_fd; }
+    __nihil_key_write(path + ".nihil-idx", __ifd, 0, __nihil_le(__size, 8) + __nihil_le(__nihil_kt_stamp, 8), false);
+    __nihil_kc_path == path {
+        __nihil_kc_size = __size;
+        __nihil_kc_stamp = __nihil_kt_stamp;
+    }
 }
 
 // n bytes at an offset of an open file, or "" if they are not all there
@@ -687,7 +717,12 @@ __nihil_key_find(key = "", path = "", size = 0, stamp = 0, schema = [0], names =
     __nihil_ki_path != path && __nihil_ki_fd >= 0 { __nihil_syscall([3, __nihil_ki_fd]); __nihil_ki_fd = -1; }
     __nihil_ki_fd < 0 {
         __q = __idx + "\0";
-        __nihil_ki_fd = __nihil_syscall([257, -100, __nihil_addr(__q), 0x80000]);
+        __nihil_ki_rw = true;
+        __nihil_ki_fd = __nihil_syscall([257, -100, __nihil_addr(__q), 0x80002]);   // O_RDWR, else O_RDONLY
+        __nihil_ki_fd < 0 {
+            __nihil_ki_rw = false;
+            __nihil_ki_fd = __nihil_syscall([257, -100, __nihil_addr(__q), 0x80000]);
+        }
         __nihil_ki_path = path;
         __nihil_ki_fd < 0 { __nihil_ki_fd = -1; __nihil_ki_path = ""; }
     }
@@ -752,30 +787,35 @@ __nihil_key_get(k = 0, path = "", schema = [0], names = "", model = "", kf = 0, 
 __nihil_key_put(path = "", r = 0, schema = [0], names = "", model = "", kf = 0) {
     __text = __nihil_rec_text(r, schema, names, model);   // a value that does not fit stops here
     __key = __nihil_key_value(__nihil_arr_at(r)[kf], schema[1 + kf * 2]);
-    __size = __nihil_fsize(path);
+    __size = __nihil_key_stat(path);                // one stat; the table kept open (for writing)
     __size < 0 { __size = 0; }
-    __f = __nihil_key_find(__key, path, __size, __nihil_fstamp(path), schema, names, model, kf);
-    __size = __nihil_fsize(path);                   // a rebuild may have finished a deletion
-    __size < 0 { __size = 0; }
+    __f = __nihil_key_find(__key, path, __size, __nihil_kt_stamp, schema, names, model, kf);
     __w = #__text;
     __idx = path + ".nihil-idx";
+    __tfd = -1;
+    __nihil_kt_path == path && __nihil_kt_rw { __tfd = __nihil_kt_fd; }
     __f[0] >= 0 {
-        __nihil_pwrite(path, __f[0] * __w, __text);
+        __nihil_key_write(path, __tfd, __f[0] * __w, __text, true);
     } || {
+        __size = __nihil_key_stat(path);            // a rebuild may have finished a deletion
+        __size < 0 { __size = 0; }
+        __nihil_kt_path == path && __nihil_kt_rw { __tfd = __nihil_kt_fd; } || { __tfd = -1; }
         __n = __nihil_rec_count(path, __size, schema, model);
         __at = __n * __w;
         __size % __w != 0 {                         // the last line lacks its "\n"
             __text = "\n" + __text;
             __at = __at - 1;
         }
-        __nihil_pwrite(path, __at, __text);
+        __nihil_key_write(path, __tfd, __at, __text, true);
         (__n + 1) * 2 > __f[2] {                    // over half full: a bigger index
             __nihil_key_rebuild(path, __nihil_fsize(path), __nihil_fstamp(path), schema, names, model, kf);
             :;
         }
-        __nihil_pwrite(__idx, 16 + __f[1] * 4, __nihil_le(__n + 1, 4));
+        __ifd = -1;
+        __nihil_ki_path == path && __nihil_ki_rw { __ifd = __nihil_ki_fd; }
+        __nihil_key_write(__idx, __ifd, 16 + __f[1] * 4, __nihil_le(__n + 1, 4), true);
     }
-    __nihil_pwrite_ns(__idx, 0, __nihil_key_header(path));   // if lost: rebuilt
+    __nihil_key_note(path);                         // the index's header (if lost: rebuilt)
 }
 
 // @{}>> path, r for a model with an automatic key (#+): a record whose key is 0
