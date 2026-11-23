@@ -1,7 +1,8 @@
 # Temporary: the collector before and after (gc-faster), both with GC_STATS, on a quiet runner.
 name: gcab
 on:
-  workflow_dispatch:
+  push:
+    branches: [gc-faster]
 jobs:
   gcab:
     runs-on: ubuntu-24.04
