@@ -1,0 +1,25 @@
+ORDER = @[#+id: INT(6); client: STRING(12); total: FLOAT(8)];   // #+ : the table numbers the key
+FILE = "orders.dat";
+
+a = ORDER(0, "Ana", 42.5);              // key 0: the table gives it the next number
+@{}>> FILE, a;
+>> "Ana's order is #" + $a.id + "\n";    // the record now has its number
+
+b = ORDER(0, "Bruno", 18.0);
+@{}>> FILE, b;
+ORDER @{b.id} FILE = _;                 // Bruno's order is deleted: its number is never given again
+
+c = ORDER(0, "Carla", 7.25);
+@{}>> FILE, c;
+>> "Carla's order is #" + $c.id + "\n";
+
+rows = ORDER @ FILE;
+i = 0;
+* i < #rows {
+    >> "  #" + $rows[i].id + " " + rows[i].client.trim() + ": " + $rows[i].total + "\n";
+    i = i + 1;
+}
+
+// Run it again: the numbers go on from where they stopped (orders.dat.nihil-seq keeps the
+// counter). In the IDE, click orders.dat under Database to see, filter and change its records;
+// in + Record, leave id empty and the table numbers it.

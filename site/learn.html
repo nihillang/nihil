@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Learn Nihil</title>
-<meta name="description" content="Nihil in eleven short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk and the standard library.">
+<meta name="description" content="Nihil in twelve short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys and the standard library.">
 <link rel="icon" type="image/png" href="icon-64.png">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -17,7 +17,7 @@
 </div></nav>
 <main class="doc"><div class="wrap">
 <h1>Learn Nihil</h1>
-<p>Eleven short chapters. Every example is a complete program, and the output under it is what it prints.
+<p>Twelve short chapters. Every example is a complete program, and the output under it is what it prints.
 The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC.md</a>.</p>
 <ol class="toc">
 <li><a href="#hello">Hello</a></li>
@@ -31,6 +31,7 @@ The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC
 <li><a href="#tables">Tables on disk</a></li>
 <li><a href="#std">The standard library</a></li>
 <li><a href="#globals">Globals and locals: the one rule to remember</a></li>
+<li><a href="#auto_keys">Automatic keys</a></li>
 </ol>
 <h2 id="hello">1. Hello</h2>
 <p>Install Nihil (see the <a href="index.html#install">home page</a>), save this as <code>hello.nihil</code> and run <code>nihil run hello.nihil</code>. <code>&gt;&gt;</code> writes to the standard output and adds no line break of its own. <code>nihil hello.nihil</code> compiles it into a native executable, <code>./hello</code>, instead.</p>
@@ -273,6 +274,38 @@ double(total = 0) { : total * 2; }
 <p class="out">Output:</p>
 <pre class="output">total: 12
 42 12</pre>
+<h2 id="auto_keys">12. Automatic keys</h2>
+<p>A key marked <code>#+</code> is numbered by the table: write a record with key 0 by key (<code>@{}&gt;&gt;</code>) and it gets the next number, which the record then holds. The counter is kept next to the table, so a deleted number is never given again and a second run goes on from where the first stopped. In the IDE, <code>orders.dat</code> then appears under Database, where its records can be filtered, added, changed and deleted.</p>
+<pre class="nihil">ORDER = @[#+id: INT(6); client: STRING(12); total: FLOAT(8)];   // #+ : the table numbers the key
+FILE = &quot;orders.dat&quot;;
+
+a = ORDER(0, &quot;Ana&quot;, 42.5);              // key 0: the table gives it the next number
+@{}&gt;&gt; FILE, a;
+&gt;&gt; &quot;Ana&#x27;s order is #&quot; + $a.id + &quot;\n&quot;;    // the record now has its number
+
+b = ORDER(0, &quot;Bruno&quot;, 18.0);
+@{}&gt;&gt; FILE, b;
+ORDER @{b.id} FILE = _;                 // Bruno&#x27;s order is deleted: its number is never given again
+
+c = ORDER(0, &quot;Carla&quot;, 7.25);
+@{}&gt;&gt; FILE, c;
+&gt;&gt; &quot;Carla&#x27;s order is #&quot; + $c.id + &quot;\n&quot;;
+
+rows = ORDER @ FILE;
+i = 0;
+* i &lt; #rows {
+    &gt;&gt; &quot;  #&quot; + $rows[i].id + &quot; &quot; + rows[i].client.trim() + &quot;: &quot; + $rows[i].total + &quot;\n&quot;;
+    i = i + 1;
+}
+
+// Run it again: the numbers go on from where they stopped (orders.dat.nihil-seq keeps the
+// counter). In the IDE, click orders.dat under Database to see, filter and change its records;
+// in + Record, leave id empty and the table numbers it.</pre>
+<p class="out">Output:</p>
+<pre class="output">Ana&#x27;s order is #1
+Carla&#x27;s order is #3
+  #1 Ana: 42.5
+  #3 Carla: 7.25</pre>
 <h2 id="next">Next</h2>
 <p>The <a href="library.html">library reference</a> lists every call on texts, arrays, tables, JSON and maps.
 Questions: <a href="mailto:contact@nihil-lang.dev">contact@nihil-lang.dev</a>.</p>
