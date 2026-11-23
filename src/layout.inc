@@ -65,6 +65,19 @@
 %define FD_CACHE        (BASE_DATA + 0x200)
 %define FD_SLOT         288
 %define FD_SLOTS        4
+; a sweep in steps (gc_sweep_step): 1 while pages are left, the next one, and the last one
+%define GC_SWEEPING     (BASE_DATA + 0x680)
+%define GC_SWEEP_POS    (BASE_DATA + 0x688)
+%define GC_SWEEP_END    (BASE_DATA + 0x690)
+; free pages given back to the kernel in steps (gc_give_step): 1 while runs may still be pending,
+; the next run to look at, and the threshold of the next collection meanwhile
+%define GC_GIVING       (BASE_DATA + 0x698)
+%define GC_GIVE_POS     (BASE_DATA + 0x6A0)
+%define GC_LIMIT        (BASE_DATA + 0x6A8)
+; GC_STATS: the steps of the sweep under way, the longest one and when the current one began (µs)
+%define GC_STAT_STEPS   (BASE_DATA + 0x6B0)
+%define GC_STAT_STEPMAX (BASE_DATA + 0x6B8)
+%define GC_STAT_STEPT0  (BASE_DATA + 0x6C0)
 %define OUTPUT_BUF       (BASE_DATA + 0x1000)   ; standard output buffer
 %define OUTPUT_CAP       65536
 %define IN_BUF         (BASE_DATA + 0x11000)  ; standard input buffer
