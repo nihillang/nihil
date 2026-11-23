@@ -1,4 +1,4 @@
-// Welcome to the Nihil IDE.
+/// Welcome to the Nihil IDE.
 //   Ctrl+Enter  run          Ctrl+S  save
 //   Ctrl+D in the terminal ends the input
 fib(n = 0) {
@@ -14,3 +14,8 @@ i = 0;
 name = "";
 << name;
 >> "Hello, " + name + "!\n";
+
+2
+{
+    >> 1;
+}

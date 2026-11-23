@@ -45,6 +45,12 @@
 ; files kept open by rt_read_at, so a table read one record at a time is not opened each time:
 ; FD_CACHE_NEXT is the slot to use next (0 … 3); each of the 4 slots (FD_SLOT bytes) holds
 ; [fd + 1 (0: empty), st_dev, st_ino, path length, path (up to 256 bytes)]
+; make … NASMFLAGS=-DGC_STATS (a diagnostic build): the times of the collection under way, in µs,
+; and the blocks it marked
+%define GC_STAT_T0      (BASE_DATA + 0x1D8)
+%define GC_STAT_T1      (BASE_DATA + 0x1E0)
+%define GC_STAT_T2      (BASE_DATA + 0x1E8)
+%define GC_STAT_MARKED  (BASE_DATA + 0x1F0)
 %define FD_CACHE_NEXT   (BASE_DATA + 0x1F8)
 %define FD_CACHE        (BASE_DATA + 0x200)
 %define FD_SLOT         288
