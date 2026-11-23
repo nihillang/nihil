@@ -265,25 +265,21 @@ __nihil_ft_digits_shortest(b = 0) {
     __nihil_ft_k = __k;
 }
 
-// bits → text: "0.1", "3.0", "-2.5e-10", "1.0e+21", "inf", "-inf", "nan"
-// A FLOAT with at most 3 decimals (a price, a measure, a whole number) as its text, worked out
-// with exact integers, or "" when it is not one (then the general algorithm runs). For
-// v = mant / 2^s and k = 0 … 3: m is the integer nearest to v·10^k, and m / 10^k reads back as
-// v when it is less than half an ulp of v away: |m·2^s − mant·10^k| < 10^k / 2. The first k that
-// works gives the fewest digits, and m is the nearest of them, as the general algorithm gives.
-// Ties, numbers from 2^53 up (where the last digits can round away), powers of two below 2^52
-// (whose ulp is smaller on one side) and subnormals take that way.
-// writes v ≥ 0 in decimal into buf from position n (with at least `digits` digits, zeros in front);
-// → the position after it. With arrays only, which stage 0 compiles (it has no $ of an INT and no +
-// of two STRINGs).
-__nihil_ft_put_dec(buf = [0], n = 0, v = 0, digits = 1) {
-    __d = [0 ; 20];
-    __c = 0;
+// how many decimal digits v ≥ 0 has (at least `digits`)
+__nihil_ft_ndigits(v = 0, digits = 1) {
+    __c = 1;
+    __x = v / 10;
+    * __x > 0 { __c = __c + 1; __x = __x / 10; }
+    __c < digits { : digits; }
+    : __c;
+}
+
+// writes v ≥ 0 in decimal into buf, in its `width` places ending before position end (zeros in
+// front). With arrays only, which stage 0 compiles (it has no $ of an INT and no + of two STRINGs).
+__nihil_ft_put_dec(buf = [0], end = 0, v = 0, width = 1) {
     __x = v;
-    * __x > 0 || __c < digits { __d[__c] = '0' + __x % 10; __x = __x / 10; __c = __c + 1; }
-    __i = 0;
-    __c { buf[n + __i] = __d[__c - 1 - __i]; __i = __i + 1; }
-    : n + __c;
+    __i = end;
+    * __i > end - width { __i = __i - 1; buf[__i] = '0' + __x % 10; __x = __x / 10; }
 }
 
 // A FLOAT with at most 3 decimals (a price, a measure, a whole number) as its text, worked out
@@ -325,21 +321,23 @@ __nihil_ft_fast(b = 0, neg = false) {
         }
         !__found { : ""; }
     }
-    __out = [0 ; 32];
-    __n = 0;
-    neg { __out[0] = '-'; __n = 1; }
-    __n = __nihil_ft_put_dec(__out, __n, __m / __p, 1);
-    __out[__n] = '.';
-    __n = __n + 1;
-    __k == 0 { __out[__n] = '0'; __n = __n + 1; } || { __n = __nihil_ft_put_dec(__out, __n, __m % __p, __k); }
-    __r2 = [0 ; __n];
-    __i = 0;
-    __n { __r2[__i] = __out[__i]; __i = __i + 1; }
-    : $__r2;
+    __ip = __m / __p;                               // the text: [-]digits.digits, written in place
+    __wi = __nihil_ft_ndigits(__ip, 1);
+    __wf = __k;
+    __k == 0 { __wf = 1; }
+    __lead = 0;
+    neg { __lead = 1; }
+    __out = [0 ; __lead + __wi + 1 + __wf];
+    neg { __out[0] = '-'; }
+    __nihil_ft_put_dec(__out, __lead + __wi, __ip, __wi);
+    __out[__lead + __wi] = '.';
+    __nihil_ft_put_dec(__out, __lead + __wi + 1 + __wf, __m % __p, __wf);
+    : $__out;
 }
 
 __nihil_ft_general = false;          // true: always the general algorithm (tests/float compares the two)
 
+// bits → text: "0.1", "3.0", "-2.5e-10", "1.0e+21", "inf", "-inf", "nan"
 __nihil_ft_text(b = 0) {
     __fast = "";
     !__nihil_ft_general { __fast = __nihil_ft_fast(b & 0x7FFFFFFFFFFFFFFF, b < 0); }
