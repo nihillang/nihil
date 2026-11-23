@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -44,6 +45,8 @@ func done(what string, count int64) {
 		fmt.Printf("%s: %.1f ms\n", what, ms)
 	}
 }
+
+func checkErr(err error) { check(err) }
 
 func check(err error) {
 	if err != nil {
@@ -111,6 +114,31 @@ func hash(s string) uint64 {
 		h = (h ^ uint64(s[i])) * 1099511628211
 	}
 	return h
+}
+
+// CHECK=1: before each operation, a stat of the path, as Nihil does (syscall.Stat: no allocation)
+var (
+	checking   bool
+	tdev, tino uint64
+)
+
+// is the table at the path still the file kept open? If another program replaced it, open it
+// again and rebuild the index
+func checkTable() {
+	if !checking {
+		return
+	}
+	var st syscall.Stat_t
+	checkErr(syscall.Stat(path, &st))
+	if uint64(st.Dev) == tdev && uint64(st.Ino) == tino {
+		return
+	}
+	tf.Close()
+	var err error
+	tf, err = os.OpenFile(path, os.O_RDWR, 0)
+	checkErr(err)
+	tdev, tino = uint64(st.Dev), uint64(st.Ino)
+	buildIndex()
 }
 
 var (
@@ -194,6 +222,7 @@ func buildIndex() {
 
 // where key k is: its record number (or -1), and its slot (or the empty one where it would go)
 func find(k int64, r *Item) (int64, int64) {
+	checkTable()
 	j := int64(hash(strconv.FormatInt(k, 10)) & uint64(capacity-1))
 	b := make([]byte, W)
 	for left := capacity; left > 0; left-- {
@@ -294,6 +323,7 @@ func env(k string, d int64) int64 {
 
 func main() {
 	N, OPS, SYNCED := env("N", 100000), env("OPS", 20000), env("SYNCED", 300)
+	checking = env("CHECK", 0) == 1
 	dir := os.Getenv("DIR")
 	if dir == "" {
 		dir = "/tmp/nihil-bench"
@@ -376,6 +406,11 @@ func main() {
 	start()
 	tf, err = os.OpenFile(path, os.O_RDWR, 0)
 	check(err)
+	{
+		var st syscall.Stat_t
+		checkErr(syscall.Fstat(int(tf.Fd()), &st))
+		tdev, tino = uint64(st.Dev), uint64(st.Ino)
+	}
 	buildIndex()
 	var r Item
 	find(1, &r)
@@ -395,6 +430,7 @@ func main() {
 	start()
 	b := make([]byte, W)
 	for k := int64(0); k < OPS; k++ {
+		checkTable()
 		_, err := tf.ReadAt(b, rnd(N)*(W+1))
 		check(err)
 		parse(b, &r)
