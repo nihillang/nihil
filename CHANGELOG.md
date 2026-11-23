@@ -4,6 +4,15 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.3.1
+
+- `install.sh` runs inside `main()`, called on its last line, so a download cut short runs nothing; and it refuses a `NIHIL_HOME` that is empty, `/`, your home directory, or an existing directory that is not a Nihil installation
+  - *Why:* The installer replaces `NIHIL_HOME` as a whole: `NIHIL_HOME=~/projects` would have wiped that directory, and a partial script could run half of it
+- the packages of every release (and of `nightly`) carry a build provenance attestation from GitHub Actions: `gh attestation verify nihil-linux-x86_64.tar.gz --repo nihillang/nihil`
+  - *Why:* The `.sha256` comes from the same place as the package: it catches a corrupt download, not a replaced one
+- the IDE: the Claude panel and the side bar stop where the code (editor and terminal) would get narrower than 360px; a narrower window shrinks them, the Claude panel first, and the widths chosen come back when it is wide again
+  - *Why:* The Claude panel could be dragged until the editor and the terminal were drawn over it, and a narrower window made the page scroll sideways
+
 ## v4.3.0
 
 - automatic keys: `#+id: INT(w)` in a model makes `@{}>>` give a record whose key is 0 the next number (1, 2, 3, …), kept in `path.nihil-seq`; a deleted number is never given again, and a key written by hand past the counter moves it (SPEC §20.5)
