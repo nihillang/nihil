@@ -1,0 +1,49 @@
+# Temporary: the collector with a forked marking (gc-fork) against main, on a quiet runner.
+name: gcfork
+on:
+  push:
+    branches: [gc-fork]
+jobs:
+  gcfork:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: nasm
+        run: sudo apt-get update -q && sudo apt-get install -y -q nasm
+      - name: Before and after
+        run: |
+          set -e
+          make -s build/nihilc1
+          W=$RUNNER_TEMP/gf; mkdir -p $W
+          git show origin/main:src/runtime.asm > $W/old.asm
+          cp src/runtime.asm $W/new.asm
+          git show origin/main:src/layout.inc > $W/old-layout.inc
+          build() {   # build NAME ASM INCLUDE-DIR FLAGS
+            nasm -f bin -w-reloc-rel-dword -w-reloc-abs-qword -I $3/ -I build/ $4 -o $W/$1.bin $2
+            { printf 'runtime_bin = ['; od -An -v -tu1 $W/$1.bin | tr -s ' \n' '  ' | sed 's/^ //; s/ $//; s/ /, /g'; printf '\n];\n'; } > src1/runtime_bin.nihil
+            printf '%s\n' "$PWD/src1/nihilc1.nihil" | build/nihilc1 > $W/nihilc1-$1 && chmod 755 $W/nihilc1-$1
+            NIHILC1=$W/nihilc1-$1 ./nihilc1.sh bench/tables.nihil $W/tables-$1
+          }
+          mkdir -p $W/oldinc && cp $W/old-layout.inc $W/oldinc/layout.inc
+          build old $W/old.asm $W/oldinc ""
+          build new $W/new.asm src ""
+          build newstats $W/new.asm src "-DGC_STATS"
+          git checkout src1/runtime_bin.nihil
+          for round in 1 2 3; do
+            for v in old new; do
+              echo "== round $round $v" | tee -a $W/r.txt
+              N=1000000 SYNCED=20 DIR=$W/data /usr/bin/time -f "  total %e s, peak %M KB" $W/tables-$v 2>&1 | grep -E "make|write|read the|lookup|read record|typical|total" | tee -a $W/r.txt
+            done
+          done
+          echo "== new, GC_STATS (mark = while the program goes on; sweep = the pause)" | tee -a $W/r.txt
+          N=1000000 SYNCED=20 DIR=$W/data $W/tables-newstats 2>&1 >/dev/null | grep '^gc' | tail -6 | tee -a $W/r.txt
+          echo "== the final table, Nihil (new) against C, byte for byte" | tee -a $W/r.txt
+          cc -O2 -o $W/c bench/compare/tables.c
+          mkdir -p $W/same
+          N=300000 OPS=2000 SYNCED=50 KEEP=1 DIR=$W/same $W/tables-new > /dev/null
+          N=300000 OPS=2000 SYNCED=50 KEEP=1 DIR=$W/same $W/c > /dev/null
+          cmp $W/same/items.dat $W/same/items-c.dat && echo "  identical" | tee -a $W/r.txt
+          { echo '```'; cat $W/r.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
