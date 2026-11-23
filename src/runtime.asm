@@ -980,6 +980,7 @@ rt_err_begin:
 rt_err_end:
     cmp qword [ERR_CAPTURE], 0
     jne .resume
+    call gc_stop_child
     mov eax, 60
     mov edi, 2
     syscall
@@ -1087,6 +1088,7 @@ rt_fail:
 rt_exit:                            ; rdi = exit code
     push rdi
     call rt_flush
+    call gc_stop_child
     pop rdi
     mov eax, 60                     ; sys_exit
     syscall
@@ -1154,6 +1156,15 @@ rt_error:
 %define GC_MIN        (16 << 20)    ; collect after at least 16 MiB of new blocks
 %endif
 %define GC_RESERVE    (64 << 30)
+; from this heap size on, a collection is marked by a child process while the program goes on
+; (gc_fork); the program looks for its end every GC_POLL bytes of new blocks
+%ifdef GC_STRESS
+%define GC_FORK_MIN   (1 << 20)
+%define GC_POLL       (256 << 10)
+%else
+%define GC_FORK_MIN   (64 << 20)
+%define GC_POLL       (4 << 20)
+%endif
 %define PD_SMALL 1
 %define PD_LARGE 2
 %define PD_CONT  3
@@ -1220,6 +1231,8 @@ rt_alloc:                           ; rcx = n → rax (keeps every register but 
     call gc_get_pages
     test rax, rax
     jnz .pages
+    mov rax, 0x7FFFFFFFFFFFFFFF     ; no page left: the memory is needed now (gc_collect waits)
+    mov [GC_THRESHOLD], rax
     call gc_collect
     call gc_get_pages
     test rax, rax
@@ -1245,6 +1258,16 @@ rt_alloc:                           ; rcx = n → rax (keeps every register but 
     inc r10
     jmp .cont
 .header:
+    cmp qword [GC_CHILD], 0         ; a child is marking: the new block is live (the map)
+    je .unmarked
+    mov rcx, rax
+    sub rcx, [GC_HEAP_BASE]
+    cmp rcx, [GC_SNAP]
+    jae .unmarked                   ; past the heap it saw: not swept this time
+    shr rcx, 5
+    add rcx, [GC_MAP]
+    mov byte [rcx], 1
+.unmarked:
     mov rcx, r11
     shl rcx, 8
     or rcx, 1                       ; used
@@ -1295,6 +1318,8 @@ gc_small_page:
     call gc_get_pages
     test rax, rax
     jnz .carve
+    mov rax, 0x7FFFFFFFFFFFFFFF     ; no page left: the memory is needed now (gc_collect waits)
+    mov [GC_THRESHOLD], rax
     call gc_collect
     cmp qword [GC_FREE + r8 * 8], 0 ; the collection may have freed blocks of this class
     jne .done
@@ -1600,6 +1625,11 @@ gc_stack_top:
 
 ; a collection: keeps every register (they are roots, so they go on the stack
 ; that is scanned)
+; a collection (keeps every register). A heap of GC_FORK_MIN or more is marked by a child process
+; (gc_fork) while the program goes on, and swept when the child has ended (gc_finish); while it
+; marks, a call here looks whether it ended, and waits for it when the program needs the memory
+; (called with GC_ALLOCATED at or below the threshold: no page left) or has made as many new bytes
+; as the heap had. A smaller heap, or a fork that fails, is collected here at once.
 gc_collect:
     push rax
     push rbx
@@ -1616,11 +1646,79 @@ gc_collect:
     push r13
     push r14
     push r15
+    cmp qword [GC_CHILD], 0
+    jne .running
+    mov rax, [GC_ALLOCATED]
+    cmp rax, [GC_THRESHOLD]
+    jbe .now                        ; called because no page is left: collect here, now
+    mov rax, [GC_BUMP]
+    sub rax, [GC_HEAP_BASE]
+    cmp rax, GC_FORK_MIN
+    jb .now
+    call gc_fork                    ; rax = 0: a child marks now
+    test rax, rax
+    jz .out
+.now:
+    call gc_collect_now
+    jmp .out
+.running:
+    call gc_poll
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; the threshold after a collection: as many new bytes as are in use, at least GC_MIN
+gc_threshold:
+    mov qword [GC_ALLOCATED], 0
+%ifdef GC_STRESS
+    mov eax, GC_MIN
+%else
+    mov rax, [GC_LIVE]
+    cmp rax, GC_MIN
+    jae .set
+    mov eax, GC_MIN
+%endif
+.set:
+    mov [GC_THRESHOLD], rax
+    ret
+
+; a collection with the program stopped: mark, then sweep
+gc_collect_now:
 %ifdef GC_STATS
     call gc_now_us
     mov [GC_STAT_T0], rax
     mov qword [GC_STAT_MARKED], 0
 %endif
+    call gc_mark
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_T1], rax
+%endif
+    call gc_sweep
+    inc qword [GC_COUNT]
+%ifdef GC_STATS
+    call gc_stats
+%endif
+    jmp gc_threshold
+
+; marks what the registers (pushed by gc_collect), the stack and the globals reach, and what those
+; blocks reach: in the blocks' headers, or in GC_MAP when GC_MAPMODE is 1 (a child). Leaves
+; r12 = descriptors, r13 = heap bytes, r14 = heap (for gc_sweep).
+gc_mark:
     mov eax, 257                    ; sys_openat(AT_FDCWD, "/proc/self/pagemap", O_RDONLY | O_CLOEXEC)
     mov rdi, -100
     lea rsi, [rel s_pagemap]
@@ -1636,7 +1734,7 @@ gc_collect:
     sub r13, r14                    ; bytes of the heap in use (pages handed out)
     mov r12, [GC_DESC]
     mov r15, [GC_MSTACK]
-    mov rsi, rsp                    ; the stack, with the registers just pushed
+    mov rsi, rsp                    ; the stack, with the registers pushed by gc_collect
     mov rdi, [GC_STACK_TOP]
     call gc_scan
     mov rsi, GLOBALS
@@ -1644,7 +1742,7 @@ gc_collect:
     call gc_scan
 .drain:                             ; the blocks reached, until none is left
     cmp r15, [GC_MSTACK]
-    je .sweep
+    je .marked
     sub r15, 8
     lea rax, [r15 - 64]             ; the block 8 entries down the mark stack: into the cache now,
     cmp rax, [GC_MSTACK]            ; so it is there when its turn comes (−15% of the marking of a
@@ -1664,50 +1762,170 @@ gc_collect:
 .large:
     call gc_scan_resident
     jmp .drain
-.sweep:
-%ifdef GC_STATS
-    call gc_now_us
-    mov [GC_STAT_T1], rax
-%endif
+.marked:
     mov rdi, [GC_PAGEMAP]
     test rdi, rdi
-    jz .swept
+    jz .closed
     dec rdi
     mov eax, 3                      ; sys_close
     syscall
     mov qword [GC_PAGEMAP], 0
-.swept:
+.closed:
+    ret
+
+; starts a collection marked by a child process: a map shared with it (a byte for every 32 bytes of
+; the heap), then fork. The child marks in the map and ends; this process goes on, marking in the map
+; the blocks it hands out meanwhile (rt_alloc). A block unreachable when the child forked stays
+; unreachable, so whatever the map leaves unmarked is garbage. → rax = 0, or 1 if it could not start.
+gc_fork:
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_T0], rax
+    mov qword [GC_STAT_MARKED], 0
+%endif
+    mov rsi, [GC_BUMP]
+    sub rsi, [GC_HEAP_BASE]
+    mov [GC_SNAP], rsi
+    shr rsi, 5
+    add rsi, 4095
+    and rsi, -4096
+    mov [GC_MAP_LEN], rsi
+    mov eax, 9                      ; sys_mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0)
+    xor edi, edi
+    mov edx, 3
+    mov r10d, 0x21
+    mov r8, -1
+    xor r9d, r9d
+    syscall
+    cmp rax, -4096
+    jae .failed
+    mov [GC_MAP], rax
+    mov eax, 57                     ; sys_fork
+    syscall
+    test rax, rax
+    js .unmap
+    jz .child
+    mov [GC_CHILD], rax
+    mov qword [GC_ALLOCATED], 0
+    mov qword [GC_THRESHOLD], GC_POLL
+    xor eax, eax
+    ret
+.child:
+    mov qword [OUTPUT_SIZE], 0      ; the program's pending output is not this process's to write
+    mov qword [PROT_DEPTH], 0       ; an error here ends this process (no protected call to go back to)
+    mov qword [ERR_CAPTURE], 0
+    mov eax, 436                    ; sys_close_range(0, ~0, 0): no pipe or socket of the program kept open
+    xor edi, edi
+    mov esi, -1
+    xor edx, edx
+    syscall
+    mov qword [GC_MAPMODE], 1
+    call gc_mark
+    mov eax, 231                    ; sys_exit_group(0): the map is marked
+    xor edi, edi
+    syscall
+.unmap:
+    mov eax, 11                     ; sys_munmap(map, len)
+    mov rdi, [GC_MAP]
+    mov rsi, [GC_MAP_LEN]
+    syscall
+.failed:
+    mov qword [GC_MAP], 0
+    mov eax, 1
+    ret
+
+; a child is marking: if it has ended, sweep with its map; if the program needs the memory, or has
+; made as many new bytes as the heap had when the child forked, wait for it first; otherwise look
+; again after GC_POLL more bytes
+gc_poll:
+    sub rsp, 16
+    mov rax, [GC_ALLOCATED]
+    cmp rax, [GC_THRESHOLD]
+    jbe .wait                       ; no page left: the memory is needed now
+    cmp rax, [GC_SNAP]
+    jae .wait
+    mov eax, 61                     ; sys_wait4(child, status, WNOHANG, 0)
+    mov rdi, [GC_CHILD]
+    mov rsi, rsp
+    mov edx, 1
+    xor r10d, r10d
+    syscall
+    test rax, rax
+    jnz .ended
+    mov rax, [GC_ALLOCATED]         ; still marking
+    add rax, GC_POLL
+    mov [GC_THRESHOLD], rax
+    add rsp, 16
+    ret
+.wait:
+    mov eax, 61                     ; sys_wait4(child, status, 0, 0)
+    mov rdi, [GC_CHILD]
+    mov rsi, rsp
+    xor edx, edx
+    xor r10d, r10d
+    syscall
+    cmp rax, -4                     ; -EINTR: again
+    je .wait
+.ended:
+    mov qword [GC_CHILD], 0
+    test rax, rax
+    js .lost                        ; the child could not be waited for: its map is not trusted
+    cmp dword [rsp], 0
+    jne .lost                       ; it did not end normally
+    add rsp, 16
+    jmp gc_finish
+.lost:
+    add rsp, 16
+    call gc_unmap
+    jmp gc_collect_now
+
+; the child has marked: sweep the heap it saw with its map (the pages handed out after the fork
+; stay as they are), then the next threshold
+gc_finish:
+%ifdef GC_STATS
+    call gc_now_us
+    mov [GC_STAT_T1], rax
+%endif
+    mov r14, [GC_HEAP_BASE]
+    mov r12, [GC_DESC]
+    mov r13, [GC_SNAP]
+    mov rax, [GC_BUMP]
+    sub rax, r14
+    sub rax, r13                    ; bytes of pages handed out after the fork
+    mov [GC_TAIL], rax
+    mov qword [GC_MAPMODE], 2
     call gc_sweep
+    mov rax, [GC_TAIL]
+    add [GC_LIVE], rax              ; those pages count as in use
+    mov qword [GC_MAPMODE], 0
+    mov qword [GC_TAIL], 0
+    call gc_unmap
     inc qword [GC_COUNT]
 %ifdef GC_STATS
     call gc_stats
 %endif
-    mov qword [GC_ALLOCATED], 0
-%ifdef GC_STRESS
-    mov eax, GC_MIN
-%else
-    mov rax, [GC_LIVE]              ; the next one after as many new bytes as are in use
-    cmp rax, GC_MIN
-    jae .threshold
-    mov eax, GC_MIN
-%endif
-.threshold:
-    mov [GC_THRESHOLD], rax
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
+    jmp gc_threshold
+
+gc_unmap:
+    mov rdi, [GC_MAP]
+    test rdi, rdi
+    jz .none
+    mov eax, 11                     ; sys_munmap
+    mov rsi, [GC_MAP_LEN]
+    syscall
+    mov qword [GC_MAP], 0
+.none:
+    ret
+
+; on exit: a child still marking is stopped (its work is no longer needed)
+gc_stop_child:
+    mov rdi, [GC_CHILD]
+    test rdi, rdi
+    jz .none
+    mov eax, 62                     ; sys_kill(child, SIGKILL)
+    mov esi, 9
+    syscall
+.none:
     ret
 
 %ifdef GC_STATS
@@ -1834,10 +2052,22 @@ gc_scan:
     mov rax, [r9]
     test al, 1
     jz gc_scan                      ; a free block
+    cmp qword [GC_MAPMODE], 1
+    je .mark_map
     test al, 2
     jnz gc_scan                     ; already marked
     or rax, 2
     mov [r9], rax
+    jmp .push
+.mark_map:                          ; a child marks in the map, not in the header (no page copied)
+    mov rax, r9
+    sub rax, r14
+    shr rax, 5
+    add rax, [GC_MAP]
+    cmp byte [rax], 0
+    jne gc_scan                     ; already marked
+    mov byte [rax], 1
+.push:
 %ifdef GC_STATS
     inc qword [GC_STAT_MARKED]
 %endif
@@ -2002,11 +2232,20 @@ gc_sweep:
     mov rax, rbx
     shl rax, GC_PAGE_SHIFT
     lea rdi, [r14 + rax]
+    cmp qword [GC_MAPMODE], 2
+    jne .large_header
+    shr rax, 5                      ; marked in the child's map?
+    add rax, [GC_MAP]
+    cmp byte [rax], 0
+    je .free_large
+    jmp .large_kept
+.large_header:
     mov rax, [rdi]
     test al, 2
     jz .free_large
     and rax, ~2
     mov [rdi], rax
+.large_kept:
     mov rax, r9
     shl rax, GC_PAGE_SHIFT
     add [GC_LIVE], rax
@@ -2033,6 +2272,17 @@ gc_sweep:
 .pass1:
     cmp rcx, rsi
     ja .pass1_done
+    cmp qword [GC_MAPMODE], 2
+    jne .pass1_header
+    mov rax, rcx                    ; marked in the child's map?
+    sub rax, r14
+    shr rax, 5
+    add rax, [GC_MAP]
+    cmp byte [rax], 0
+    je .not_marked
+    inc edx
+    jmp .pass1_next
+.pass1_header:
     mov rax, [rcx]
     test al, 2
     jz .not_marked
@@ -2095,6 +2345,19 @@ gc_sweep:
     call .give_back
     jmp .run_find
 .run_last:                          ; a run at the end: those pages count as never used
+    cmp qword [GC_TAIL], 0
+    je .run_tail
+    mov rdx, [GC_NRUNS]             ; unless pages after it are in use: then an ordinary run
+    shl rdx, 4
+    add rdx, [GC_RUNS]
+    mov [rdx], r10
+    mov rax, rbx
+    sub rax, r10
+    mov [rdx + 8], rax
+    inc qword [GC_NRUNS]
+    call .give_back
+    jmp .runs_done
+.run_tail:
     call .give_back
     mov rax, r10
     shl rax, GC_PAGE_SHIFT
