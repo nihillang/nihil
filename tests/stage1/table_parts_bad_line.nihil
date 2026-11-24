@@ -1,0 +1,9 @@
+// a line broken in two in the table's last part: the same error as reading it whole
+P = @[#id: INT(6); name: STRING(12); v: FLOAT(8); on: BOOL];
+F = "build/tparts_bl.dat";
+rows = [P() ; 100000];
+i = 0;
+* i < 100000 { rows[i] = P(i + 1, "n", 1.0, true); i = i + 1; }
+@>> F, rows;
+@>> F, (@ F) + "aaaaaaaaaaaaa\naaaaaaaaaaaaa\n";   // 28 bytes: whole lines by size, but two short ones
+>> $(#(P @ F));

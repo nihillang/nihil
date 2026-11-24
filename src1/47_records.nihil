@@ -551,18 +551,10 @@ table_read(k = 0) {
     tok_type == '{' { : record_by_key(m, opt); }
     model_path(m, "@");
     emit(0x50);                            // push rax (the path)
-    opt {
-        emit_call_rt(RT_READ_FILE_OPT);   // 0 if it does not open: an empty table
-        eb(0x48, 0x85, 0xC0, 0x75, 7);      // test rax, rax ; jnz +7
-        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + ""]
-        register_fixup(size_code, const_empty, false);
-        emit_d(0);
-    } || {
-        emit_call_rt(RT_READ_FILE);
-    }
-    emit(0x50);                            // push rax (the text)
+    opt { emit(0xB8); emit_d(1); } || { emit(0xB8); emit_d(0); }   // mov eax, @? or @
+    emit(0x50);
     push_model(m);
-    call_prelude("__nihil_table_read", 40);
+    call_prelude("__nihil_table_load", 40);   // read in parts (the file is never whole in memory)
     : model_type(m) | TYPE_ARR;
 }
 
