@@ -15,14 +15,15 @@ instruction, and the compiler itself is translated the same way: there is a nati
 - `nihilc1 -map` writes `nihil-map RUNTIME_END CODE_END SIZE` on stderr: where the program's
   code starts (after the header and the runtime) and where its constants start. The output
   is the same with and without it.
-- `macos/translate.py` disassembles `[RUNTIME_END, CODE_END)` (clang + objdump) and writes
+- The translator, `macos/translate.nihil` (a Nihil program; until v4.5 it was Python),
+  disassembles `[RUNTIME_END, CODE_END)` (clang + objdump) and writes
   `.s`: rax rcx rdx rsi rdi → x9–x13; rbx r12–r15 → x19–x23 (kept by C); rbp → x29; the x86
   stack is emulated exactly by x28 in its own area (`nh_emu_stack`); globals → a symbol through
   x27; constants are copied after the code. Calls into the runtime's jump table become calls into
   the translated runtime (below).
   cmp/test/ucomisd map to cmp/tst/fcmp, with the conditions mapped for each.
 - **The runtime is Linux's** (`src/runtime.asm`, which the executable carries after its header),
-  translated by `macos/translate_rt.py` with each instruction's exact meaning (it is hand-written,
+  translated by the same program with each instruction's exact meaning (it is hand-written,
   not the compiler's closed set): r8–r10 → x24–x26, r11 → x7; 32-bit operations on w registers,
   8/16-bit writes with bfi; absolute data addresses (and immediates that are such addresses)
   relative to x27, the runtime's slots and buffers in `_nh_data_start` just below the globals;
@@ -36,6 +37,11 @@ instruction, and the compiler itself is translated the same way: there is a nati
   `/proc/sys/kernel/random/uuid` as files of their own. The start sets PLAT_STACK_TOP (the
   emulated stack) and PLAT_DATA_END, which Linux finds in /proc/self/maps and the ELF header.
   `arm64/rt.c` is only that layer and the emulated stack (until v4.5 it was a second runtime, in C).
+- The translator is built by `macos/translator.sh` (`build/macos/translate`): the native compiler
+  emits its x86-64 code, the previous translator translates it, and the new one must translate
+  itself into the same assembly. The first one is a seed (`macos/seed.sh`): `macos/translate.nihil`
+  compiled by a Nihil already installed or by the latest release's package. It reads three lines on
+  its standard input: the program (`.x86`), the map and the `.s` to write.
 - `build/macos/nihilc1-native` (the translated compiler) compiles `src1/nihilc1.nihil` to
   the same bytes as the x86 compiler, and the compiler it builds does the same (fixed point).
 - The IDE server (`ide/server.nihil`) builds native programs on macOS and its assembly view

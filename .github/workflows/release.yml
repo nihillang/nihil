@@ -51,8 +51,10 @@ jobs:
       - name: Build and test
         run: make && make test1 && make fixedpoint
 
-      - name: The compiler's own code and map, for the Mac
-        run: printf -- '-map %s/src1/nihilc1.nihil\n' "$PWD" | build/nihilc1 > build/nihilc1.x86 2> build/nihilc1.map
+      - name: The compiler's own code and map, and the translator's, for the Mac
+        run: |
+          printf -- '-map %s/src1/nihilc1.nihil\n' "$PWD" | build/nihilc1 > build/nihilc1.x86 2> build/nihilc1.map
+          printf -- '-map %s/macos/translate.nihil\n' "$PWD" | build/nihilc1 > build/translate.x86 2> build/translate.map
 
       - name: The IDE server
         run: ./nihilc1.sh ide/server.nihil build/ide-server
@@ -85,6 +87,8 @@ jobs:
           path: |
             build/nihilc1.x86
             build/nihilc1.map
+            build/translate.x86
+            build/translate.map
             build/prelude_text.nihil
             build/std_text.nihil
 
@@ -108,12 +112,23 @@ jobs:
           name: linux
           path: linux
 
-      - name: The compiler translated to ARM64
+      # the translator (macos/translate.nihil): a seed (the latest release compiles it) translates the
+      # Linux job's x86-64 code of it, and the translator that comes out translates itself the same way
+      - name: The translator, from a seed
         run: |
           mkdir -p build/macos
           cp linux/prelude_text.nihil linux/std_text.nihil build/
-          python3 macos/translate.py linux/nihilc1.x86 linux/nihilc1.map build/macos/nihilc1.s
           clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
+          NIHIL_SEED_URL=https://github.com/nihillang/nihil/releases/latest/download/nihil-macos-arm64.tar.gz macos/seed.sh build/macos/translate-seed
+          printf '%s\n%s\n%s\n' linux/translate.x86 linux/translate.map build/macos/translate.s | build/macos/translate-seed
+          clang -arch arm64 -o build/macos/translate build/macos/translate.s build/macos/rt.o
+          printf '%s\n%s\n%s\n' linux/translate.x86 linux/translate.map build/macos/translate2.s | build/macos/translate
+          cmp build/macos/translate.s build/macos/translate2.s
+          cp macos/translate.nihil build/macos/translate.nihil
+
+      - name: The compiler translated to ARM64
+        run: |
+          printf '%s\n%s\n%s\n' linux/nihilc1.x86 linux/nihilc1.map build/macos/nihilc1.s | build/macos/translate
           clang -arch arm64 -o build/macos/nihilc1-native build/macos/nihilc1.s build/macos/rt.o
 
       - name: Fixed point (the Mac's compiler emits the same bytes as Linux's)
@@ -133,7 +148,7 @@ jobs:
         run: macos/ide-app/build.sh build/macos
 
       - name: Package
-        run: dist/package.sh macos-arm64 dist/out build/macos/nihilc1-native build/macos/rt.o build/macos/ide-server "build/macos/Nihil IDE.app"
+        run: dist/package.sh macos-arm64 dist/out build/macos/nihilc1-native build/macos/rt.o build/macos/translate build/macos/ide-server "build/macos/Nihil IDE.app"
 
       - name: The package installs and compiles a program
         run: |

@@ -1,18 +1,19 @@
 #!/bin/bash
 # test.sh — the test battery (tests/ and tests/stage1/) run natively on macOS: each program is
-# compiled by the native compiler (build/macos/nihilc1-native) (-map), translated to ARM64 (macos/translate.py), built with
+# compiled by the native compiler (build/macos/nihilc1-native) (-map), translated to ARM64 (macos/translate.nihil), built with
 # clang and arm64/rt.c, run, and compared with its .out, .code and .stderr (SPEC §13)
 cd "$(dirname "$0")/.."
 T=build/macos/t
 mkdir -p $T
 # 1. compile every program in the VM at once (the compiler is x86)
 for src in tests/*.nihil tests/stage1/*.nihil; do n=$(echo $src | tr / _); printf "%s\n" "-map $PWD/$src" | build/macos/nihilc1-native > $T/$n.x86 2> $T/$n.map; done
+macos/translator.sh || exit 1
 ok=0; failed=0; skipped=0
 clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o $T/rt.o
 for src in tests/*.nihil tests/stage1/*.nihil; do
   n=$(echo $src | tr / _); name=${src%.nihil}
   if ! grep -q nihil-map $T/$n.map 2>/dev/null; then skipped=$((skipped + 1)); continue; fi
-  if ! python3 macos/translate.py $T/$n.x86 $T/$n.map $T/$n.s 2> $T/$n.terr; then
+  if ! printf '%s\n%s\n%s\n' $T/$n.x86 $T/$n.map $T/$n.s | build/macos/translate 2> $T/$n.terr; then
     failed=$((failed + 1)); echo "FAILED  $src: translation: $(head -3 $T/$n.terr | tr '\n' ' ')"; continue
   fi
   if ! clang -arch arm64 -o $T/$n.bin $T/$n.s $T/rt.o 2> $T/$n.cerr; then

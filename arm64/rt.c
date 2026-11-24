@@ -2,7 +2,7 @@
 // arm64/rt.c — what the Nihil runtime needs from macOS on ARM64 (Apple silicon).
 //
 // The runtime is Linux's own, src/runtime.asm, translated to ARM64 with the program
-// (macos/translate_rt.py): the collector, texts, files, network and output are the same code on
+// (macos/translate.nihil): the collector, texts, files, network and output are the same code on
 // both systems. What differs is the kernel: each Linux system call of the runtime (and of the
 // prelude's __nihil_syscall, which goes through the runtime) reaches nh_linux_syscall, which
 // makes it with macOS's calls, with Linux's numbers, flags, layouts and errno values on both

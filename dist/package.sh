@@ -2,7 +2,7 @@
 # dist/package.sh — builds a release package of Nihil for one platform:
 #
 #   dist/package.sh linux-x86_64 OUTDIR NIHILC1 IDE_SERVER
-#   dist/package.sh macos-arm64  OUTDIR NIHILC1_NATIVE RT_O IDE_SERVER [IDE_APP]
+#   dist/package.sh macos-arm64  OUTDIR NIHILC1_NATIVE RT_O TRANSLATE IDE_SERVER [IDE_APP]
 #
 # IDE_SERVER is ide/server.nihil compiled for the platform (`nihil ide`); with the IDE go its
 # page, SPEC.md and the examples, in share/nihil.
@@ -39,15 +39,14 @@ case $platform in
         chmod 755 "$root/libexec/nihil/nihilc1" "$root/libexec/nihil/ide-server"
         ;;
     macos-arm64)
-        [ $# -ge 5 ] || { echo "macos-arm64 needs NIHILC1_NATIVE, RT_O and IDE_SERVER" >&2; exit 2; }
+        [ $# -ge 6 ] || { echo "macos-arm64 needs NIHILC1_NATIVE, RT_O, TRANSLATE and IDE_SERVER" >&2; exit 2; }
         cp "$3" "$root/libexec/nihil/nihilc1-native"
-        cp "$5" "$root/libexec/nihil/ide-server"
-        chmod 755 "$root/libexec/nihil/nihilc1-native" "$root/libexec/nihil/ide-server"
+        cp "$5" "$root/libexec/nihil/translate"                           # macos/translate.nihil, built
+        cp "$6" "$root/libexec/nihil/ide-server"
+        chmod 755 "$root/libexec/nihil/nihilc1-native" "$root/libexec/nihil/translate" "$root/libexec/nihil/ide-server"
         cp "$4" "$root/libexec/nihil/rt.o"
-        cp macos/translate.py "$root/libexec/nihil/translate.py"
-        cp macos/translate_rt.py "$root/libexec/nihil/translate_rt.py"     # the runtime's translation
         # IDE_APP: "Nihil IDE.app" from macos/ide-app/build.sh, the window of `nihil ide`
-        if [ $# -ge 6 ]; then cp -R "$6" "$root/libexec/nihil/Nihil IDE.app"; fi
+        if [ $# -ge 7 ]; then cp -R "$7" "$root/libexec/nihil/Nihil IDE.app"; fi
         ;;
     *)
         echo "unknown platform: $platform" >&2
