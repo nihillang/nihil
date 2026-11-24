@@ -1259,8 +1259,10 @@ i64 nh_linux_syscall(i64 n0, i64 a1, i64 a2, i64 a3, i64 a4, i64 a5, i64 a6) {
         if (!v) return -12;
         if (mincore((void *)first, (size_t)(sys * pg), (char *)v) != 0) { free(v); return -linux_errno(errno); }
         i64 pages = (len + 4095) / 4096;
-        for (i64 i = 0; i < pages; i++)               // any state (in memory, paged out …) counts as there
-            ((unsigned char *)x[3])[i] = v[(start + i * 4096 - first) / pg] != 0;
+        // any state (in memory, paged out, compressed …) counts as there, but a page never written
+        // reports only MINCORE_ANONYMOUS: nothing to scan there, and reading it would make it real
+        for (i64 i = 0; i < pages; i++)
+            ((unsigned char *)x[3])[i] = (v[(start + i * 4096 - first) / pg] & ~MINCORE_ANONYMOUS) != 0;
         free(v);
         return 0;
     }

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """translate.py PROGRAM.x86 MAP OUT.s — Nihil on macOS (Apple silicon): the x86-64 code the compiler
-emits, translated into ARM64 assembly that clang assembles with arm64/rt.c (the runtime).
+emits, translated into ARM64 assembly that clang links with arm64/rt.c. The runtime is Linux's own
+(src/runtime.asm, in the executable after its header), translated by translate_rt.py; rt.c turns its
+Linux system calls into macOS's (nh_linux_syscall). NIHIL_MAC_RUNTIME=c uses rt.c's own runtime instead.
 
 The compiler emits a closed set of instructions (about 180 forms: a stack machine, see
 docs/macos-arm64.md), so the code is translated instruction by instruction:
@@ -677,8 +679,9 @@ def main():
     m = re.search(r'nihil-map (\d+) (\d+) (\d+)', open(mapline).read())
     if not m:
         sys.exit('translate: no "nihil-map" line in ' + mapline)
+    # the runtime: Linux's, translated too (translate_rt.py), unless NIHIL_MAC_RUNTIME=c asks for rt.c's
     t = Translator(open(prog, 'rb').read(), int(m.group(1)), int(m.group(2)),
-                   os.environ.get('NIHIL_MAC_RUNTIME') == 'asm')
+                   os.environ.get('NIHIL_MAC_RUNTIME', 'asm') != 'c')
     n = t.run(out)
     sys.stderr.write(f'translate: {n} instructions\n')
 

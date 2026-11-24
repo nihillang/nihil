@@ -45,6 +45,7 @@ case $platform in
         chmod 755 "$root/libexec/nihil/nihilc1-native" "$root/libexec/nihil/ide-server"
         cp "$4" "$root/libexec/nihil/rt.o"
         cp macos/translate.py "$root/libexec/nihil/translate.py"
+        cp macos/translate_rt.py "$root/libexec/nihil/translate_rt.py"     # the runtime's translation
         # IDE_APP: "Nihil IDE.app" from macos/ide-app/build.sh, the window of `nihil ide`
         if [ $# -ge 6 ]; then cp -R "$6" "$root/libexec/nihil/Nihil IDE.app"; fi
         ;;
