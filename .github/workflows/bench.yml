@@ -30,5 +30,10 @@ jobs:
 
       - name: Compared with C and Go
         run: |
-          bench/compare/run.sh ./nihilc1.sh | tee compare.txt
+          RAW_DIR=bench-raw bench/compare/run.sh ./nihilc1.sh | tee compare.txt
           { echo; echo '```'; cat compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-raw
+          path: bench-raw/

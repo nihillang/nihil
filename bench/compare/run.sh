@@ -2,7 +2,7 @@
 # bench/compare/run.sh [COMPILER] — bench/tables.nihil against the same work in C (cc -O2) and Go,
 # for 100 000 and 1 000 000 records (SIZES), each with its peak memory, then a table of the three
 # (bench/compare/table.py). COMPILER is called as COMPILER PROGRAM.nihil OUT: `nihil` (the default)
-# or ./nihilc1.sh from a build. Needs cc, go and python3.
+# or ./nihilc1.sh from a build. Needs cc, go and python3. RAW_DIR=dir keeps each program's own output.
 set -eu
 cd "$(dirname "$0")/../.."
 compiler=${1:-nihil}
@@ -35,3 +35,5 @@ print("peak memory: %d MB" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_ma
     done
 done
 python3 bench/compare/table.py "$work" ${SIZES:-100000 1000000}
+# RAW_DIR: the three programs' own output, kept (each size and language, with its peak memory)
+if [ -n "${RAW_DIR:-}" ]; then mkdir -p "$RAW_DIR" && cp "$work"/*-*.txt "$RAW_DIR"/ && echo "$machine" > "$RAW_DIR/machine.txt"; fi
