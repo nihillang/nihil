@@ -1458,8 +1458,8 @@ Every runtime error starts with `rt_err_begin` and ends with `rt_err_end`: with 
 active, what the error writes to the standard error goes to `?!`'s text (4000 bytes) instead,
 and `rt_err_end` restores the stack, the frame and the registers and resumes with `_`. The
 prelude's errors (table files, JSON, the input) go through `RT_FAIL`, so they are caught
-too. `out of memory` turns the protections off before it is written. On macOS the same is in
-`arm64/rt.c` (`err_begin`, `err_end`, `nh_resume`). The collector scans whatever stack it
+too. `out of memory` turns the protections off before it is written. macOS runs the same
+runtime, translated (`macos/translate.nihil`). The collector scans whatever stack it
 finds, so nothing else changes.
 
 ## 26. JSON out and in (v4.0)
@@ -1581,6 +1581,7 @@ branch per tool, reading its parameters with the JSON library.
 | **v2.1:** `... ms;` waits | Animations need a fixed speed; a busy loop depends on the machine. The ellipsis reads as a pause and cannot start any valid expression |
 | **v2.2:** renamed from Ket to Nihil | Latin for *nothing*: no keywords, and `_` for the missing value |
 | **v4.4:** `std:time.nihil` (`now_us`, `now_ms`, `unix_time`); files kept open between reads | Programs could only time themselves through /proc/uptime, which ticks every 10 ms; and every read of a table opened the file, so one lookup by key cost four opens where C needs none |
+| **v4.6:** macOS runs Linux's runtime, translated to ARM64 with each program; the translator is a Nihil program | Two runtimes (assembly and C) had to be kept doing the same; every program on the Mac went through Python |
 | **v4.5:** a collector that marks in a child process (Linux); a lock for writes by key; tables read in parts; locals in registers by use | Pauses of a tenth of a second with large heaps; two programs writing one table by key could lose records; reading a table held the whole file and its records at once; loops ran 3 to 6 times slower than C |
 | **v4.3:** automatic keys `#+id: INT(w)`: `@{}>>` numbers a record whose key is 0, with the counter in `path.nihil-seq` | Tables with a key had to compute the next number in every program (`#rows + 1`, which repeats a number after a deletion); the counter belongs to the table, and a deleted number is never given again |
 | **v4.2:** the standard library: `@ "std:name.nihil";` (§16), kept inside the compiler | Libraries every program needs (configuration, JSON, MCP) were copied into each project; now they ship with the language |
