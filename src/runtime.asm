@@ -71,6 +71,7 @@ t_protect:      jmp strict near rt_protect         ; RT_PROTECT
 t_unprotect:    jmp strict near rt_unprotect       ; RT_UNPROTECT
 t_err_text:     jmp strict near rt_err_text        ; RT_ERR_TEXT
 t_fail:         jmp strict near rt_fail            ; RT_FAIL
+t_concat_int:   jmp strict near rt_concat_int      ; RT_CONCAT_INT
 
 ; ---- arithmetic -------------------------------------------------------------
 ; Division truncated toward zero (as in C). MIN / -1 gives MIN (idiv
@@ -117,19 +118,27 @@ rt_print_int:
 
 ; rt_decimal: rax = signed value, rdi = end of a buffer (≥ 20 bytes before it)
 ; → rsi = start of the digits. Destroys rax, rcx, rdx, r8.
+; x / 10 as (x × 0xCCCCCCCCCCCCCCCD) >> 67, exact for every unsigned 64-bit x: a multiplication
+; instead of a division (tens of cycles) for each digit.
 rt_decimal:
+    push r9
     mov r8, rax
     test rax, rax
     jns .positive
-    neg rax                         ; MIN stays MIN, but the unsigned div gets it right
+    neg rax                         ; MIN stays MIN, but as unsigned it is right
 .positive:
-    mov ecx, 10
+    mov rcx, 0xCCCCCCCCCCCCCCCD
 .digit:
-    xor edx, edx
-    div rcx
-    add dl, '0'
+    mov r9, rax                     ; x
+    mul rcx                         ; rdx:rax = x × the constant
+    shr rdx, 3                      ; x / 10
+    mov rax, rdx
+    lea rdx, [rdx + rdx * 4]
+    add rdx, rdx                    ; (x / 10) × 10
+    sub r9, rdx                     ; the digit
+    add r9b, '0'
     dec rdi
-    mov [rdi], dl
+    mov [rdi], r9b
     test rax, rax
     jnz .digit
     test r8, r8
@@ -138,6 +147,7 @@ rt_decimal:
     mov byte [rdi], '-'
 .finish:
     mov rsi, rdi
+    pop r9
     ret
 
 ; ---- network (stage 1, SPEC §23): a TCP server -----------------------------------
@@ -3756,6 +3766,42 @@ rt_read_at:
     ret
 
 ; rt_concat: rax = a, rcx = b → rax = new STRING with a followed by b
+; rt_concat_int: rax = STRING, rcx = INT → rax = the STRING followed by the INT in decimal
+; ("…" + $n), in one new block: the digits go straight in, with no STRING of their own.
+rt_concat_int:
+    push rbx
+    push r12
+    push r13
+    sub rsp, 32
+    mov rbx, rax                    ; the text (kept alive in a register)
+    mov rax, rcx
+    lea rdi, [rsp + 32]
+    call rt_decimal                 ; rsi = the first digit
+    mov r12, rsi
+    lea r13, [rsp + 32]
+    sub r13, rsi                    ; how many
+    mov rcx, [rbx - 8]
+    add rcx, r13                    ; total size
+    push rcx
+    add rcx, 8
+    shr rcx, 3
+    call rt_alloc
+    pop rcx
+    mov [rax - 8], rcx
+    mov rdi, rax
+    mov rsi, rbx
+    mov rcx, [rbx - 8]
+    rep movsb
+    mov rsi, r12
+    mov rcx, r13
+    rep movsb
+    mov byte [rdi], 0
+    add rsp, 32
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 rt_concat:
     push rbx
     push r12
@@ -3920,3 +3966,4 @@ ASSERT_AT t_put,          RT_PUT
 ASSERT_AT t_rec_parse,    RT_REC_PARSE
 ASSERT_AT t_lines,        RT_LINES
 ASSERT_AT t_net_connect,  RT_NET_CONNECT
+ASSERT_AT t_concat_int,   RT_CONCAT_INT

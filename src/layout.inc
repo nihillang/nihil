@@ -138,5 +138,6 @@
 %define RT_UNPROTECT        250 ; the protected call ended normally (keeps rax, rdx; ?! = "")
 %define RT_ERR_TEXT         255 ; → rax = ?!, a new STRING
 %define RT_FAIL             260 ; rax = STRING: a runtime error with that message
+%define RT_CONCAT_INT       265 ; rax = STRING, rcx = INT → rax = STRING followed by the INT in decimal
 %define RT_NET_CONNECT      240 ; rax = IPv4 address (a.b.c.d as a << 24 | … | d), rcx = port → rax = connected socket (or -errno)
 %define RT_SYSCALL          210 ; rax = ARRAY of INT [n, a1 … a6] (missing ones 0) → rax = what the kernel gave

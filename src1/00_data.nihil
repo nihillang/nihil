@@ -129,6 +129,8 @@ RT_PROTECT = 245;       // protected calls (SPEC §25): rax = where to resume af
 RT_UNPROTECT = 250;
 RT_ERR_TEXT = 255;      // ?! → rax = a new STRING
 RT_FAIL = 260;          // rax = STRING: a runtime error with that message
+RT_CONCAT_INT = 265;    // rax = STRING, rcx = INT → "…" + $n in one block
+last_int_text = -1;     // where the code of the last $ of an INT ends (binary fuses it with a "…" +)
 
 // ---- limits (the same as the stage 0 arenas) ----
 SIZE_SOURCE = 16 << 20;

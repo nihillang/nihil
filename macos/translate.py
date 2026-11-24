@@ -60,6 +60,7 @@ RT = {
     225: (['rax', 'rcx', 'rdx'], 'nh_put', ['rax']), 230: (['rax', 'rcx', 'rdx'], 'nh_rec_parse', ['rax']),
     235: (['rax', 'rcx'], 'nh_lines', ['rax']), 240: (['rax', 'rcx'], 'nh_net_connect', ['rax']),
     245: (['rax'], 'nh_protect_slot', []), 250: ([], 'nh_unprotect', []),
+    265: (['rax', 'rcx'], 'nh_concat_int', ['rax']),
     255: ([], 'nh_err_message', ['rax']), 260: (['rax'], 'nh_fail', []),
 }
 
