@@ -186,6 +186,18 @@ create_local(start = 0, n = 0, t = 0) {
 
 // a use of the variable k: a local's weight grows 8 times with each loop around it
 note_use(k = 0) {
+    f = s_flags[k];
+    f & FLAG_GLOBAL != 0 {
+        method_current >= 0 {
+            g_meth_cur[k] = true;
+            f & FLAG_TOP != 0 { g_redo = true; }    // kept at the top level, but a method uses it
+        } || {
+            d = loop_depth;
+            d > 6 { d = 6; }
+            g_w[k] = g_w[k] + (1 << (d * 3));
+        }
+        :;
+    }
     o = s_ord[k];
     o < 64 && method_current >= 0 {
         d = loop_depth;

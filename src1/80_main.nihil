@@ -11,12 +11,98 @@ compile() {
         n_passes = n_passes + 1;
         n_passes > 1000 { error("types did not settle after 1000 passes"); }
         one_pass();
+        globals_learn();
+        g_redo {                           // this pass kept a global a method uses: not final
+            g_redo = false;
+            altered = true;
+            final_pass = false;
+        }
         !final_pass { prune_prelude(); }
         final_pass || unknowns == 0 && !altered {
             done = true;                   // final, or nothing provisional: it already counts as final
         } || !discovered {
             final_pass = true;           // nothing left to discover: the next one is strict
         }
+    }
+}
+
+// a global that may be kept at the top level: a plain variable (not optional, not a method or model)
+top_candidate(i = 0) {
+    f = s_flags[i];
+    : f & FLAG_GLOBAL != 0 && f & (FLAG_METHOD | FLAG_OPT | FLAG_MODEL | FLAG_PARAM) == 0;
+}
+
+// at the start of a pass: each global back at its address, then the ones no method used in the
+// previous pass into a register (g_reg) or a slot of the top level's frame
+globals_place() {
+    i = 0;
+    n_sym_base {
+        top_candidate(i) {
+            g_addr[i] == 0 { g_addr[i] = s_end[i]; }
+            s_end[i] = g_addr[i];
+            s_flags[i] = s_flags[i] & ~(FLAG_TOP | FLAG_REG);
+            optimize && n_passes > 1 && !g_meth[i] {
+                g_reg[i] != 0 {
+                    s_flags[i] = s_flags[i] | FLAG_TOP | FLAG_REG;
+                    s_end[i] = g_reg[i];
+                } || {
+                    s_flags[i] = s_flags[i] | FLAG_TOP;
+                    s_end[i] = new_slot();
+                }
+            }
+            g_meth_cur[i] = false;
+            g_w[i] = 0;
+        }
+        i = i + 1;
+    }
+}
+
+// at the end of a pass: which globals the methods used, and which of the others get registers
+globals_learn() {
+    !optimize { :; }
+    i = 0;
+    n_sym_base {
+        top_candidate(i) && g_meth_cur[i] != g_meth[i] {
+            g_meth[i] = g_meth_cur[i];
+            altered = true;
+        }
+        i = i + 1;
+    }
+    // the 5 heaviest of the others get rbx, r12 … r15 (in that order)
+    j = 0;
+    last = -1;
+    lastw = 0;
+    taken = [0 ; 5];
+    q = 0;
+    5 { taken[q] = -1; q = q + 1; }
+    * j < 5 {
+        best = -1;
+        bw = 0;
+        i = 0;
+        n_sym_base {
+            top_candidate(i) && !g_meth[i] && g_w[i] > 0 {
+                w = g_w[i];
+                free = true;
+                q = 0;
+                * q < j { taken[q] == i { free = false; } q = q + 1; }
+                free && w > bw { best = i; bw = w; }
+            }
+            i = i + 1;
+        }
+        best < 0 { j = 5; } || { taken[j] = best; j = j + 1; }
+    }
+    i = 0;
+    n_sym_base {
+        top_candidate(i) {
+            r = 0;
+            q = 0;
+            * q < 5 { taken[q] == i { r = REGS[q]; } q = q + 1; }
+            r != g_reg[i] {
+                g_reg[i] = r;
+                altered = true;
+            }
+        }
+        i = i + 1;
     }
 }
 
@@ -43,6 +129,7 @@ one_pass() {
     }
     const_init();                         // "" to initialize STRING/ARRAY globals
     const_empty = const_close();
+    globals_place();
 
     emit_header();
     i = 0;
@@ -69,17 +156,19 @@ one_pass() {
     patch_here(pos_init);
     i = 0;
     n_sym_base {
-        s_flags[i] & FLAG_GLOBAL != 0 && (s_type[i] == TYPE_STR || s_type[i] & TYPE_ARR != 0) {
+        s_flags[i] & FLAG_TOP != 0 {
+            // kept at the top level: created by its first assignment, before any read
+        } || s_flags[i] & FLAG_GLOBAL != 0 && (s_type[i] == TYPE_STR || s_type[i] & TYPE_ARR != 0) {
             eb(0x48, 0x8D, 0x05);           // lea rax, [rip + ""]
             register_fixup(size_code, const_empty, false);
             emit_d(0);
             emit_store_global(s_end[i]);
         }
-        s_flags[i] & FLAG_GLOBAL != 0 && is_map(s_type[i]) {
+        s_flags[i] & FLAG_TOP == 0 && s_flags[i] & FLAG_GLOBAL != 0 && is_map(s_type[i]) {
             emit_new_map(s_type[i]);           // a MAP global starts as an empty map
             emit_store_global(s_end[i]);
         }
-        s_flags[i] & FLAG_GLOBAL != 0 && is_rec(s_type[i]) {
+        s_flags[i] & FLAG_TOP == 0 && s_flags[i] & FLAG_GLOBAL != 0 && is_rec(s_type[i]) {
             emit_alloc_record(s_type[i] >> 8);    // a record global starts as an empty record
             emit_store_global(s_end[i]);
         }
