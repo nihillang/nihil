@@ -74,6 +74,21 @@ emit_store_global(a = 0) {
     emit_d(a);
 }
 
+// a loop's first instruction at an address multiple of 16 (the code is loaded at BASE_CODE, so
+// the address is BASE_CODE + size_code): otherwise where the loop falls makes it 10 to 20% slower
+// or faster, whatever the code. Long nops, which run once, on the way into the loop.
+align_loop() {
+    !optimize { :; }
+    pad = (16 - (size_code & 15)) & 15;
+    * pad >= 7 { eb(0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00); pad = pad - 7; }
+    pad == 6 { eb(0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00); }
+    pad == 5 { eb(0x0F, 0x1F, 0x44, 0x00, 0x00); }
+    pad == 4 { eb(0x0F, 0x1F, 0x40, 0x00); }
+    pad == 3 { eb(0x0F, 0x1F, 0x00); }
+    pad == 2 { eb(0x90, 0x90); }
+    pad == 1 { emit(0x90); }
+}
+
 emit_load_var(k = 0) {
     note_use(k);
     s_flags[k] & FLAG_REG != 0 {
