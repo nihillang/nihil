@@ -64,6 +64,7 @@ FLAG_PARAM = 8;
 FLAG_OPT = 16;      // optional: 2 words (value, presence)
 FLAG_REG = 32;      // local kept in a register (s_end = register number)
 FLAG_MODEL = 64;    // a data model NAME = @[…]; (s_extra = model number)
+FLAG_TOP = 128;     // a global no method uses: kept in the top level's frame or in a register
 
 // ---- binary operator modes ----
 MODE_INT = 1;
@@ -188,6 +189,20 @@ s_nparam = [0 ; MAX_SYM];
 s_end = [0 ; MAX_SYM];
 s_extra = [0 ; MAX_SYM];
 s_regs = [0 ; MAX_SYM];   // methods: saved registers (learned in the previous pass)
+s_ord = [0 ; MAX_SYM];    // locals: their place among the method's locals (64: none)
+s_pref = [0 ; MAX_SYM];   // methods: which locals (bits by s_ord) get registers, learned in the
+                          // previous pass from their uses; 0: not known yet, every local may
+decl_w = [0 ; 64];        // the current method's locals: their uses, weighted by loop depth
+n_decl = 0;               // locals created so far in the current method
+loop_depth = 0;           // loops around the code being compiled
+// globals of the top level that no method uses become the top level's own (a frame slot, or one of
+// the registers for the 5 most used in loops), learned from the previous pass
+g_addr = [0 ; MAX_SYM];   // a global's address in the data segment
+g_meth = [false ; MAX_SYM];      // a method used it in the previous pass
+g_meth_cur = [false ; MAX_SYM];  // … in this pass
+g_w = [0 ; MAX_SYM];      // its uses at the top level, weighted by loop depth
+g_reg = [0 ; MAX_SYM];    // the register it gets (0: none)
+g_redo = false;           // a method met a global kept at the top level: another pass
 n_sym = 0;
 n_globals = 0;
 
@@ -262,6 +277,7 @@ s_skip = [0 ; MAX_SYM];        // a prelude method left out of this pass (not re
 s_kept = [0 ; MAX_SYM];        // left out once and then needed: never left out again
 q_model = -1;                // inside a query: the model whose field names stand for the element
 q_elem = 0;                  // … and the hidden local holding the element
+q_depth = 0;                 // queries around the code being compiled (inside each other's expression)
 lib_k = -1;                  // the library method being called (its errors say .name)
 lib_name_start = 0;
 lib_name_len = 0;
