@@ -4,6 +4,23 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.5.0
+
+- the garbage collector no longer stops the program for a whole collection on Linux: from 64 MB of heap, a child process marks while the program goes on, and the sweep runs in steps as the program allocates (SPEC §12.4). Pauses went from 120–150 ms to about 1 ms with a million records in memory; the heap asks for huge pages. On the Mac the collector is the one before
+  - *Why:* A program holding hundreds of MB stopped for a tenth of a second at each collection: a server saw it as slow answers
+- writes by key go through the table and the index kept open, and two programs writing the same table by key now wait for each other: each holds a lock on `<path>.nihil-lock` from the lookup to the last write (SPEC §20.5). Reads take no lock
+  - *Why:* Four programs adding records to one table at once kept 300 of 1,200; with the lock all 1,200 are there
+- a lookup by key allocates nothing on the way: 2.2 → 1.6 µs (C, checking the table as Nihil does: 2.0 µs). Lists given to the kernel are built on the stack, texts are compared 8 bytes at a time, and the index's slots are read 16 at a time
+  - *Why:* Every lookup made four to six blocks of memory, which the collector then had to take back
+- tables use less memory and are read faster: a record read from a table is one block with its texts inside, and the file is read in parts of about 1 MB, so it is never whole in memory (1,000,000 records: 149 → 105 MB at the peak, 125 → 103 ms; records with a STRING(200): 82 → 25 MB)
+  - *Why:* At the peak, a read held the whole file and every record, with a block for each text
+- the compiler keeps more in registers: the locals most used in loops get them (not the first five declared), the top level's variables that no method uses become its own locals, `x = x + y` changes the register in place, a simple index needs no stack, and a query's loop and its FLOAT sum live in registers. Counting to 100 million at the top level: 155 → 49 ms; summing an array: 176 → 88 ms. Loops start at an address multiple of 16
+  - *Why:* Every variable lived in memory and every operation went through the stack, 3 to 6 times C on simple loops
+- `"…" + $n` is made in one block, and `$n` turns an INT into text by multiplication instead of division (`"item " + $(i)`, a million times: 95 → 33 ms)
+  - *Why:* Building texts with numbers was two thirds of the time of making records in memory
+- `bench/compare`: `CHECK=1` makes the C and Go programs check the table's path before each operation, as Nihil does, for a fair comparison
+  - *Why:* Without it they trust that no other program replaces the table, which Nihil does not
+
 ## v4.4.0
 
 - `std:time.nihil`: `now_us()` and `now_ms()`, microseconds and milliseconds on the monotonic clock, to time something; `unix_time()`, seconds since 1970 by the system clock
