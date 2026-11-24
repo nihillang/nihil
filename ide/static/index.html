@@ -267,6 +267,7 @@ aside .db-group { padding: 4px 12px 0 14px; font-size: 11px; color: var(--dim); 
 .CodeMirror-cursor { border-left: 2px solid var(--accent); }
 .CodeMirror-selected, .CodeMirror-focused .CodeMirror-selected { background: var(--sel); }
 .CodeMirror-matchingbracket { color: var(--accent) !important; text-decoration: underline; }
+.CodeMirror .cm-goto { text-decoration: underline; color: var(--accent); cursor: pointer; }
 .cm-s-default .cm-comment { color: #6b7385; font-style: italic; }
 .cm-s-default .cm-string { color: #9ccc65; } .cm-s-default .cm-string-2 { color: #c5e1a5; }
 .cm-s-default .cm-number { color: #f4a261; } .cm-s-default .cm-atom { color: #c792ea; }
@@ -457,6 +458,7 @@ const editor = CodeMirror($('editor'), {
     'Ctrl-S': save, 'Cmd-S': save, 'Ctrl-Enter': run, 'Cmd-Enter': run,
     'Ctrl-/': 'toggleComment', 'Cmd-/': 'toggleComment',
     'Ctrl-L': () => pinSelection(), 'Cmd-L': () => pinSelection(),
+    F12: () => goToDefinitionAtCursor(),
     Tab: (cm) => cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    '),
   },
 });
@@ -930,6 +932,143 @@ async function open(path, line, col) {
   editor.focus();
   return true;
 }
+
+// ---------------------------------------------------------------- go to definition
+// ⌘-click (Ctrl-click elsewhere), F12 or the right-click menu: where a name is declared. Methods,
+// models and globals are declared only at the top level (SPEC §9.1, §20.6), so a line that starts
+// with the declaration is enough: name(p = …) {, name() {, MODEL.name(…) {, MODEL = @[…], or a
+// global's first NAME = …. A local is looked for in its method: a parameter, or its first
+// assignment. The search covers the file and the files it includes (@ "file";, relative to the
+// including file; std: names a file of the language's std/), then the other open tabs. On an
+// inclusion's path, the click opens that file.
+function wordAt(pos) {
+  const text = editor.getLine(pos.line); let a = pos.ch, b = pos.ch;
+  while (a > 0 && /\w/.test(text[a - 1])) a--;
+  while (b < text.length && /\w/.test(text[b])) b++;
+  if (a === b || !/[A-Za-z_]/.test(text[a])) return null;
+  return { word: text.slice(a, b), from: a, to: b, text };
+}
+function includeAt(pos) {        // the path of an @ "file"; under pos, if any
+  const m = /^(\s*@\s*")([^"]+)("\s*;)/.exec(editor.getLine(pos.line));
+  return m && pos.ch >= m[1].length && pos.ch <= m[1].length + m[2].length ? { inc: m[2], from: m[1].length, to: m[1].length + m[2].length } : null;
+}
+function joinPath(from, inc) {
+  if (inc.startsWith('std:')) return inc;
+  if (from.startsWith('std:')) return 'std:' + inc;          // inside a library, an inclusion names another library
+  if (inc.startsWith('/')) return project && inc.startsWith(project + '/') ? inc.slice(project.length + 1) : null;
+  const out = [];
+  for (const p of from.split('/').slice(0, -1).concat(inc.split('/'))) {
+    if (p === '' || p === '.') continue;
+    if (p === '..') { if (!out.length) return null; out.pop(); } else out.push(p);
+  }
+  return out.join('/');
+}
+async function definitionSources(path) {
+  const seen = new Set(), files = [];
+  const textOf = async (p) => {
+    const t = tabs.find((x) => x.path === p);
+    if (t) return t.doc.getValue();                         // as it is in the editor, saved or not
+    const r = await api('/api/file?path=' + encodeURIComponent(p)).catch(() => null);
+    return r && !r.error ? r.content : null;
+  };
+  const walk = async (p) => {
+    if (seen.has(p)) return; seen.add(p);
+    const text = await textOf(p); if (text === null) return;
+    const lines = text.split('\n'); files.push({ path: p, lines });
+    for (const l of lines) { const m = /^\s*@\s*"([^"]+)"\s*;/.exec(l); const q = m && joinPath(p, m[1]); if (q) await walk(q); }
+  };
+  await walk(path);
+  for (const t of tabs) if (!seen.has(t.path) && t.path.endsWith('.nihil')) { seen.add(t.path); files.push({ path: t.path, lines: t.doc.getValue().split('\n') }); }
+  return files;
+}
+// a local of the method around pos: its parameter, or its first assignment before pos
+function localDefinition(name, pos) {
+  let start = -1;
+  for (let i = pos.line; i >= 0; i--) {
+    const l = editor.getLine(i);
+    if (/^[A-Za-z_][\w.]*\(/.test(l)) { start = i; break; }
+    if (i < pos.line && /^\}/.test(l)) return null;         // a method ended above: pos is at the top level
+  }
+  if (start < 0) return null;
+  const p = new RegExp('[(,]\\s*(' + name + ')\\??\\s*=').exec(editor.getLine(start));
+  if (p) return { line: start, ch: p.index + p[0].indexOf(name) };
+  for (let i = start + 1; i <= pos.line; i++) {
+    const m = new RegExp('^(\\s*)' + name + '\\??\\s*=(?!=)').exec(editor.getLine(i));
+    if (m) return { line: i, ch: m[1].length };
+  }
+  return null;
+}
+function findDefinitions(files, name, kind, model) {
+  const hits = [], add = (f, i, ch, label) => hits.push({ path: f.path, line: i + 1, col: ch + 1, label });
+  const method = new RegExp('^' + name + '\\((\\s*\\)\\s*\\{|\\s*[A-Za-z_]\\w*\\??\\s*=)');
+  const ofModel = new RegExp('^([A-Z]\\w*)\\.' + name + '\\(');
+  const modelDecl = new RegExp('^' + name + '\\s*=\\s*@\\[');
+  const global = new RegExp('^' + name + '\\??\\s*=(?!=)');
+  let firstGlobal = null;
+  for (const f of files) f.lines.forEach((l, i) => {
+    let m;
+    if (kind === 'method') { if ((m = ofModel.exec(l)) && (!model || m[1] === model)) add(f, i, m[1].length + 1, m[1] + '.' + name + '()'); return; }
+    if (method.test(l)) add(f, i, 0, name + '()');
+    else if (modelDecl.test(l)) add(f, i, 0, name + ' (model)');
+    else if (kind === 'name' && !firstGlobal && global.test(l)) firstGlobal = [f, i];
+  });
+  if (!hits.length && firstGlobal) add(firstGlobal[0], firstGlobal[1], 0, name);
+  return hits;
+}
+async function goToDefinition(pos, x, y) {
+  if (!current) return;
+  const from = current, inc = includeAt(pos);
+  if (inc) {
+    const p = joinPath(from, inc.inc);
+    if (!p) status(`${inc.inc} is outside the project`, 'bad'); else if (await open(p, 1, 1)) status(p);
+    return;
+  }
+  const w = wordAt(pos); if (!w) return;
+  if (/string|comment|number|atom/.test(editor.getTokenTypeAt(CodeMirror.Pos(pos.line, w.from + 1)) || '')) return;
+  const after = w.text.slice(w.to), before = w.text.slice(0, w.from);
+  const dot = /([A-Za-z_]\w*)?\s*\.\s*$/.exec(before);
+  const kind = dot ? 'method' : /^\s*\(/.test(after) ? 'call' : 'name';
+  const model = dot && dot[1] && /^[A-Z]/.test(dot[1]) ? dot[1] : '';
+  if (kind === 'name') {
+    const l = localDefinition(w.word, pos);
+    if (l && !(l.line === pos.line && l.ch === w.from)) { editor.setCursor(l); editor.scrollIntoView(null, 120); editor.focus(); status(`${w.word}: line ${l.line + 1}`); return; }
+  }
+  const files = await definitionSources(from);
+  const all = findDefinitions(files, w.word, kind, model);
+  const hits = all.filter((h) => !(h.path === from && h.line === pos.line + 1));     // not the declaration clicked on
+  if (!hits.length && all.length) { status(`this is where ${w.word} is declared`); return; }
+  if (!hits.length) { status(kind === 'method' ? `no model here has a method ${w.word} (a method of the language? SPEC §21)` : `no declaration of ${w.word} in this file or the files it includes`); return; }
+  const go = async (h) => { if (await open(h.path, h.line, h.col)) status(`${h.label}: ${h.path}:${h.line}`); };
+  if (hits.length === 1) { await go(hits[0]); return; }
+  openMenu(x, y, hits.map((h) => ({ label: h.label, key: `${h.path}:${h.line}`, act: () => go(h) })));
+}
+function goToDefinitionAtCursor() {
+  const c = editor.cursorCoords(null, 'window');
+  goToDefinition(editor.getCursor(), c.left, c.bottom);
+}
+// with ⌘ (Ctrl) held, the name under the mouse is underlined, as a link
+let gotoMark = null;
+const gotoKey = (e) => (/Mac/.test(navigator.platform) ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey;
+function gotoHover(e) {
+  if (gotoMark) { gotoMark.clear(); gotoMark = null; }
+  if (!e || !gotoKey(e)) return;
+  const pos = editor.coordsChar({ left: e.clientX, top: e.clientY }, 'window');
+  const r = includeAt(pos) || wordAt(pos);
+  if (!r) return;
+  if (!r.inc && /string|comment|number|atom/.test(editor.getTokenTypeAt(CodeMirror.Pos(pos.line, r.from + 1)) || '')) return;
+  gotoMark = editor.markText({ line: pos.line, ch: r.from }, { line: pos.line, ch: r.to }, { className: 'cm-goto' });
+}
+editor.getWrapperElement().addEventListener('mousemove', gotoHover);
+editor.getWrapperElement().addEventListener('mouseleave', () => gotoHover(null));
+addEventListener('keyup', () => gotoHover(null));
+editor.on('mousedown', (cm, e) => {
+  if (e.button !== 0 || !gotoKey(e)) return;
+  const pos = cm.coordsChar({ left: e.clientX, top: e.clientY }, 'window');
+  if (!includeAt(pos) && !wordAt(pos)) return;
+  e.preventDefault();                                       // not CodeMirror's own ⌘-click (another cursor)
+  gotoHover(null);
+  goToDefinition(pos, e.clientX, e.clientY);
+});
 async function save() {
   if (!current || !editable) return true;
   const text = editor.getValue();
@@ -997,7 +1136,7 @@ function showProblems(errors) {
 let checkTimer = null, checkSeq = 0;
 function scheduleCheck() {
   clearTimeout(checkTimer);
-  if (current && current.endsWith('.nihil')) checkTimer = setTimeout(runCheck, 600);
+  if (current && current.endsWith('.nihil') && !current.startsWith('std:')) checkTimer = setTimeout(runCheck, 600);
 }
 async function runCheck() {
   if (!current || runId) return;
@@ -1191,6 +1330,7 @@ function editorMenu() {
     '-',
     { label: 'Select All', key: shortcut('A'), act: () => { editor.focus(); editor.execCommand('selectAll'); } },
     { label: 'Comment / Uncomment', key: shortcut('/'), act: () => { editor.focus(); editor.execCommand('toggleComment'); } },
+    { label: 'Go to Definition', key: 'F12', act: () => goToDefinitionAtCursor() },
     ...(sel ? ['-',
       { label: '✦ Ask Claude about this', key: shortcut('L'), act: () => pinSelection() },
       { label: '✦ Explain it', act: () => askAboutSelection('Explain this code.') },

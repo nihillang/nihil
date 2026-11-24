@@ -5,7 +5,7 @@
 #   dist/package.sh macos-arm64  OUTDIR NIHILC1_NATIVE RT_O TRANSLATE IDE_SERVER [IDE_APP]
 #
 # IDE_SERVER is ide/server.nihil compiled for the platform (`nihil ide`); with the IDE go its
-# page, SPEC.md and the examples, in share/nihil.
+# page, SPEC.md, the examples and the standard library's source (std/, for go to definition), in share/nihil.
 # writes OUTDIR/nihil-PLATFORM.tar.gz (the name stays the same in every release, so
 # releases/latest/download/nihil-PLATFORM.tar.gz is always the newest) and its .sha256.
 # Inside: nihil-VERSION/{bin/nihil, libexec/nihil/…, VERSION, LICENSE, README.md, CHANGELOG.md}.
@@ -26,6 +26,7 @@ chmod 755 "$root/bin/nihil"
 cp LICENSE README.md CHANGELOG.md "$root/"
 printf '%s\n' "$version" > "$root/VERSION"
 cp SPEC.md "$root/share/nihil/"
+cp -R std "$root/share/nihil/std"
 cp -R ide/static "$root/share/nihil/ide/static"
 mkdir -p "$root/share/nihil/examples"
 cp examples/*.nihil "$root/share/nihil/examples/"
