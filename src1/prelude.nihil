@@ -339,6 +339,74 @@ __nihil_rec_parse(text = "", at = 0, schema = [0], names = "", path = "", line =
 
 // NAME @ path : every line has exactly the model's width (the last one may
 // lack its "\n"); returns the ARRAY of records
+// NAME @ path / NAME @? path: the table read in parts of about 1 MB (whole lines), each one
+// checked and turned into records as it comes, so the file is never in memory all at once (it was
+// as big as the records it gives, at the peak). Whatever is not plain — the file does not open, its
+// size is not whole lines, a line is wrong, the file changes size while it is read — goes the old
+// way (__nihil_table_read on the whole text): the same records, the same errors and messages.
+__nihil_table_load(path = "", opt = false, schema = [0], names = "", model = "") {
+    __p = path + "\0";
+    __fd = __nihil_syscall([257, -100, __nihil_addr(__p), 0x80000]);   // openat(O_RDONLY | O_CLOEXEC)
+    __fd < 0 {
+        opt { : __nihil_table_read(path, "", schema, names, model); }   // @?: an empty table
+        : __nihil_table_read(path, @ path, schema, names, model);       // @: its error
+    }
+    __st = __nihil_bytes(144);
+    __size = -1;
+    __nihil_syscall([5, __fd, __nihil_addr(__st)]) == 0 { __size = __nihil_le_at(__st, 48, 8); }
+    __w = __nihil_rec_width(schema) + 1;
+    __n = 0;
+    __r = 0;
+    __size >= 0 {
+        __n = __size / __w;
+        __r = __size % __w;
+    }
+    __size < 0 || __r != 0 && __r != __w - 1 {
+        __nihil_syscall([3, __fd]);
+        : __nihil_table_whole(path, opt, schema, names, model);
+    }
+    __r != 0 { __n = __n + 1; }                     // the last line without "\n"
+    __rows = [0 ; __n];
+    __per = 1048576 / __w;
+    __per < 1 { __per = 1; }
+    __buf = "";
+    __i = 0;
+    * __i < __n {
+        __k = __n - __i;
+        __k > __per { __k = __per; }
+        __len = __k * __w;
+        __i + __k == __n && __r != 0 { __len = __len - 1; }
+        #__buf != __len { __buf = __nihil_bytes(__len); }
+        __got = 0;
+        __more = true;
+        * __more && __got < __len {
+            __g = __nihil_syscall([17, __fd, __nihil_addr(__buf) + __got, __len - __got, __i * __w + __got]);
+            __g <= 0 { __more = false; } || { __got = __got + __g; }
+        }
+        __got != __len || __nihil_lines_rt(__buf, __w - 1) != __k {
+            __nihil_syscall([3, __fd]);             // a wrong line, or the file changed: the old way
+            : __nihil_table_whole(path, opt, schema, names, model);
+        }
+        __j = 0;
+        * __j < __k {
+            __rows[__i + __j] = __nihil_rec_parse(__buf, __j * __w, schema, names, path, __i + __j + 1);
+            __j = __j + 1;
+        }
+        __i = __i + __k;
+    }
+    __nihil_syscall([3, __fd]);
+    : __nihil_addr(__rows);
+}
+
+// the old way: the whole file as one text (@ path, or @? path), then __nihil_table_read
+__nihil_table_whole(path = "", opt = false, schema = [0], names = "", model = "") {
+    opt {
+        __t? = @? path;
+        : __nihil_table_read(path, __t || "", schema, names, model);
+    }
+    : __nihil_table_read(path, @ path, schema, names, model);
+}
+
 __nihil_table_read(path = "", text = "", schema = [0], names = "", model = "") {
     __w = __nihil_rec_width(schema);
     __len = #text;
