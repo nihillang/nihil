@@ -2719,6 +2719,7 @@ gc_sweep_step:
     lea rsi, [rdi + GC_PAGE]
     sub rsi, r9                     ; the last block that fits starts at or before this
     xor edx, edx                    ; blocks still in use
+    xor r8d, r8d                    ; blocks in the page
     mov rcx, rdi
 .pass1:
     cmp rcx, rsi
@@ -2744,11 +2745,17 @@ gc_sweep_step:
 .not_marked:
     mov qword [rcx], 0              ; unused (or freed now)
 .pass1_next:
+    inc r8
     add rcx, r9
     jmp .pass1
 .pass1_done:
     test edx, edx
     jz .empty                       ; no block left
+    cmp rdx, r8
+    jne .keep
+    add qword [GC_LIVE], GC_PAGE    ; every block in use: no free one to link, so the second pass
+    inc rbx                         ; (which reads every block's header) is not needed. With the
+    jmp .page                       ; child's map, a page of live blocks is not even read.
 .keep:
     add qword [GC_LIVE], GC_PAGE
     mov rcx, rdi
