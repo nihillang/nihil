@@ -368,7 +368,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
     </div>
     <div id="chatResize" hidden title="Drag to resize the Claude panel"></div>
     <section id="chat" hidden>
-      <div class="chat-head"><b>✦ Claude</b><span id="chatAccount" title="The account Claude Code uses (click to see it again; /login, /logout)">…</span><div class="spacer"></div><span id="chatState" class="tool"></span></div>
+      <div class="chat-head"><b>✦ Claude</b><span id="chatAccount" title="The account this tab's agent uses in the IDE (click to see it again; /login, /logout)">…</span><div class="spacer"></div><span id="chatState" class="tool"></span></div>
       <div id="chatTabs"></div>
       <div id="usage" title="The plan's usage, from Claude's last answer (seeing it costs nothing)"></div>
       <div class="chat-ctx" title="What goes with each message">send along:
@@ -1603,6 +1603,7 @@ function showChat() {
   applyView(); loadHistory(t);
   t.unread = false;
   $('chatEngine').value = t.engine; fillModels(t); $('chatMode').value = t.mode; $('chatModel').value = t.model;
+  if (accountOf && accountOf !== authApi(t)) showAccount();
   setChatBusy(!!t.run);
   renderChatTabs(); renderChatInfo(); renderActivity(); renderTabs();
 }
@@ -1922,7 +1923,7 @@ $('chatEngine').onchange = () => {
   if (t.run) { $('chatEngine').value = t.engine; toast('Wait for the answer, or stop it, to change the agent'); return; }
   t.engine = e; t.model = ''; t.usedModel = '';
   if (t.session) { t.session = ''; chatAdd('assistant', `<i>From here on this tab talks to ${e === 'codex' ? 'Codex' : 'Claude'}: a new conversation.</i>`, t); }
-  fillModels(t); saveChatsOf(t.project); renderChatInfo(); renderChatTabs();
+  fillModels(t); saveChatsOf(t.project); renderChatInfo(); renderChatTabs(); showAccount();
 };
 $('chatText').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); } });
 // ↑ and ↓ in the message box: the messages sent before (per project, the last 100), as in a terminal.
@@ -2192,9 +2193,13 @@ async function reloadTab(t) {
   renderTabs();
 }
 
+// the account of the tab's agent: each has its own folder in the IDE (~/.claude-ide, ~/.codex-ide)
+const authApi = (t = cur()) => t && t.engine === 'codex' ? '/api/codex' : '/api/claude';
 // the account in the panel's header
+let accountOf = '';
 async function showAccount() {
-  const el = $('chatAccount'), s = await api('/api/claude/auth').catch(() => null), st = s && s.ok && s.status;
+  accountOf = authApi();
+  const el = $('chatAccount'), s = await api(accountOf + '/auth').catch(() => null), st = s && s.ok && s.status;
   el.classList.toggle('out', !(st && st.loggedIn));
   el.textContent = !s || !s.ok ? '' : !st.loggedIn ? 'not signed in · /login'
     : (st.email || st.authMethod || 'signed in') + (st.subscriptionType ? ' · ' + st.subscriptionType : '');
@@ -2218,7 +2223,7 @@ function runEnded(t) {
 // /login: `claude auth login` on the server's machine. It opens the browser there; the link is
 // also shown here, and, if the sign-in page gives a code, it is pasted here and goes to its input.
 async function chatLogin(t, useConsole) {
-  const r = await api('/api/claude/login', { console: useConsole });
+  const r = await api(authApi(t) + '/login', { console: useConsole });
   if (!r.ok) { chatAdd('error', esc(r.error || 'could not start the sign-in'), t); return; }
   runStarted(t, r.run, 'signing in');
   const box = chatAdd('assistant', '', t);
@@ -2246,7 +2251,7 @@ async function chatLogin(t, useConsole) {
   runEnded(t);
   box.querySelector('.login-code').remove();
   if (code === 0) {
-    const s = await api('/api/claude/auth');
+    const s = await api(authApi(t) + '/auth');
     box.innerHTML = s.ok ? accountLine(s.status) : 'Signed in.';
     showAccount();
   } else {
@@ -2400,9 +2405,9 @@ async function chatSend(t = cur(), preset = '') {
     const name = slash[1].toLowerCase();
     if (name === 'clear' || name === 'reset') { clearChat(t); return; }
     if (name === 'new') { addChat(); return; }
-    if (t.engine === 'codex' && !['rename', 'model', 'help'].includes(name)) {
+    if (t.engine === 'codex' && !['rename', 'model', 'help', 'login', 'logout', 'status', 'account'].includes(name)) {
       chatAdd('user', esc(text), t);
-      chatAdd('assistant', `This tab talks to Codex: <code>/${esc(name)}</code> is a Claude Code command. The panel answers <code>/new</code>, <code>/clear</code>, <code>/rename</code> and <code>/model</code>.`, t); return;
+      chatAdd('assistant', `This tab talks to Codex: <code>/${esc(name)}</code> is a Claude Code command. The panel answers <code>/new</code>, <code>/clear</code>, <code>/rename</code>, <code>/model</code>, <code>/login</code>, <code>/logout</code> and <code>/status</code>.`, t); return;
     }
     if (name === 'rename') {
       const n = text.slice(slash[0].length).trim();
@@ -2414,9 +2419,9 @@ async function chatSend(t = cur(), preset = '') {
     }
     chatAdd('user', esc(text), t);
     if (name === 'login') return chatLogin(t, /\bconsole\b/i.test(text));
-    if (name === 'logout') { const s = await api('/api/claude/logout', {}); showAccount(); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
+    if (name === 'logout') { const s = await api(authApi(t) + '/logout', {}); showAccount(); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
     if (name === 'mcp') return chatMcp(t);
-    if (name === 'status' || name === 'account') { const s = await api('/api/claude/auth'); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
+    if (name === 'status' || name === 'account') { const s = await api(authApi(t) + '/auth'); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
     if (name === 'model') {
       const m = text.slice(slash[0].length).trim().toLowerCase(), v = m === 'default' ? '' : m;
       if (!m) { chatAdd('assistant', `This tab uses <b>${esc(t.model || 'the default model')}</b>` + (t.usedModel ? ` (last answer: ${esc(prettyModel(t.usedModel))})` : '') + '. To change it: <code>/model opus</code>, <code>sonnet</code>, <code>haiku</code>, <code>fable</code> or <code>default</code>.', t); return; }
