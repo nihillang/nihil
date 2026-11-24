@@ -120,6 +120,7 @@ one_pass() {
     discovered = false;
     altered = false;
     n_calls = 0;
+    last_int_text = -1;
     size_const = const_base;
     n_sym = n_sym_base;
     i = 0;

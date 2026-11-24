@@ -530,6 +530,17 @@ char *nh_concat(const char *a, const char *b) {
     return r;
 }
 
+// "…" + $n in one block
+char *nh_concat_int(const char *a, i64 v) {
+    char b[24];
+    int n = decimal(v, b + 24);
+    i64 na = ((const i64 *)a)[-1];
+    char *r = new_text(na + n);
+    memcpy(r, a, (size_t)na);
+    memcpy(r + na, b + 24 - n, (size_t)n);
+    return r;
+}
+
 // $n
 char *nh_int_text(i64 v) {
     char b[24];
