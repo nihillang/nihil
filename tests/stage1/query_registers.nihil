@@ -1,0 +1,24 @@
+// queries keep their loop in registers inside a method (and the FLOAT sum in xmm8/xmm9):
+// nested queries, an expression that calls a method, and many locals around them
+P = @[id: INT(4); price: FLOAT(8); qty: INT(4); on: BOOL];
+rows = [P(1, 1.5, 2, true), P(2, 2.25, 4, false), P(3, 10.0, 1, true), P(4, 0.5, 10, true)];
+twice(x = 0.0) { : x * 2.0; }
+inner(r = [P()]) {
+    a = 1; b = 2; c = 3; d = 4; e = 5; f = 6;                // the registers are taken
+    s = r.sum(price * .qty);
+    >> "inner: " + $(s) + " " + $(a + b + c + d + e + f) + "\n";
+    >> "count: " + $(r.count(on && price < 5.0)) + "\n";
+    >> "ints: " + $(r.sum(qty * id)) + "\n";
+    >> "with a call: " + $(r.sum(twice(price))) + "\n";
+    >> "nested: " + $(r.sum(price * r.sum(.qty))) + "\n";
+    >> "nested 3: " + $(r.sum(r.sum(r.sum(price)))) + "\n";
+    w = r.where(on);
+    >> "where: " + $(#w) + " first: " + $(w[0].id) + "\n";
+    : s;
+}
+x = inner(rows);
+>> "top: " + $(rows.sum(price * .qty)) + " " + $(x) + "\n";
+i = 0;
+t = 0.0;
+* i < 3 { t = t + rows.sum(price); i = i + 1; }
+>> "loop: " + $(t) + "\n";

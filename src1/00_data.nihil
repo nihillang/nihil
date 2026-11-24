@@ -277,6 +277,7 @@ s_skip = [0 ; MAX_SYM];        // a prelude method left out of this pass (not re
 s_kept = [0 ; MAX_SYM];        // left out once and then needed: never left out again
 q_model = -1;                // inside a query: the model whose field names stand for the element
 q_elem = 0;                  // … and the hidden local holding the element
+q_depth = 0;                 // queries around the code being compiled (inside each other's expression)
 lib_k = -1;                  // the library method being called (its errors say .name)
 lib_name_start = 0;
 lib_name_len = 0;

@@ -468,6 +468,7 @@ index_step(t = 0) {
         put_type(t);
         error_end();
     }
+    pos_push = size_code;
     emit(0x50);                        // push rax
     next_token();
     u = expression();
@@ -478,7 +479,12 @@ index_step(t = 0) {
         error_end();
     }
     expect(']', "']'");
-    eb(0x48, 0x89, 0xC1, 0x58);         // mov rcx, rax ; pop rax
+    load_simple(pos_push + 1) > 0 {
+        move_code_back(pos_push + 1, pos_push);   // a simple index: straight into rcx, no stack
+        reload_in_rcx(pos_push);
+    } || {
+        eb(0x48, 0x89, 0xC1, 0x58);     // mov rcx, rax ; pop rax
+    }
     emit_check_limit();
     t == TYPE_STR {
         eb(0x0F, 0xB6, 0x04, 0x08);     // movzx eax, byte [rax + rcx]
