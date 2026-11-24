@@ -922,9 +922,36 @@ json_intrinsic(kind = 0) {
 }
 
 // the kernel, for the prelude only (directories and processes are coming): __nihil_syscall([n, a1 … a6]) → INT
+// A list written there, [n, a1 … a6], is built on the stack instead of as a new ARRAY: the same
+// words rt_syscall reads (the count at -8, then the values), with nothing to allocate.
+//   sub rsp, 64 ; each value: … ; mov [rsp + 8 + 8i], rax ; mov qword [rsp], count ;
+//   lea rax, [rsp + 8] ; call rt_syscall ; add rsp, 64
 syscall_intrinsic() {
     next_token();                        // name → "("
     next_token();
+    tok_type == '[' && optimize {
+        next_token();
+        eb(0x48, 0x83, 0xEC, 0x40);         // sub rsp, 64
+        n = 0;
+        * tok_type != ']' {
+            n == 7 { error("__nihil_syscall takes [n, a1 … a6]"); }
+            pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+            u = expression();
+            u != TYPE_INT && u != TYPE_UNKNOWN { type_wrong(pi, pl, pn, pli, TYPE_INT, u); }
+            eb(0x48, 0x89, 0x44, 0x24, 8 + 8 * n);   // mov [rsp + 8 + 8n], rax
+            n = n + 1;
+            tok_type == ',' { next_token(); } || tok_type != ']' { error_expected("',' or ']'"); }
+        }
+        next_token();                    // "]"
+        eb(0x48, 0xC7, 0x04, 0x24);         // mov qword [rsp], n
+        emit_d(n);
+        eb(0x48, 0x8D, 0x44, 0x24, 0x08);   // lea rax, [rsp + 8]
+        emit_call_rt(RT_SYSCALL);
+        eb(0x48, 0x83, 0xC4, 0x40);         // add rsp, 64
+        call_end = size_code;
+        expect(')', "')'");
+        : TYPE_INT;
+    }
     expression();
     emit_call_rt(RT_SYSCALL);
     call_end = size_code;                // may stand alone as a command, like a call
