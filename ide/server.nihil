@@ -997,8 +997,11 @@ session_ok(s = "") {
     : true;
 }
 
-claude_prompt(project = "", shell = false) {
+claude_prompt(project = "", shell = false, reads = false) {
     run = "You cannot run commands: the IDE compiles and runs the programs (the user presses Run). ";
+    // Codex reads the project with commands (cat, ls, rg): in ask and plan its sandbox lets them only read
+    reads { run = "You may run commands that only read (ls, cat, rg…): the sandbox lets nothing change. The IDE compiles "
+                  + "and runs the programs (the user presses Run). "; }
     shell { run = "You may run shell commands on this Mac (Bash, starting in the project folder; long ones in the background, "
                   + "which the IDE shows live). Say what you run, keep to the project, and do not change anything outside it "
                   + "unless asked. A Nihil program is compiled with " + COMPILER + " FILE.nihil OUTPUT. "; }
@@ -1097,6 +1100,124 @@ claude_json(project = "", body = "") {
     label = msg.trim().replace("\n", " ");
     #label > 80 { label = label.slice(0, 80) + "…"; }
     RUN_KIND[id] = "claude"; RUN_LABEL[id] = label; RUN_PROJECT[id] = project;
+    : "{\"ok\": true, \"run\": " + $id + "}";
+}
+
+// ---- Codex (the panel's other agent) ------------------------------------------------------
+// A tab may talk to OpenAI's Codex CLI instead of Claude Code: `codex exec --json` in the
+// project's folder. As Claude Code, it has its own folder in the IDE (CODEX_HOME): its own
+// sign-in (a ChatGPT plan or an API key: /login in a Codex tab), settings (config.toml, MCP
+// servers) and sessions, apart from the terminal's ~/.codex. NIHIL_IDE_CODEX_DIR chooses another
+// folder; "shared" uses the terminal's. Its events (JSONL: thread.started, item.started/completed, turn.completed) go to the
+// run's .out like Claude's, and the page turns them into the panel's lines. The message goes on
+// its input, which is closed at once: a message sent while Codex works waits for the run to end.
+// The tab's mode chooses the sandbox: ask and plan read only, edits and auto may write in the
+// project (no network, Codex's default). The next message resumes the thread (exec resume).
+
+CODEX_DIR = "";
+codex(args = [""]) {
+    CODEX_DIR == "shared" { : ["codex"] + args; }
+    : ["env", "CODEX_HOME=" + CODEX_DIR, "codex"] + args;
+}
+NO_CODEX = "could not start codex: is the Codex CLI installed (brew install codex), and on the PATH of the IDE's server?";
+
+// `codex login status` as Claude's account: {"ok": true, "status": {"loggedIn": …, "authMethod": …}}
+codex_auth_json() {
+    out = RUNS_DIR + "/codex-status.out";
+    p? = codex(["login", "status"]).start(out, out, "");
+    p == _ { : "{\"ok\": false, \"error\": " + q(NO_CODEX) + "}"; }
+    (p || 0).close_input();
+    code = (p || 0).wait();
+    t? = @? out;
+    out.remove();
+    s = (t || "").trim();
+    // "Logged in using ChatGPT", "Logged in using an API key - sk-…": the way, not the key
+    how = s.replace("Logged in using ", "").split(" - ")[0].trim();
+    code != 0 { : "{\"ok\": true, \"status\": {\"loggedIn\": false}}"; }
+    : "{\"ok\": true, \"status\": {\"loggedIn\": true, \"authMethod\": " + q(how) + "}}";
+}
+
+codex_logout_json() {
+    p? = codex(["logout"]).start(RUNS_DIR + "/codex-logout.out", RUNS_DIR + "/codex-logout.out", "");
+    p == _ { : "{\"ok\": false, \"error\": " + q(NO_CODEX) + "}"; }
+    (p || 0).close_input();
+    (p || 0).wait();
+    (RUNS_DIR + "/codex-logout.out").remove();
+    : codex_auth_json();
+}
+
+// /login in a Codex tab: `codex login` opens the browser on this machine and waits for it on a
+// local port; it runs like a program (kind "login"), as Claude's sign-in
+codex_login_json(project = "") {
+    running_runs() >= MAX_RUNS { : "{\"ok\": false, \"error\": " + q($MAX_RUNS + " programs are running: stop one first") + "}"; }
+    id = NEXT_RUN;
+    NEXT_RUN = NEXT_RUN + 1;
+    base = RUNS_DIR + "/" + $id;
+    p? = codex(["login"]).start(base + ".out", base + ".err", "");
+    p == _ { : "{\"ok\": false, \"error\": " + q(NO_CODEX) + "}"; }
+    (p || 0).close_input();
+    RUN_PROC[id] = p || 0;
+    RUN_BASE[id] = base;
+    RUN_T0[id] = now_ms();
+    RUN_SEEN[id] = now_ms();
+    RUN_KIND[id] = "login"; RUN_LABEL[id] = "signing in to Codex"; RUN_PROJECT[id] = project;
+    : "{\"ok\": true, \"run\": " + $id + "}";
+}
+
+// a model's name from the page: letters, digits, ".", "-" and "_" (it goes on a command line)
+model_ok(s = "") {
+    #s == 0 || #s > 64 || s.starts_with("-") { : false; }
+    i = 0;
+    * i < #s {
+        ch = s[i];
+        !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '.' || ch == '_') { : false; }
+        i = i + 1;
+    }
+    : true;
+}
+
+codex_json(project = "", body = "") {
+    msg = (body.json("message") || "\"\"").json_text() || "";
+    ctx = (body.json("context") || "\"\"").json_text() || "";
+    session = (body.json("session") || "\"\"").json_text() || "";
+    mode = (body.json("mode") || "\"\"").json_text() || "";
+    model = (body.json("model") || "\"\"").json_text() || "";
+    #msg.trim() == 0 { : "{\"ok\": false, \"error\": \"write a message\"}"; }
+    running_runs() >= MAX_RUNS { : "{\"ok\": false, \"error\": " + q($MAX_RUNS + " programs are running: stop one first") + "}"; }
+    id = NEXT_RUN;
+    NEXT_RUN = NEXT_RUN + 1;
+    base = RUNS_DIR + "/" + $id;
+    // not signed in: say so at once (codex itself would keep trying to connect)
+    home = CODEX_DIR;
+    CODEX_DIR == "shared" { home = HOME + "/.codex"; }
+    !(home + "/auth.json").is_file() { : "{\"ok\": false, \"error\": \"Codex is not signed in in the IDE: type /login\"}"; }
+    shell = mode == "edits" || mode == "auto";
+    sandbox = "read-only";
+    shell { sandbox = "workspace-write"; }
+    cmd = ["exec"];
+    resume = session_ok(session);
+    resume { cmd = cmd + ["resume"]; }
+    cmd = cmd + ["--json", "--skip-git-repo-check", "-c", "sandbox_mode=\"" + sandbox + "\""];
+    model_ok(model) { cmd = cmd + ["-m", model]; }
+    resume { cmd = cmd + [session]; }
+    cmd = cmd + ["-"];                                          // the message, from its input
+    p? = codex(cmd).start(base + ".out", base + ".err", project);
+    p == _ { : "{\"ok\": false, \"error\": " + q(NO_CODEX) + "}"; }
+    pr = p || 0;
+    text = msg;
+    #ctx > 0 { text = text + "\n\n" + ctx; }
+    // the IDE's instructions go with the first message (Codex keeps them in the thread)
+    !resume { text = "<instructions from the Nihil IDE>\n" + claude_prompt(project, shell, !shell) + "\n</instructions from the Nihil IDE>\n\n" + text; }
+    mode == "plan" { text = text + "\n\n(Plan mode: read what you need and answer with a plan, step by step; change nothing yet.)"; }
+    pr.write(text);
+    pr.close_input();
+    RUN_PROC[id] = pr;
+    RUN_BASE[id] = base;
+    RUN_T0[id] = now_ms();
+    RUN_SEEN[id] = now_ms();
+    label = msg.trim().replace("\n", " ");
+    #label > 80 { label = label.slice(0, 80) + "…"; }
+    RUN_KIND[id] = "codex"; RUN_LABEL[id] = label; RUN_PROJECT[id] = project;
     : "{\"ok\": true, \"run\": " + $id + "}";
 }
 
@@ -1381,8 +1502,12 @@ handle(c = 0, req = "") {
         :;
     }
     path == "/api/activity" { c.respond(200, "application/json", activity_json()); :; }
+    path == "/api/claude" && (body.json("engine") || "\"\"") == "\"codex\"" { c.respond(200, "application/json", codex_json(project, body)); :; }
     path == "/api/claude" { c.respond(200, "application/json", claude_json(project, body)); :; }
     path == "/api/claude/auth" { c.respond(200, "application/json", claude_auth_json()); :; }
+    path == "/api/codex/auth" { c.respond(200, "application/json", codex_auth_json()); :; }
+    path == "/api/codex/login" { c.respond(200, "application/json", codex_login_json(project)); :; }
+    path == "/api/codex/logout" { c.respond(200, "application/json", codex_logout_json()); :; }
     path == "/api/claude/login" { c.respond(200, "application/json", claude_login_json(project, body)); :; }
     // the output of a command Claude runs in the background: the file Claude Code writes it to
     path == "/api/claude/taskout" {
@@ -1437,11 +1562,14 @@ main() {
         env[i].starts_with("HOME=") { HOME = env[i].slice(5); }
         env[i].starts_with("NIHIL_IDE_PORT=") { PORT = env[i].slice(15).int() || PORT; }
         env[i].starts_with("NIHIL_IDE_CLAUDE_DIR=") { CLAUDE_DIR = env[i].slice(21); }
+        env[i].starts_with("NIHIL_IDE_CODEX_DIR=") { CODEX_DIR = env[i].slice(20); }
         env[i].starts_with("NIHIL_IDE_INSTALL=") { INSTALL = env[i].slice(18); }
         env[i].starts_with("NIHIL_IDE_ROOT=") { ROOT = env[i].slice(15); }
         i = i + 1;
     }
     #CLAUDE_DIR == 0 { CLAUDE_DIR = HOME + "/.claude-ide"; }
+    #CODEX_DIR == 0 { CODEX_DIR = HOME + "/.codex-ide"; }
+    CODEX_DIR != "shared" { CODEX_DIR.make_dir(); }             // Codex wants its folder to exist
     MAC = "/System/Library/CoreServices/SystemVersion.plist".is_file();
     TOKEN = ((@ "/proc/sys/kernel/random/uuid") + (@ "/proc/sys/kernel/random/uuid")).replace("\n", "").replace("-", "");
     #INSTALL > 0 {
