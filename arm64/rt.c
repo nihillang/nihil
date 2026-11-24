@@ -1168,10 +1168,17 @@ i64 nh_syscall(const i64 *a) {
     }
     case 231: nh_flush(); _exit((int)x[1]);
     case 257: return res(openat(at_dir(x[1]), (const char *)x[2], open_flags(x[3]), (int)x[4]));
+    case 5:                                           // fstat(fd, struct stat (Linux))
     case 262: {                                       // newfstatat(dir, path, struct stat (Linux), flags)
         struct stat st;
-        if (fstatat(at_dir(x[1]), (const char *)x[2], &st, (x[4] & 0x100) ? AT_SYMLINK_NOFOLLOW : 0) != 0) return -errno;
-        unsigned char *b = (unsigned char *)x[3];
+        unsigned char *b;
+        if (x[0] == 5) {
+            if (fstat((int)x[1], &st) != 0) return -errno;
+            b = (unsigned char *)x[2];
+        } else {
+            if (fstatat(at_dir(x[1]), (const char *)x[2], &st, (x[4] & 0x100) ? AT_SYMLINK_NOFOLLOW : 0) != 0) return -errno;
+            b = (unsigned char *)x[3];
+        }
         memset(b, 0, 144);
         u64 dev = (u64)st.st_dev, ino = st.st_ino; uint32_t mode = st.st_mode; i64 size = st.st_size;
         i64 msec = st.st_mtimespec.tv_sec, mnsec = st.st_mtimespec.tv_nsec;

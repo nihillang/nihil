@@ -1,0 +1,1 @@
+nihil: 'build/tparts_bi.dat', line 100001: field 'id' is not a valid INT: 'abc'
