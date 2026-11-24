@@ -2,7 +2,7 @@
 """translate.py PROGRAM.x86 MAP OUT.s — Nihil on macOS (Apple silicon): the x86-64 code the compiler
 emits, translated into ARM64 assembly that clang links with arm64/rt.c. The runtime is Linux's own
 (src/runtime.asm, in the executable after its header), translated by translate_rt.py; rt.c turns its
-Linux system calls into macOS's (nh_linux_syscall). NIHIL_MAC_RUNTIME=c uses rt.c's own runtime instead.
+Linux system calls into macOS's (nh_linux_syscall) and gives the emulated stack.
 
 The compiler emits a closed set of instructions (about 180 forms: a stack machine, see
 docs/macos-arm64.md), so the code is translated instruction by instruction:
@@ -12,9 +12,9 @@ docs/macos-arm64.md), so the code is translated instruction by instruction:
     where the code expects them; the real sp stays 16-aligned for the calls into the runtime.
   - globals (absolute addresses in the data segment) → _nh_globals_start + offset, through x27;
     constants (rip-relative) → the constants copied after the code (Lconst).
-  - runtime calls (the jump table) → glue that passes the registers by the ARM convention to
-    the functions of rt.c and keeps every other register; the emulated stack holds the saved
-    registers, and the collector scans it (nh_emu_sp … nh_emu_top).
+  - runtime calls (the jump table) → bl to the translated runtime's routine (its call label, which
+    pushes the return address on the x86 stack, as call does); the collector scans that stack
+    from x28 to the top the start gives it (PLAT_STACK_TOP).
   - flags: cmp/test → cmp/tst, ucomisd → fcmp; the conditions are mapped for each.
 MAP is the line "nihil-map RUNTIME_END CODE_END SIZE" the compiler writes with -map.
 """
@@ -30,41 +30,11 @@ R64 = {'rax': 'x9', 'rcx': 'x10', 'rdx': 'x11', 'rsi': 'x12', 'rdi': 'x13', 'rbx
 R32 = {'eax': 'rax', 'ecx': 'rcx', 'edx': 'rdx', 'esi': 'rsi', 'edi': 'rdi', 'ebx': 'rbx', 'r12d': 'r12', 'r13d': 'r13',
        'r14d': 'r14', 'r15d': 'r15'}
 R8 = {'al': 'rax', 'cl': 'rcx', 'dl': 'rdx', 'bl': 'rbx'}
-SAVED = ['x9', 'x10', 'x11', 'x12', 'x13']          # caller-saved in ARM: kept by the glue
 
 INT_COND = {'e': 'eq', 'z': 'eq', 'ne': 'ne', 'nz': 'ne', 'l': 'lt', 'le': 'le', 'g': 'gt', 'ge': 'ge',
             'b': 'lo', 'be': 'ls', 'a': 'hi', 'ae': 'hs', 's': 'mi', 'ns': 'pl'}
 FP_COND = {'e': 'eq', 'z': 'eq', 'ne': 'ne', 'nz': 'ne', 'a': 'gt', 'ae': 'ge', 'b': 'lt', 'be': 'le',
            'p': 'vs', 'np': 'vc'}
-
-# the runtime routines: (x86 inputs → C arguments, C function, outputs) — layout.inc, SPEC §12
-RT = {
-    5: (['rax', 'rcx'], 'nh_div', ['rax']), 10: (['rax', 'rcx'], 'nh_mod', ['rax']),
-    15: (['rax'], 'nh_put_int', []), 20: (['rax'], 'nh_put_bool', []), 25: (['rax'], 'nh_put_text', []),
-    30: (['rdi'], 'nh_exit', []), 35: (['rsi'], 'nh_error', []),
-    40: (['rcx'], 'nh_alloc', ['rax']), 45: (['rcx', 'rdx'], 'nh_array_rep', ['rax']),
-    50: (['rax', 'rcx'], 'nh_error_index', []), 55: (['rax'], 'nh_write_byte', []), 60: ([], 'nh_read_byte', ['rax']),
-    65: (['rax', 'rcx'], 'nh_text_equal', ['rax']), 70: (['rax'], 'nh_err_int', []), 75: (['rax'], 'nh_err_bool', []),
-    80: (['rax'], 'nh_err_text', []), 85: (['rax'], 'nh_read_file', ['rax']), 90: (['rax'], 'nh_text', ['rax']),
-    95: (['rax', 'rdx'], 'nh_put_int_opt', []), 100: (['rax', 'rdx'], 'nh_put_bool_opt', []),
-    105: (['rax', 'rdx'], 'nh_put_text_opt', []), 110: (['rax', 'rdx'], 'nh_err_int_opt', []),
-    115: (['rax', 'rdx'], 'nh_err_bool_opt', []), 120: (['rax', 'rdx'], 'nh_err_text_opt', []),
-    125: (['rax'], 'nh_read_file_opt', ['rax']), 130: (['rax', 'rcx'], 'nh_concat', ['rax']),
-    135: (['rax'], 'nh_sleep', []), 140: (['rax', 'rcx'], 'nh_write_file', []), 145: (['rax', 'rcx'], 'nh_append_file', []),
-    150: (['rax', 'rcx', 'rdx'], 'nh_read_at3', ['rax', 'rdx', 'rcx']),
-    155: (['rax', 'rcx', 'rdx'], 'nh_write_at', []), 160: (['rax', 'rcx', 'rdx'], 'nh_write_at_ns', []),
-    165: (['rax', 'rdx'], 'nh_truncate', []), 170: (['rax', 'rdx'], 'nh_truncate_ns', []),
-    175: (['rax'], 'nh_int_text', ['rax']), 180: (['rax', 'rcx'], 'nh_array_concat', ['rax']),
-    185: (['rax', 'rcx'], 'nh_net_listen', ['rax']), 190: (['rax'], 'nh_net_accept', ['rax']),
-    195: (['rax', 'rcx'], 'nh_fd_read', ['rax']), 200: (['rax', 'rcx'], 'nh_fd_send', ['rax']),
-    205: (['rax'], 'nh_fd_close', []), 210: (['rax'], 'nh_syscall', ['rax']),
-    215: (['rax', 'rcx'], 'nh_json_end', ['rax']), 220: (['rax', 'rcx', 'rdx'], 'nh_sub', ['rax']),
-    225: (['rax', 'rcx', 'rdx'], 'nh_put', ['rax']), 230: (['rax', 'rcx', 'rdx'], 'nh_rec_parse', ['rax']),
-    235: (['rax', 'rcx'], 'nh_lines', ['rax']), 240: (['rax', 'rcx'], 'nh_net_connect', ['rax']),
-    245: (['rax'], 'nh_protect_slot', []), 250: ([], 'nh_unprotect', []),
-    265: (['rax', 'rcx'], 'nh_concat_int', ['rax']),
-    255: ([], 'nh_err_message', ['rax']), 260: (['rax'], 'nh_fail', []),
-}
 
 
 class Unsupported(Exception):
@@ -101,14 +71,12 @@ def branch_target(addr, raw):
 
 
 class Translator:
-    def __init__(self, data, runtime_end, code_end, with_runtime=False):
-        self.with_runtime = with_runtime     # the runtime translated too (translate_rt.py), not rt.c's
+    def __init__(self, data, runtime_end, code_end):
         self.data = data
         self.runtime_end = runtime_end
         self.code_end = code_end
         self.const_start = (code_end + 7) & ~7
         self.out = []
-        self.used_rt = set()
         self.flags = 'int'
         self.fp_regs_used = False
 
@@ -268,11 +236,9 @@ class Translator:
             self.pop(self.reg(ops[0]))
             return
         if mn == 'call':
-            if target < BASE + self.runtime_end and self.with_runtime:
+            if target < BASE + self.runtime_end:     # into the runtime (its jump table)
                 self.rt_calls.add(target)
                 self.emit(f'bl L_{target:x}_c')
-            elif target < BASE + self.runtime_end:
-                self.call_runtime(target - BASE - HEADER)
             else:
                 self.emit(f'bl L_{target:x}')
             return
@@ -285,21 +251,15 @@ class Translator:
             self.pop('x29')
             return
         if mn == 'jmp':
-            if target < BASE + self.runtime_end and self.with_runtime:
+            if target < BASE + self.runtime_end:
                 self.emit(f'b L_{target:x}')
                 return
-            if target < BASE + self.runtime_end:
-                raise Unsupported('jump into the runtime')
             self.emit(f'b L_{target:x}')
             return
         if mn.startswith('j'):
             cond = (FP_COND if self.flags == 'fp' else INT_COND)[mn[1:]]
-            if target < BASE + self.runtime_end and self.with_runtime:
+            if target < BASE + self.runtime_end:          # into the runtime: an error routine
                 self.emit(f'b.{cond} L_{target:x}')
-            elif target < BASE + self.runtime_end:          # a jump to a runtime error (index out of bounds)
-                rt = target - BASE - HEADER
-                self.used_rt.add(rt)
-                self.emit(f'b.{cond} Lrt_{rt}_jump')
             else:
                 self.emit(f'b.{cond} L_{target:x}')
             return
@@ -517,45 +477,6 @@ class Translator:
                 self.emit(f'cmp {d}, #0')
             self.flags = 'int'
 
-    def call_runtime(self, rt):
-        if rt not in RT:
-            raise Unsupported(f'runtime routine at {rt}')
-        self.used_rt.add(rt)
-        self.emit(f'bl Lrt_{rt}')
-
-    def glue(self, rt):
-        if rt == 245:                                 # RT_PROTECT: a frame to resume at (rt.c, nh_resume)
-            return ['Lrt_245:', '    sub x28, x28, #48',
-                    '    stp x9, x10, [x28]', '    stp x11, x12, [x28, #16]', '    stp x13, x30, [x28, #32]',
-                    '    adrp x16, _nh_emu_sp@PAGE', '    str x28, [x16, _nh_emu_sp@PAGEOFF]',
-                    '    bl _nh_protect_slot',
-                    '    ldp x9, x10, [x28]', '    ldp x11, x12, [x28, #16]', '    ldp x13, x30, [x28, #32]',
-                    '    add x28, x28, #48',
-                    '    str x28, [x0]', '    str x29, [x0, #8]', '    str x9, [x0, #16]',
-                    '    stp x19, x20, [x0, #24]', '    stp x21, x22, [x0, #40]', '    str x23, [x0, #56]',
-                    '    mov x16, sp', '    str x16, [x0, #64]', '    ret']
-        ins, fn, outs = RT[rt]
-        L = [f'Lrt_{rt}:', '    sub x28, x28, #48',
-             '    stp x9, x10, [x28]', '    stp x11, x12, [x28, #16]', '    stp x13, x30, [x28, #32]',
-             '    adrp x16, _nh_emu_sp@PAGE', '    str x28, [x16, _nh_emu_sp@PAGEOFF]']
-        for k, r in enumerate(ins):
-            L.append(f'    mov x{k}, {R64[r]}')
-        if rt == 150:                                 # read_at: the text, then the size and the stamp
-            L += ['    bl _nh_read_at', '    mov x9, x0', '    bl _nh_last_size', '    mov x11, x0',
-                  '    bl _nh_last_stamp', '    mov x10, x0']
-        else:
-            L.append(f'    bl _{fn}')
-            for k, r in enumerate(outs):
-                L.append(f'    mov {R64[r]}, x{k}')
-        restore = {'x9': '[x28]', 'x10': '[x28, #8]', 'x11': '[x28, #16]', 'x12': '[x28, #24]', 'x13': '[x28, #32]'}
-        for reg, place in restore.items():
-            if reg not in [R64[o] for o in outs]:
-                L.append(f'    ldr {reg}, {place}')
-        L += ['    ldr x30, [x28, #40]', '    add x28, x28, #48', '    ret']
-        if rt == 50:                                  # the target of a conditional jump: never returns
-            L += [f'Lrt_{rt}_jump:', '    mov x0, x9', '    mov x1, x10', '    bl _nh_error_index']
-        return L
-
     def translate_runtime(self):
         """the runtime's code (from the header to rt_data) in ARM64, by translate_rt.py"""
         import translate_rt as TR
@@ -605,7 +526,7 @@ class Translator:
 
     def run(self, out_path):
         self.rt_calls = set()
-        rt_lines = self.translate_runtime() if self.with_runtime else []
+        rt_lines = self.translate_runtime()
         insns = disassemble(self.data, self.runtime_end, self.code_end)
         targets, entries = set(), set()
         for addr, raw, text in insns:
@@ -648,24 +569,20 @@ class Translator:
              f'    b L_{BASE + self.runtime_end:x}']
         if BASE + self.runtime_end not in targets:
             body.insert(0, f'L_{BASE + self.runtime_end:x}:')
-        if self.with_runtime:                        # the platform's part: the stack's top, the data's end
-            s.insert(s.index(f'    b L_{BASE + self.runtime_end:x}'), '\n'.join([
-                f'    movz x17, #{(OFS_GLOBALS - 0x6C8) & 0xFFFF}', f'    movk x17, #{(OFS_GLOBALS - 0x6C8) >> 16}, lsl #16',
-                '    sub x16, x27, x17', '    str x28, [x16]',
-                '    adrp x17, _nh_globals_end@PAGE', '    add x17, x17, _nh_globals_end@PAGEOFF',
-                '    str x17, [x16, #8]']))
+        # the platform's part (PLAT_STACK_TOP, PLAT_DATA_END): the emulated stack's top and the data's end
+        s.insert(s.index(f'    b L_{BASE + self.runtime_end:x}'), '\n'.join([
+            f'    movz x17, #{(OFS_GLOBALS - 0x6C8) & 0xFFFF}', f'    movk x17, #{(OFS_GLOBALS - 0x6C8) >> 16}, lsl #16',
+            '    sub x16, x27, x17', '    str x28, [x16]',
+            '    adrp x17, _nh_globals_end@PAGE', '    add x17, x17, _nh_globals_end@PAGEOFF',
+            '    str x17, [x16, #8]']))
         s += body
         s += rt_lines
-        if self.with_runtime:
-            s += self.runtime_call_stubs()
-        for rt in sorted(self.used_rt):
-            s += self.glue(rt)
-        if self.with_runtime:
-            s += ['    .data', '    .p2align 4', 'Lrtdata:']
-            rd = self.data[self.rt_data_off:self.runtime_end]
-            for k in range(0, len(rd), 32):
-                s.append('    .byte ' + ', '.join(str(b) for b in rd[k:k + 32]))
-            s += ['    .p2align 4', '_nh_data_start:', f'    .space {OFS_GLOBALS}']   # the runtime's slots and buffers
+        s += self.runtime_call_stubs()
+        s += ['    .data', '    .p2align 4', 'Lrtdata:']        # the runtime's data (messages, tables)
+        rd = self.data[self.rt_data_off:self.runtime_end]
+        for k in range(0, len(rd), 32):
+            s.append('    .byte ' + ', '.join(str(b) for b in rd[k:k + 32]))
+        s += ['    .p2align 4', '_nh_data_start:', f'    .space {OFS_GLOBALS}']   # the runtime's slots and buffers
         s += ['    .data', '    .p2align 4', '    .globl _nh_globals_start, _nh_globals_end', '_nh_globals_start:',
               f'    .space {globals_size}', '_nh_globals_end:', '    .p2align 4', 'Lconst:']
         for k in range(0, len(consts), 32):
@@ -679,9 +596,7 @@ def main():
     m = re.search(r'nihil-map (\d+) (\d+) (\d+)', open(mapline).read())
     if not m:
         sys.exit('translate: no "nihil-map" line in ' + mapline)
-    # the runtime: Linux's, translated too (translate_rt.py), unless NIHIL_MAC_RUNTIME=c asks for rt.c's
-    t = Translator(open(prog, 'rb').read(), int(m.group(1)), int(m.group(2)),
-                   os.environ.get('NIHIL_MAC_RUNTIME', 'asm') != 'c')
+    t = Translator(open(prog, 'rb').read(), int(m.group(1)), int(m.group(2)))
     n = t.run(out)
     sys.stderr.write(f'translate: {n} instructions\n')
 

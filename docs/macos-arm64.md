@@ -18,8 +18,8 @@ instruction, and the compiler itself is translated the same way: there is a nati
 - `macos/translate.py` disassembles `[RUNTIME_END, CODE_END)` (clang + objdump) and writes
   `.s`: rax rcx rdx rsi rdi → x9–x13; rbx r12–r15 → x19–x23 (kept by C); rbp → x29; the x86
   stack is emulated exactly by x28 in its own area (`nh_emu_stack`); globals → a symbol through
-  x27; constants are copied after the code. Calls into the runtime's jump table become glue that
-  passes the registers to the C functions of `arm64/rt.c` and keeps every other register.
+  x27; constants are copied after the code. Calls into the runtime's jump table become calls into
+  the translated runtime (below).
   cmp/test/ucomisd map to cmp/tst/fcmp, with the conditions mapped for each.
 - **The runtime is Linux's** (`src/runtime.asm`, which the executable carries after its header),
   translated by `macos/translate_rt.py` with each instruction's exact meaning (it is hand-written,
@@ -35,8 +35,7 @@ instruction, and the compiler itself is translated the same way: there is a nati
   SOL_SOCKET options, SO_NOSIGPIPE), errno numbers, and `/proc/self/environ`, `/proc/uptime`,
   `/proc/sys/kernel/random/uuid` as files of their own. The start sets PLAT_STACK_TOP (the
   emulated stack) and PLAT_DATA_END, which Linux finds in /proc/self/maps and the ELF header.
-  `NIHIL_MAC_RUNTIME=c` uses rt.c's own runtime instead (the one before), and the prelude's
-  `__nihil_syscall` goes through the same `nh_linux_syscall`.
+  `arm64/rt.c` is only that layer and the emulated stack (until v4.5 it was a second runtime, in C).
 - `build/macos/nihilc1-native` (the translated compiler) compiles `src1/nihilc1.nihil` to
   the same bytes as the x86 compiler, and the compiler it builds does the same (fixed point).
 - The IDE server (`ide/server.nihil`) builds native programs on macOS and its assembly view

@@ -1,12 +1,13 @@
-# arm64/ — Nihil on macOS (Apple silicon), the runtime
+# arm64/ — Nihil on macOS (Apple silicon)
 
-- rt.c: the runtime, every routine of src/runtime.asm (the 47 of the jump table), in C for
-  clang. Heap and conservative collector, texts, arrays, arithmetic, output and errors,
-  input, files and tables (atomic writes with F_FULLFSYNC, positional reads with size and
-  stamp), network (TCP server), JSON value end, record parsing (Clinger), and the prelude's
-  kernel calls translated from Linux numbers and layouts to libSystem.
-- fib.s: phase 0, what the compiler will emit for a small program (by hand).
-- Tests (each prints "all passed"; build with -DGC_STRESS for a collection every 256 KiB):
-    clang -O2 -arch arm64 -o T rt.c T.c globals_test.s && ./T
-  for T in gc_test rt_test file_test net_test sys_test (out_test: output, input and errors,
-  run as ./out_test < some_file). bench_rec.c: table reading speed (~650 MB/s on an M4).
+- rt.c: what the runtime needs from macOS. The runtime itself is Linux's, src/runtime.asm,
+  translated to ARM64 with each program (macos/translate_rt.py); rt.c only makes its Linux
+  system calls with macOS's (nh_linux_syscall: numbers, flags, layouts and errno values, mmap
+  and madvise, mincore's 16 KiB pages, sockets, /proc's files) and gives the emulated x86 stack
+  (nh_emu_stack). See docs/macos-arm64.md.
+- fib.s: phase 0 of the port, what an ARM64 backend would have emitted for a small program (by
+  hand); the port became a translator instead.
+
+The runtime is tested by the programs of tests/ and tests/stage1/ on the Mac (macos/test-native.sh,
+macos/dev.sh), with GC_STRESS too. Until v4.5, rt.c was a second runtime in C, with tests of its
+own (rt_test.c, gc_test.c, file_test.c, net_test.c, out_test.c, sys_test.c), removed with it.
