@@ -186,6 +186,13 @@ left_late(a = 0) {
     : 0;
 }
 
+// code[a ..] is the call emit_call_rt(rt) made at a
+is_call_rt(a = 0, rt = 0) {
+    a < 0 || code[a] != 0xE8 { : false; }
+    v = rt + SIZE_HEADER - a - 5;
+    : code[a + 1] == v & 255 && code[a + 2] == (v >> 8) & 255 && code[a + 3] == (v >> 16) & 255 && code[a + 4] == (v >> 24) & 255;
+}
+
 // emits n bytes kept in w (the first 8, the first in the low byte) and w2 (the rest)
 emit_packed(w = 0, w2 = 0, n = 0) {
     i = 0;
@@ -240,6 +247,15 @@ binary(nv = 0) {
         pos_push = size_code;
         lk == 0 { emit(0x50); }            // push rax
         u = binary(nv + 1);
+        // "…" + $n: the $ (the right side's last code, a call to RT_INT_TEXT) is dropped and the
+        // two go to RT_CONCAT_INT together, which writes the digits straight into the result
+        fused = false;
+        optimize && t == TYPE_STR && op == '+' && u == TYPE_STR && last_int_text == size_code
+            && is_call_rt(size_code - 5, RT_INT_TEXT)
+            && last_target <= size_code - 5 && (n_fix == 0 || fix_pos[n_fix - 1] < size_code - 5) {
+            size_code = size_code - 5;
+            fused = true;
+        }
         rn = 0;
         lk > 0 { rn = load_simple(pos_push); }
         rn > 0 {
@@ -277,7 +293,7 @@ binary(nv = 0) {
         } || t == TYPE_FLOAT && u == TYPE_FLOAT {
             r = emit_op_float(op, pi, pl, pn, pli);
         } || t == TYPE_STR && u == TYPE_STR && op == '+' {
-            emit_call_rt(RT_CONCAT);       // STRING + STRING
+            fused { emit_call_rt(RT_CONCAT_INT); } || { emit_call_rt(RT_CONCAT); }   // STRING + STRING
             r = TYPE_STR;
         } || op == '+' && t == u && t & TYPE_ARR != 0 && !is_opt(t) {
             emit_call_rt(RT_ARRAY_CONCAT); // ARRAY + ARRAY of the same type: a new one
@@ -364,6 +380,7 @@ unary() {
         }
         t == '$' && u == TYPE_INT {
             emit_call_rt(RT_INT_TEXT);    // $ n → its decimal text
+            last_int_text = size_code;
             : TYPE_STR;
         }
         t == '$' && u == TYPE_FLOAT {
