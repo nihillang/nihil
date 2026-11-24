@@ -659,6 +659,7 @@ query_call(t = 0) {
         emit_call_rt(RT_ALLOC);            // the result (where) or the keys (sort)
         q_store(d_res);
     }
+    align_loop();
     top = size_code;
     last_target = size_code;               // the loop comes back here
     q_load(0, d_i);
@@ -672,7 +673,9 @@ query_call(t = 0) {
     sv_m = q_model; sv_e = q_elem;
     q_model = m; q_elem = d_el;
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+    loop_depth = loop_depth + 1;            // the names it uses run once per element
     u = expression();
+    loop_depth = loop_depth - 1;
     q_model = sv_m; q_elem = sv_e;
     p_next = -1;
     p_break = -1;

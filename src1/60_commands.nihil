@@ -192,6 +192,7 @@ counted_loop(with_block = true) {
     r >= 0 {
         // counter in a register: mov r, rax ; top: test r, r ; jle end ; … ; dec r ; jmp top
         emit_mov_reg_rax(r);
+        align_loop();
         top = size_code;
         eb(0x48 | (rex_b(r) * 5), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
         eb(0x0F, 0x8E);                     // jle rel32
@@ -209,6 +210,7 @@ counted_loop(with_block = true) {
     }
     d = new_slot();
     emit_store_local(d);
+    align_loop();
     top = size_code;
     eb(0x48, 0x83, 0xBD);                   // cmp qword [rbp+disp32], imm8
     emit_d(d);
@@ -278,6 +280,7 @@ conditional() {
 cmd_while() {
     next_token();
     loop_depth = loop_depth + 1;            // the condition runs on every turn too
+    align_loop();
     top = size_code;
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
