@@ -575,28 +575,43 @@ model_method_call(t = 0, ns = 0, nl = 0) {
 // elements, with the model's field names standing for the fields of the
 // current element. It can use any other name of the program, locals included.
 
-// hidden locals of the loop: [rbp + d] with d from new_slot()
-q_load(r = 0, d = 0) {                  // mov rax|rcx|rdx, [rbp + d]  (r: 0, 1, 2)
+// hidden locals of the loop: [rbp + d] with d from new_slot() (negative), or a register
+// (d > 0: rbx, r12 … r15, from take_register, inside a method)
+q_load(r = 0, d = 0) {                  // mov rax|rcx|rdx, [rbp + d] / mov rax|rcx|rdx, R  (r: 0, 1, 2)
+    d > 0 {
+        eb(0x48 | rex_r(d), 0x89, 0xC0 | ((d & 7) << 3) | r);
+        :;
+    }
     r == 0 { eb(0x48, 0x8B, 0x85); }
     r == 1 { eb(0x48, 0x8B, 0x8D); }
     r == 2 { eb(0x48, 0x8B, 0x95); }
     emit_d(d);
 }
 
-q_store(d = 0) {                        // mov [rbp + d], rax
+q_store(d = 0) {                        // mov [rbp + d], rax / mov R, rax
+    d > 0 { eb(0x48 | rex_b(d), 0x89, 0xC0 | (d & 7)); :; }
     eb(0x48, 0x89, 0x85);
     emit_d(d);
 }
 
-q_zero(d = 0) {                         // mov qword [rbp + d], 0
+q_zero(d = 0) {                         // mov qword [rbp + d], 0 / mov R, 0
+    d > 0 { eb(0x48 | rex_b(d), 0xC7, 0xC0 | (d & 7)); emit_d(0); :; }
     eb(0x48, 0xC7, 0x85);
     emit_d(d);
     emit_d(0);
 }
 
-q_inc(d = 0) {                          // inc qword [rbp + d]
+q_inc(d = 0) {                          // inc qword [rbp + d] / inc R
+    d > 0 { eb(0x48 | rex_b(d), 0xFF, 0xC0 | (d & 7)); :; }
     eb(0x48, 0xFF, 0x85);
     emit_d(d);
+}
+
+// a hidden local of a query: a register if the method has one free, else a frame slot
+q_slot() {
+    r = take_register();
+    r >= 0 { : r; }
+    : new_slot();
 }
 
 // inside a query: a field name of the current element → its value
@@ -645,15 +660,28 @@ query_call(t = 0) {
         error_end();
     }
     sv_slots = slots;
-    d_arr = new_slot();
-    d_i = new_slot();
+    sv_regs = n_regs;
+    sv_cand = candidates;
+    d_el = q_slot();                       // read for every field: the first register
+    d_i = q_slot();
+    d_arr = q_slot();
+    d_n = q_slot();
     d_res = new_slot();
-    d_n = new_slot();
-    d_el = new_slot();
+    q_depth = q_depth + 1;
+    calls0 = n_calls;
+    // the FLOAT sum: in xmm8 (xmm9 for a query inside another one's expression), which neither the
+    // generated code (xmm0, xmm1) nor the runtime touches, nor the Mac's (d8, d9: kept by C), as
+    // long as the expression calls no method (which might run a query of its own)
+    xs = 0;
+    kind == 5 && q_depth <= 2 { xs = 7 + q_depth; }
     q_store(d_arr);
     q_zero(d_i);
     q_zero(d_n);
     q_zero(d_res);
+    xs > 0 {
+        eb(0xF3, 0x44, 0x0F, 0x7E, 0x85 | ((xs & 7) << 3));   // movq xmm8|9, [rbp + d_res] (0.0)
+        emit_d(d_res);
+    }
     kind == 1 || kind == 4 {
         eb(0x48, 0x8B, 0x48, 0xF8);         // mov rcx, [rax - 8]
         emit_call_rt(RT_ALLOC);            // the result (where) or the keys (sort)
@@ -711,14 +739,27 @@ query_call(t = 0) {
     }
     kind == 5 {
         u != TYPE_INT && u != TYPE_FLOAT && u != TYPE_UNKNOWN { query_type(ns, nl, u, "an INT or FLOAT", pi, pl, pn, pli); }
-        u == TYPE_FLOAT {
-            eb(0xF3, 0x0F, 0x7E, 0x85);     // movq xmm0, [rbp + d_n]
-            emit_d(d_n);
+        u == TYPE_FLOAT && xs > 0 && n_calls == calls0 {
+            eb(0x66, 0x48, 0x0F, 0x6E, 0xC8);   // movq xmm1, rax
+            eb(0xF2, 0x44, 0x0F, 0x58, 0xC1 | ((xs & 7) << 3));   // addsd xmm8|9, xmm1
+        } || u == TYPE_FLOAT {
+            xs = 0;                         // (the expression calls a method: in memory)
+            d_n > 0 {
+                q_load(0, d_n);
+                eb(0x66, 0x48, 0x0F, 0x6E, 0xC0);   // movq xmm0, rax
+            } || {
+                eb(0xF3, 0x0F, 0x7E, 0x85);     // movq xmm0, [rbp + d_n]
+                emit_d(d_n);
+            }
             eb(0x66, 0x48, 0x0F, 0x6E, 0xC8);   // movq xmm1, rax
             eb(0xF2, 0x0F, 0x58, 0xC1);     // addsd xmm0, xmm1
-            eb(0x66, 0x0F, 0xD6, 0x85);     // movq [rbp + d_n], xmm0
-            emit_d(d_n);
+            eb(0x66, 0x48, 0x0F, 0x7E, 0xC0);   // movq rax, xmm0
+            q_store(d_n);
+        } || d_n > 0 {
+            xs = 0;
+            eb(0x48 | rex_b(d_n), 0x01, 0xC0 | (d_n & 7));   // add R, rax
         } || {
+            xs = 0;
             eb(0x48, 0x01, 0x85);           // add [rbp + d_n], rax
             emit_d(d_n);
         }
@@ -752,12 +793,19 @@ query_call(t = 0) {
         call_prelude("__nihil_sort_by", 24);
     }
     kind == 5 {
-        q_load(0, d_n);
+        xs > 0 {
+            eb(0x66, 0x4C, 0x0F, 0x7E, 0xC0 | ((xs & 7) << 3));   // movq rax, xmm8|9
+        } || {
+            q_load(0, d_n);
+        }
         r = TYPE_INT;
         u == TYPE_FLOAT { r = TYPE_FLOAT; }
         u == TYPE_UNKNOWN { r = TYPE_UNKNOWN; }
     }
     slots = sv_slots;
+    n_regs = sv_regs;
+    candidates = sv_cand;
+    q_depth = q_depth - 1;
     : r;
 }
 
