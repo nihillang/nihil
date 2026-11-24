@@ -4,6 +4,15 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.6.0
+
+- macOS runs the same runtime as Linux: `src/runtime.asm`, which every executable carries, is translated to ARM64 with the program, and `arm64/rt.c` only turns Linux's system calls into macOS's (1,389 → 356 lines). The Mac gets the collector that marks in a child process, the lock for writes by key, the compact records and the tables read in parts. Measured on the Mac against v4.5.0: making records 21% faster, reading a table 8% faster, 13% less memory; queries over records 10–50% slower (the records' new layout), to be looked at
+  - *Why:* Two runtimes, one in assembly and one in C, had to do the same thing: each improvement was made twice, or the Mac stayed behind (it still had the collector that stops the program)
+- the Mac's translator is a Nihil program (`macos/translate.nihil`), in place of the two Python scripts; it writes the same assembly, byte for byte. The package carries it built, so Nihil on macOS needs only the Xcode Command Line Tools (clang, objdump), not python3. The first one is built by the previous release's `nihil` (`macos/seed.sh`), and every new one must translate itself into the same assembly (`macos/translator.sh`, and the release's macOS job)
+  - *Why:* The compiler, its library and the IDE's server were in Nihil, but every program on the Mac went through Python
+- `site/make_learn.nihil` writes the Learn page (each chapter's program run, with what it printed), in place of a Python script; `.gitattributes` leaves the benchmarks, the tests' helpers and the site out of GitHub's language bar
+  - *Why:* The repository showed C and Python as if the language were written in them
+
 ## v4.5.0
 
 - the garbage collector no longer stops the program for a whole collection on Linux: from 64 MB of heap, a child process marks while the program goes on, and the sweep runs in steps as the program allocates (SPEC §12.4). Pauses went from 120–150 ms to about 1 ms with a million records in memory; the heap asks for huge pages. On the Mac the collector is the one before
