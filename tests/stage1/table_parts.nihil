@@ -1,0 +1,27 @@
+// a table is read in parts of about 1 MB (whole lines): records across parts, the last line
+// without "\n", an empty file, @? of a missing one, a FLOAT with an exponent (read the slow way)
+P = @[#id: INT(6); name: STRING(12); v: FLOAT(8); on: BOOL];
+F = "build/tparts.dat";
+N = 100000;
+rows = [P() ; N];
+i = 0;
+* i < N { rows[i] = P(i + 1, "n" + $(i), .(i % 7) / 2.0, i % 3 == 0); i = i + 1; }
+rows[60000].v = 1.0e300;
+@>> F, rows;
+all = P @ F;
+>> $(#all) + " records\n";
+>> $(all[0].id) + " " + all[0].name + " " + $(all[0].v) + " " + $(all[0].on) + "\n";
+>> $(all[37448].id) + " " + all[37448].name + " | " + $(all[37449].id) + " " + all[37449].name + "\n";
+>> $(all[60000].v) + " " + $(all[60001].v) + "\n";
+>> $(all[N - 1].id) + " " + all[N - 1].name + "\n";
+>> $(all.count(on)) + " on, sum " + $(all.sum(.id)) + "\n";
+t = @ F;
+G = "build/tparts2.dat";
+@>> G, t.slice(0, #t - 1);                    // the last line without "\n"
+b = P @ G;
+>> $(#b) + " " + b[N - 1].name + "\n";
+@>> G, "";
+>> $(#(P @ G)) + " in an empty file\n";
+G.remove();
+>> $(#(P @? G)) + " in a missing file (@?)\n";
+F.remove();

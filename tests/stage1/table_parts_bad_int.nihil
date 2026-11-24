@@ -1,0 +1,9 @@
+// an INT that is not one in the table's last part: the error names the same line as before
+P = @[#id: INT(6); name: STRING(12); v: FLOAT(8); on: BOOL];
+F = "build/tparts_bi.dat";
+rows = [P() ; 100000];
+i = 0;
+* i < 100000 { rows[i] = P(i + 1, "n", 1.0, true); i = i + 1; }
+@>> F, rows;
+@>> F, (@ F) + "   abcname        1.0     T\n";
+>> $(#(P @ F));
