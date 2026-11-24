@@ -1,0 +1,9 @@
+# GitHub's language bar: what Nihil itself is made of (stage 0 in assembly, the Mac's system layer in C,
+# the IDE's page). Stage 1, the prelude, the standard library and the Mac's translator are .nihil, which
+# GitHub does not count. The benchmarks against C and Go, the tests' helpers and the website are not
+# part of the language, so they are left out.
+bench/** linguist-vendored
+tests/** linguist-vendored
+site/** linguist-documentation
+docs/** linguist-documentation
+arm64/fib.s linguist-documentation
