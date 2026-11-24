@@ -671,6 +671,40 @@ static int full_sync(int fd) {
 // ("NAME=value" each followed by a 0), the seconds since boot ("12345.67 0.00\n") and a random
 // UUID (36 characters and a line break). 0 for any other path.
 extern char **environ;
+static void cloexec(int fd);
+static char *virtual_file(const char *path);
+// the contents of one of those files in malloc'd memory and their length (environ's 0s are its
+// separators), or 0
+static char *virtual_file_bytes(const char *path, size_t *len) {
+    if (strcmp(path, "/proc/self/environ") == 0) {
+        size_t n = 0;
+        for (char **e = environ; *e; e++) n += strlen(*e) + 1;
+        char *r = malloc(n + 1);
+        size_t at = 0;
+        for (char **e = environ; *e; e++) { size_t k = strlen(*e) + 1; memcpy(r + at, *e, k); at += k; }
+        r[n] = 0;
+        *len = n;
+        return r;
+    }
+    char *t = 0;
+    if (strcmp(path, "/proc/uptime") == 0 || strcmp(path, "/proc/sys/kernel/random/uuid") == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        char b[64];
+        if (path[6] == 'u') {
+            snprintf(b, sizeof b, "%lld.%02ld 0.00\n", (long long)ts.tv_sec, ts.tv_nsec / 10000000);
+        } else {
+            unsigned char u[16];
+            arc4random_buf(u, sizeof u);
+            u[6] = (u[6] & 0x0F) | 0x40; u[8] = (u[8] & 0x3F) | 0x80;
+            snprintf(b, sizeof b, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n",
+                     u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+        }
+        t = strdup(b);
+        *len = strlen(t);
+    }
+    return t;
+}
 static char *virtual_file(const char *path) {
     if (strcmp(path, "/proc/self/environ") == 0) {
         i64 n = 0;
@@ -702,6 +736,24 @@ static char *virtual_file(const char *path) {
         return r;
     }
     return 0;
+}
+
+// the same files for the translated runtime, which reads them through openat: a file of its own,
+// already removed, with the contents, read from the start (0 when the path is not one of them)
+static int virtual_fd(const char *path) {
+    size_t n = 0;
+    char *v = virtual_file_bytes(path, &n);
+    if (!v) return -1;
+    char name[] = "/tmp/nihil-proc-XXXXXX";
+    int fd = mkstemp(name);
+    if (fd < 0) { free(v); return -1; }
+    unlink(name);
+    size_t at = 0;
+    while (at < n) { ssize_t k = write(fd, v + at, n - at); if (k <= 0) break; at += (size_t)k; }
+    free(v);
+    lseek(fd, 0, SEEK_SET);
+    cloexec(fd);
+    return fd;
 }
 
 // @ path: the contents (a 0 after them); optional = 1 gives 0 instead of a runtime error
@@ -1095,7 +1147,32 @@ static int open_flags(i64 l) {                       // Linux's open flags → m
     return f;
 }
 
-static i64 res(i64 r) { return r < 0 ? -errno : r; }
+// macOS's errno → Linux's, for the ones whose numbers differ (the runtime and the prelude speak
+// Linux's: their messages and checks use those numbers)
+static i64 linux_errno(int e) {
+    switch (e) {
+    case EAGAIN: return 11;          case EDEADLK: return 35;      case ENAMETOOLONG: return 36;
+    case ENOLCK: return 37;          case ENOSYS: return 38;       case ENOTEMPTY: return 39;
+    case ELOOP: return 40;           case ENOMSG: return 42;       case EIDRM: return 43;
+    case ENOSTR: return 60;          case ENODATA: return 61;      case ETIME: return 62;
+    case ENOSR: return 63;           case ENOLINK: return 67;      case EPROTO: return 71;
+    case EMULTIHOP: return 72;       case EBADMSG: return 74;      case EOVERFLOW: return 75;
+    case EILSEQ: return 84;          case EUSERS: return 87;       case ENOTSOCK: return 88;
+    case EDESTADDRREQ: return 89;    case EMSGSIZE: return 90;     case EPROTOTYPE: return 91;
+    case ENOPROTOOPT: return 92;     case EPROTONOSUPPORT: return 93; case ESOCKTNOSUPPORT: return 94;
+    case EOPNOTSUPP: return 95;      case EPFNOSUPPORT: return 96; case EAFNOSUPPORT: return 97;
+    case EADDRINUSE: return 98;      case EADDRNOTAVAIL: return 99; case ENETDOWN: return 100;
+    case ENETUNREACH: return 101;    case ENETRESET: return 102;   case ECONNABORTED: return 103;
+    case ECONNRESET: return 104;     case ENOBUFS: return 105;     case EISCONN: return 106;
+    case ENOTCONN: return 107;       case ESHUTDOWN: return 108;   case ETOOMANYREFS: return 109;
+    case ETIMEDOUT: return 110;      case ECONNREFUSED: return 111; case EHOSTDOWN: return 112;
+    case EHOSTUNREACH: return 113;   case EALREADY: return 114;    case EINPROGRESS: return 115;
+    case ESTALE: return 116;         case EDQUOT: return 122;      case ECANCELED: return 125;
+    case EOWNERDEAD: return 130;     case ENOTRECOVERABLE: return 131;
+    default: return e;               // 1 … 34: the same numbers
+    }
+}
+static i64 res(i64 r) { return r < 0 ? -linux_errno(errno) : r; }
 
 // getdents64 on a directory opened by openat: its entries as Linux records, as many as fit
 static DIR *dirs[256];
@@ -1130,10 +1207,106 @@ static void l_close(int fd) {
     close(fd);
 }
 
+// Linux's sockaddr_in (u16 family, u16 port, u32 address) → macOS's (u8 length, u8 family, …)
+static struct sockaddr_in mac_sockaddr(const unsigned char *l) {
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_len = sizeof a;
+    a.sin_family = AF_INET;
+    memcpy(&a.sin_port, l + 2, 2);
+    memcpy(&a.sin_addr, l + 4, 4);
+    return a;
+}
+
+// a new socket or connection: closed on exec when asked, and a peer that went away is an error
+// on send, not SIGPIPE (macOS has no MSG_NOSIGNAL)
+static i64 own_socket(int fd, i64 flags) {
+    if (fd < 0) return -linux_errno(errno);
+    if (flags & 0x80000) cloexec(fd);
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+    return fd;
+}
+
+i64 nh_linux_syscall(i64 n0, i64 a1, i64 a2, i64 a3, i64 a4, i64 a5, i64 a6);
+
+// __nihil_syscall([n, a1 … a6]) of the prelude (missing arguments are 0)
 i64 nh_syscall(const i64 *a) {
     i64 n = a[-1], x[7] = {0};
     for (i64 i = 0; i < n && i < 7; i++) x[i] = a[i];
+    return nh_linux_syscall(x[0], x[1], x[2], x[3], x[4], x[5], x[6]);
+}
+
+// one Linux system call (its number and arguments as the kernel takes them) made with macOS's:
+// the prelude's __nihil_syscall and every syscall of the translated runtime come here
+i64 nh_linux_syscall(i64 n0, i64 a1, i64 a2, i64 a3, i64 a4, i64 a5, i64 a6) {
+    i64 x[7] = {n0, a1, a2, a3, a4, a5, a6};
     switch (x[0]) {
+    case 9: {                                         // mmap: the flags' numbers differ
+        int f = (int)(x[4] & 3);                       // MAP_SHARED, MAP_PRIVATE
+        if (x[4] & 0x10) f |= MAP_FIXED;
+        if (x[4] & 0x20) f |= MAP_ANON;
+        if (x[4] & 0x4000) f |= MAP_NORESERVE;
+        void *p = mmap((void *)x[1], (size_t)x[2], (int)x[3], f, (int)x[5], (off_t)x[6]);
+        return p == MAP_FAILED ? -linux_errno(errno) : (i64)p;
+    }
+    case 11: return res(munmap((void *)x[1], (size_t)x[2]));
+    case 27: {                                        // mincore: Linux's 4 KiB pages from macOS's (16 KiB)
+        i64 pg = getpagesize(), len = x[2], start = x[1];
+        i64 first = start & ~(pg - 1);
+        i64 sys = (start + len - first + pg - 1) / pg;
+        unsigned char *v = malloc((size_t)sys);
+        if (!v) return -12;
+        if (mincore((void *)first, (size_t)(sys * pg), (char *)v) != 0) { free(v); return -linux_errno(errno); }
+        i64 pages = (len + 4095) / 4096;
+        for (i64 i = 0; i < pages; i++)               // any state (in memory, paged out …) counts as there
+            ((unsigned char *)x[3])[i] = v[(start + i * 4096 - first) / pg] != 0;
+        free(v);
+        return 0;
+    }
+    case 28:                                          // madvise
+        if (x[3] == 4) {                              // MADV_DONTNEED: Linux zeroes the pages, macOS does not:
+            void *p = mmap((void *)x[1], (size_t)x[2], PROT_READ | PROT_WRITE,   // fresh pages there
+                           MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
+            return p == MAP_FAILED ? -linux_errno(errno) : 0;
+        }
+        return 0;                                     // MADV_HUGEPAGE and the others: only advice
+    case 35: return res(nanosleep((const struct timespec *)x[1], (struct timespec *)x[2]));
+    case 41: return own_socket(socket((int)x[1], (int)(x[2] & 0xF), (int)x[3]), x[2]);
+    case 42: {
+        struct sockaddr_in a = mac_sockaddr((const unsigned char *)x[2]);
+        return res(connect((int)x[1], (struct sockaddr *)&a, sizeof a));
+    }
+    case 43: case 288: {                              // accept, accept4(fd, addr, len, flags)
+        int c;
+        do { c = accept((int)x[1], 0, 0); } while (c < 0 && errno == EINTR);
+        return own_socket(c, x[0] == 288 ? x[4] : 0);
+    }
+    case 44: return res(send((int)x[1], (const void *)x[2], (size_t)x[3], 0));   // sendto, no address
+    case 45: return res(recv((int)x[1], (void *)x[2], (size_t)x[3], 0));         // recvfrom, no address
+    case 49: {
+        struct sockaddr_in a = mac_sockaddr((const unsigned char *)x[2]);
+        return res(bind((int)x[1], (struct sockaddr *)&a, sizeof a));
+    }
+    case 50: return res(listen((int)x[1], (int)x[2]));
+    case 54: {                                        // setsockopt: SOL_SOCKET and its options have other numbers
+        int level = (int)x[2], opt = (int)x[3];
+        if (x[2] == 1) {
+            level = SOL_SOCKET;
+            switch (x[3]) {
+            case 2: opt = SO_REUSEADDR; break;
+            case 9: opt = SO_KEEPALIVE; break;
+            case 20: opt = SO_RCVTIMEO; break;
+            case 21: opt = SO_SNDTIMEO; break;
+            default: return 0;
+            }
+        }
+        return res(setsockopt((int)x[1], level, opt, (const void *)x[4], (socklen_t)x[5]));
+    }
+    case 60: _exit((int)x[1]);
+    case 77: return res(ftruncate((int)x[1], (off_t)x[2]));
+    case 82: return res(rename((const char *)x[1], (const char *)x[2]));
+    case 87: return res(unlink((const char *)x[1]));
     case 0: return res(read((int)x[1], (void *)x[2], (size_t)x[3]));
     case 1: return res(write((int)x[1], (const void *)x[2], (size_t)x[3]));
     case 3: l_close((int)x[1]); return 0;
@@ -1167,7 +1340,12 @@ i64 nh_syscall(const i64 *a) {
         return 0;
     }
     case 231: nh_flush(); _exit((int)x[1]);
-    case 257: return res(openat(at_dir(x[1]), (const char *)x[2], open_flags(x[3]), (int)x[4]));
+    case 257:
+        if (strncmp((const char *)x[2], "/proc/", 6) == 0) {   // the Linux files the programs read
+            int fd = virtual_fd((const char *)x[2]);
+            return fd >= 0 ? fd : -2;                 // ENOENT: maps, pagemap … (the runtime has others)
+        }
+        return res(openat(at_dir(x[1]), (const char *)x[2], open_flags(x[3]), (int)x[4]));
     case 5:                                           // fstat(fd, struct stat (Linux))
     case 262: {                                       // newfstatat(dir, path, struct stat (Linux), flags)
         struct stat st;

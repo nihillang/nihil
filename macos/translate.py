@@ -99,7 +99,8 @@ def branch_target(addr, raw):
 
 
 class Translator:
-    def __init__(self, data, runtime_end, code_end):
+    def __init__(self, data, runtime_end, code_end, with_runtime=False):
+        self.with_runtime = with_runtime     # the runtime translated too (translate_rt.py), not rt.c's
         self.data = data
         self.runtime_end = runtime_end
         self.code_end = code_end
@@ -265,7 +266,10 @@ class Translator:
             self.pop(self.reg(ops[0]))
             return
         if mn == 'call':
-            if target < BASE + self.runtime_end:
+            if target < BASE + self.runtime_end and self.with_runtime:
+                self.rt_calls.add(target)
+                self.emit(f'bl L_{target:x}_c')
+            elif target < BASE + self.runtime_end:
                 self.call_runtime(target - BASE - HEADER)
             else:
                 self.emit(f'bl L_{target:x}')
@@ -279,13 +283,18 @@ class Translator:
             self.pop('x29')
             return
         if mn == 'jmp':
+            if target < BASE + self.runtime_end and self.with_runtime:
+                self.emit(f'b L_{target:x}')
+                return
             if target < BASE + self.runtime_end:
                 raise Unsupported('jump into the runtime')
             self.emit(f'b L_{target:x}')
             return
         if mn.startswith('j'):
             cond = (FP_COND if self.flags == 'fp' else INT_COND)[mn[1:]]
-            if target < BASE + self.runtime_end:          # a jump to a runtime error (index out of bounds)
+            if target < BASE + self.runtime_end and self.with_runtime:
+                self.emit(f'b.{cond} L_{target:x}')
+            elif target < BASE + self.runtime_end:          # a jump to a runtime error (index out of bounds)
                 rt = target - BASE - HEADER
                 self.used_rt.add(rt)
                 self.emit(f'b.{cond} Lrt_{rt}_jump')
@@ -545,7 +554,56 @@ class Translator:
             L += [f'Lrt_{rt}_jump:', '    mov x0, x9', '    mov x1, x10', '    bl _nh_error_index']
         return L
 
+    def translate_runtime(self):
+        """the runtime's code (from the header to rt_data) in ARM64, by translate_rt.py"""
+        import translate_rt as TR
+        self.rt_data_off = HEADER + struct.unpack_from('<I', self.data, self.runtime_end - 4)[0]
+        if not HEADER < self.rt_data_off < self.runtime_end:
+            sys.exit('translate: the runtime does not say where its data starts (an older runtime?)')
+        insns = disassemble(self.data, HEADER, self.rt_data_off)
+        rt = TR.RuntimeTranslator(self, BASE + HEADER, BASE + self.rt_data_off, BASE + self.runtime_end)
+        targets, calls = set(), set()
+        for addr, raw, text in insns:
+            t = branch_target(addr, raw)
+            if t is not None:
+                targets.add(t)
+                if raw[0] == 0xE8:
+                    calls.add(t)
+        # the program's calls into the runtime (its jump table) are found while the program is translated:
+        # every routine gets its call label, so any of them may be called
+        lines, errors = [], []
+        for i, (addr, raw, text) in enumerate(insns):
+            lines.append(f'L_{addr:x}:')
+            rt.out = []
+            try:
+                rt.translate(addr, raw, text, [insns[k][2] for k in range(i - 1, max(i - 8, -1), -1)],
+                             insns[i + 1][2] if i + 1 < len(insns) else '',
+                             TR.needs_flags(insns, i, targets), branch_target(addr, raw),
+                             lambda t: f'L_{t:x}_c', lambda t: f'L_{t:x}')
+            except TR.Unsupported as e:
+                errors.append(f'{addr:#x}: {text}   ({e})')
+            lines.extend(rt.out)
+        if errors:
+            sys.stderr.write('translate: %d runtime instructions not supported:\n  %s\n' % (len(errors), '\n  '.join(errors[:40])))
+            sys.exit(1)
+        self.rt_insn_addrs = [a for a, _, _ in insns]
+        self.rt_call_targets = calls
+        self.rt_translator = rt
+        return lines
+
+    def runtime_call_stubs(self):
+        """L_x_c for each routine called: the return address on the x86 stack, then the routine"""
+        out = []
+        for t in sorted(self.rt_call_targets | self.rt_calls):
+            out += [f'L_{t:x}_c:', '    str x30, [x28, #-8]!', f'    b L_{t:x}']
+        if self.rt_translator.uses_sys:
+            import translate_rt as TR
+            out += TR.glue_sys()
+        return out
+
     def run(self, out_path):
+        self.rt_calls = set()
+        rt_lines = self.translate_runtime() if self.with_runtime else []
         insns = disassemble(self.data, self.runtime_end, self.code_end)
         targets, entries = set(), set()
         for addr, raw, text in insns:
@@ -588,9 +646,24 @@ class Translator:
              f'    b L_{BASE + self.runtime_end:x}']
         if BASE + self.runtime_end not in targets:
             body.insert(0, f'L_{BASE + self.runtime_end:x}:')
+        if self.with_runtime:                        # the platform's part: the stack's top, the data's end
+            s.insert(s.index(f'    b L_{BASE + self.runtime_end:x}'), '\n'.join([
+                f'    movz x17, #{(OFS_GLOBALS - 0x6C8) & 0xFFFF}', f'    movk x17, #{(OFS_GLOBALS - 0x6C8) >> 16}, lsl #16',
+                '    sub x16, x27, x17', '    str x28, [x16]',
+                '    adrp x17, _nh_globals_end@PAGE', '    add x17, x17, _nh_globals_end@PAGEOFF',
+                '    str x17, [x16, #8]']))
         s += body
+        s += rt_lines
+        if self.with_runtime:
+            s += self.runtime_call_stubs()
         for rt in sorted(self.used_rt):
             s += self.glue(rt)
+        if self.with_runtime:
+            s += ['    .data', '    .p2align 4', 'Lrtdata:']
+            rd = self.data[self.rt_data_off:self.runtime_end]
+            for k in range(0, len(rd), 32):
+                s.append('    .byte ' + ', '.join(str(b) for b in rd[k:k + 32]))
+            s += ['    .p2align 4', '_nh_data_start:', f'    .space {OFS_GLOBALS}']   # the runtime's slots and buffers
         s += ['    .data', '    .p2align 4', '    .globl _nh_globals_start, _nh_globals_end', '_nh_globals_start:',
               f'    .space {globals_size}', '_nh_globals_end:', '    .p2align 4', 'Lconst:']
         for k in range(0, len(consts), 32):
@@ -604,7 +677,8 @@ def main():
     m = re.search(r'nihil-map (\d+) (\d+) (\d+)', open(mapline).read())
     if not m:
         sys.exit('translate: no "nihil-map" line in ' + mapline)
-    t = Translator(open(prog, 'rb').read(), int(m.group(1)), int(m.group(2)))
+    t = Translator(open(prog, 'rb').read(), int(m.group(1)), int(m.group(2)),
+                   os.environ.get('NIHIL_MAC_RUNTIME') == 'asm')
     n = t.run(out)
     sys.stderr.write(f'translate: {n} instructions\n')
 
