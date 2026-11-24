@@ -837,12 +837,15 @@ RUN_T0 = {0: 0 ; 64};
 RUN_SEEN = {0: 0 ; 64};         // the last time the page asked for its output
 RUN_CODE = {0: 0 ; 64};         // the exit code, once it finished
 RUN_STOPPED = {0: false ; 64};
+RUN_IN = {0: false ; 64};       // its input is still open (closed once: never written or closed again)
 RUN_KIND = {0: "" ; 64};        // "program" or "claude" (for /api/activity)
 RUN_LABEL = {0: "" ; 64};       // the program's path, or the start of the message
 RUN_PROJECT = {0: "" ; 64};
 
 finish_run(id = 0) {
     b = RUN_BASE[id] || "";
+    RUN_IN[id] || false { (RUN_PROC[id] || 0).close_input(); }     // stopped before its input was closed
+    RUN_IN[id] = _;
     (b + ".bin").remove(); (b + ".out").remove(); (b + ".err").remove();
     RUN_PROC[id] = _; RUN_BASE[id] = _; RUN_T0[id] = _; RUN_SEEN[id] = _; RUN_CODE[id] = _; RUN_STOPPED[id] = _;
     RUN_KIND[id] = _; RUN_LABEL[id] = _; RUN_PROJECT[id] = _;
@@ -911,6 +914,7 @@ run_json(project = "", body = "", asm = false) {
     p? = [bin].start(base + ".out", base + ".err", project);
     p == _ { bin.remove(); : "{\"ok\": false, \"errors\": [" + error_json(rel, "could not start the program") + "]}"; }
     RUN_PROC[id] = p || 0;
+    RUN_IN[id] = true;
     RUN_BASE[id] = base;
     RUN_T0[id] = now_ms();
     RUN_SEEN[id] = now_ms();
@@ -1062,8 +1066,13 @@ claude_json(project = "", body = "") {
     // edits and auto also run commands (Bash, in the background too, and monitors); ask and plan do not
     shell = mode == "edits" || mode == "auto";
     shell { tools = tools + ["Edit(./**)", "Write(./**)", "Bash", "Monitor", "TaskStop"]; }
-    cmd = claude(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                  "--permission-mode", pm, "--append-system-prompt", claude_prompt(project, shell)]);
+    // stream-json in: the input stays open, so the page can send more messages to the same run
+    // (/api/stdin) while Claude works or waits for its background tasks; Claude Code takes them as
+    // in its terminal (at once when it is only waiting, else after the tool that is running) and
+    // echoes each one (--replay-user-messages) when it takes it. The page closes the input when
+    // a turn ends with nothing left to wait for, and the run ends as before.
+    cmd = claude(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                  "--include-partial-messages", "--replay-user-messages", "--permission-mode", pm, "--append-system-prompt", claude_prompt(project, shell)]);
     session_ok(session) { cmd = cmd + ["--resume", session]; }
     session_ok(model) { cmd = cmd + ["--model", model]; }
     // the tab's name names the session too (as in Claude Code's /resume); it is one argument, not a shell line
@@ -1079,9 +1088,9 @@ claude_json(project = "", body = "") {
     pr = p || 0;
     text = msg;
     #ctx > 0 { text = text + "\n\n" + ctx; }
-    pr.write(text);
-    pr.close_input();
+    pr.write("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":" + q(text) + "}}\n");
     RUN_PROC[id] = pr;
+    RUN_IN[id] = true;
     RUN_BASE[id] = base;
     RUN_T0[id] = now_ms();
     RUN_SEEN[id] = now_ms();
@@ -1174,6 +1183,7 @@ claude_login_json(project = "", body = "") {
     p? = cmd.start(base + ".out", base + ".err", "");
     p == _ { : "{\"ok\": false, \"error\": " + q(NO_CLAUDE) + "}"; }
     RUN_PROC[id] = p || 0;                      // its input stays open: the code may come later
+    RUN_IN[id] = true;
     RUN_BASE[id] = base;
     RUN_T0[id] = now_ms();
     RUN_SEEN[id] = now_ms();
@@ -1391,12 +1401,15 @@ handle(c = 0, req = "") {
     }
     path == "/api/stdin" {
         id = ((body.json("id") || "0").int()) || 0;
-        RUN_PROC.contains(id) && !RUN_CODE.contains(id) {
+        // false: it has ended, or its input was closed, so nothing was written (a closed input's
+        // number may already belong to another file or connection)
+        ok = RUN_PROC.contains(id) && !RUN_CODE.contains(id) && (RUN_IN[id] || false);
+        ok {
             data = (body.json("data") || "\"\"").json_text() || "";
             #data > 0 { (RUN_PROC[id] || 0).write(data); }
-            (body.json("eof") || "false") == "true" { (RUN_PROC[id] || 0).close_input(); }
+            (body.json("eof") || "false") == "true" { (RUN_PROC[id] || 0).close_input(); RUN_IN[id] = false; }
         }
-        c.respond(200, "application/json", "{\"ok\": true}");
+        c.respond(200, "application/json", "{\"ok\": " + $ok + "}");
         :;
     }
     path == "/api/stop" {

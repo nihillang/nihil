@@ -146,6 +146,8 @@ select { background: var(--panel2); color: var(--text); border: 1px solid var(--
 .chat-log .empty { color: var(--dim); padding: 8px 0; }
 .msg { margin: 8px 0; line-height: 1.45; overflow-wrap: anywhere; }
 .msg.user { background: var(--sel); border-radius: 8px; padding: 6px 9px; white-space: pre-wrap; }
+.msg.user.queued { opacity: .6; border: 1px dashed var(--dim); }
+.msg.user.queued::after { content: 'waiting: Claude takes it as soon as it can'; display: block; color: var(--dim); font-size: 11px; margin-top: 3px; }
 .history-note { color: var(--dim); font-size: 12px; text-align: center; margin: 10px 0; }
 .history-note.end { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .msg.error { color: var(--err); white-space: pre-wrap; }
@@ -1339,7 +1341,7 @@ function newChat(saved) {
   $('chatLogs').appendChild(log);
   return { id: s.id || 'c' + Date.now().toString(36) + nextChat++, title: s.title || '', session: s.session || '',
     mode: MODES[s.mode] ? s.mode : 'ask', model: s.model || '', usedModel: s.usedModel || '', allow: Array.isArray(s.allow) ? s.allow : [],
-    run: null, step: '', now: '', agents: [], files: new Map(), shells: new Map(), tasks: new Map(), log, project, unread: false, closed: false };
+    run: null, step: '', now: '', queued: [], later: [], agents: [], files: new Map(), shells: new Map(), tasks: new Map(), log, project, unread: false, closed: false };
 }
 function chatKey(p = project) { return 'nihil-ide-claude:' + p; }
 function saveChatsOf(p) {
@@ -1571,7 +1573,7 @@ function setSession(t, id) {
   t.session = id || ''; saveChatsOf(t.project);
   if (t === cur()) renderChatInfo();
 }
-function setChatBusy(on) { $('chatSend').disabled = on; $('chatStop').disabled = !on; }
+function setChatBusy(on) { $('chatStop').disabled = !on; }     // Send works while busy too (the message joins the run)
 
 // activity: the step the tab's Claude is on, its helpers (subagents), the files it touched, and what runs
 function setStep(t, text, file) {
@@ -1807,7 +1809,7 @@ $('chatText').addEventListener('keydown', (e) => {
 }, true);
 $('chatText').addEventListener('blur', () => setTimeout(hidePop, 150));
 $('chatSend').onclick = () => chatSend();
-$('chatStop').onclick = async () => { const t = cur(); if (t && t.run) await api('/api/stop', { id: t.run }); };
+$('chatStop').onclick = async () => { const t = cur(); if (t && t.run) { t.stopped = true; await api('/api/stop', { id: t.run }); } };
 
 // what is open in the IDE, for the message
 // ---- code taken to Claude: a selection kept as it was (file, lines, text) until the next message
@@ -1840,7 +1842,6 @@ function pinSelection() {
 function askAboutSelection(question) {
   if (!pinSelection()) return;
   const t = cur();
-  if (t && t.run) { $('chatText').value = question; return; }     // busy: it waits in the box
   chatSend(t, question);
 }
 
@@ -2158,6 +2159,26 @@ function followUp(t, mode, text) {
   chatSend(t, text);
 }
 
+// a message while Claude works: it goes to the same run (its input is still open), and Claude Code
+// takes it as in its terminal: at once when it only waits for work in the background, else after
+// the tool running now. It shows as waiting until Claude takes it. If the run is ending, it goes
+// as a new message when it ends.
+async function chatJoin(t, text) {
+  const brought = pins.map(pinName), context = ideContext();
+  pins = []; renderPins();
+  t.sent = (t.sent || 0) + 1; t.histDone = true;
+  const el = chatAdd('user', (brought.length ? `<div class="pinref">✦ ${esc(brought.join(', '))}</div>` : '') + esc(text), t);
+  el.classList.add('queued'); el.dataset.text = text;
+  if (t.input) {
+    t.queued.push(el);
+    const content = text + (context ? '\n\n' + context : '');
+    const r = await api('/api/stdin', { id: t.run, data: JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n' });
+    if (r.ok) return;
+    t.queued.splice(t.queued.indexOf(el), 1);
+  }
+  t.later.push(el);
+}
+
 // the panel's commands that answer at once also work while the tab is busy
 const QUICK_CMDS = new Set(['rename', 'model', 'status', 'account', 'help', 'new', 'doctor', 'color', 'focus', 'reload-plugins']);
 async function chatSend(t = cur(), preset = '') {
@@ -2165,8 +2186,10 @@ async function chatSend(t = cur(), preset = '') {
   const text = preset || $('chatText').value.trim();
   if (!text) return;
   const slash = /^\/([\w:.-]+)(?=\s|$)/.exec(text);
-  if (t.run && !(slash && QUICK_CMDS.has(slash[1].toLowerCase()))) return;
+  const join = t.run && !(slash && QUICK_CMDS.has(slash[1].toLowerCase()));
+  if (join && slash) return;            // the other commands wait until Claude has finished
   if (!preset) { $('chatText').value = ''; pushHist(text); }
+  if (join) return chatJoin(t, text);
   // Claude Code's slash commands belong to its own screen: `claude -p` does not run them, so the
   // panel answers the ones that make sense here and sends nothing to Claude
   if (slash) {
@@ -2215,11 +2238,23 @@ async function chatSend(t = cur(), preset = '') {
   const r = await api('/api/claude', { message: text, context, session: t.session, mode: t.mode, model: t.model, name: t.title, allow: t.allow.join(' ') });
   if (!r.ok) { chatAdd('error', esc(r.error || 'could not start Claude'), t); renderChatTabs(); return; }
   runStarted(t, r.run, 'starting…');
+  t.input = true;                  // its input: more messages can go to it (chatJoin) until it is closed
   const run = r.run, mode = t.mode;
-  const box = chatAdd('assistant', '', t);
+  let box = null, thinking = null;
   let textEl = null, raw = '', out = 0, err = 0, buf = '', errText = '', result = null, plan = '', streamed = false;
+  let echoes = 0, idle = false, bg = 0;
   const edited = new Set();
-  const thinking = document.createElement('div'); thinking.className = 'tool'; thinking.textContent = 'thinking…'; box.appendChild(thinking);
+  const newBox = () => {          // where the answer to the latest message goes
+    if (thinking) thinking.remove();
+    box = chatAdd('assistant', '', t); textEl = null; raw = ''; streamed = false;
+    thinking = document.createElement('div'); thinking.className = 'tool'; thinking.textContent = 'thinking…'; box.appendChild(thinking);
+  };
+  newBox();
+  // the input is closed when Claude has answered everything sent and waits for nothing: the run then ends
+  const maybeClose = () => {
+    if (!t.input || !idle || bg || t.queued.length) return;
+    t.input = false; api('/api/stdin', { id: run, eof: true });
+  };
   const describe = (b) => {
     const inp = b.input || {}, f = inp.file_path ? relPath(inp.file_path) : '';
     if (b.name === 'Read') return ['reading', f];
@@ -2232,7 +2267,19 @@ async function chatSend(t = cur(), preset = '') {
   };
   const handle = (line) => {
     let d; try { d = JSON.parse(line); } catch (e) { return; }
+    // Claude takes a message (its echo): the first is the run's own; a later one was sent while it worked
+    if (d.type === 'user' && d.message && typeof d.message.content === 'string') {
+      idle = false;
+      if (!echoes++) return;
+      const el = t.queued.shift();
+      if (el) el.classList.remove('queued');
+      if (box.childElementCount === 1 && thinking.parentNode === box) { if (el) t.log.insertBefore(el, box); }   // a new turn, empty yet
+      else { if (el) t.log.appendChild(el); newBox(); }
+      setStep(t, 'thinking…'); return;
+    }
     if (d.type === 'system' && d.subtype === 'init') {
+      if (idle) newBox();         // a new turn after one ended (a message taken, or background work that ended)
+      idle = false;
       if (d.session_id) setSession(t, d.session_id);
       if (d.model) { t.usedModel = d.model; saveChatsOf(t.project); if (t === cur()) renderChatInfo(); }
       saveCmds(d);
@@ -2251,6 +2298,7 @@ async function chatSend(t = cur(), preset = '') {
       if (ag && end) agentFinished(ag, end, d.summary || '');
       if (d.subtype === 'background_tasks_changed') {
         const open = new Set((d.tasks || []).map((x) => x.task_id));
+        bg = open.size; maybeClose();
         for (const x of t.shells.values()) if (x.bg && x.task && x.state === 'running' && !open.has(x.task)) shellEnded(x, 'done');
         for (const x of t.agents) if (x.task && x.state === 'running' && !open.has(x.task)) agentFinished(x, 'done', '');
       }
@@ -2318,19 +2366,11 @@ async function chatSend(t = cur(), preset = '') {
       textEl = null; streamed = false;
     }
     if (d.type === 'rate_limit_event' && d.rate_limit_info) { saveUsage(d.rate_limit_info); renderActivity(); }
-    if (d.type === 'result') { result = d; addCost(t, d.total_cost_usd); }
+    if (d.type === 'result') { result = d; addCost(t, d.total_cost_usd); endTurn(d); idle = true; maybeClose(); }
   };
-  for (;;) {
-    const o = await api(`/api/output?id=${run}&out=${out}&err=${err}`);
-    if (o.error) break;
-    out += o.out_bytes; err += o.err_bytes; errText += o.err; buf += o.out;
-    let i; while ((i = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
-    if (o.code !== null && !o.out && !o.err) break;
-    await sleep(200);
-  }
-  if (buf.trim()) handle(buf);
-  thinking.remove();
-  if (result) {
+  // a turn ends (one per message taken, and one when background work it waited for ends)
+  function endTurn(result) {
+    thinking.remove();
     if (result.session_id) setSession(t, result.session_id);
     if (result.is_error) chatAdd('error', esc(result.result || result.subtype || 'Claude stopped with an error'), t);
     const denied = (result.permission_denials || []).filter((x) => x.tool_name !== 'ExitPlanMode');
@@ -2365,10 +2405,26 @@ async function chatSend(t = cur(), preset = '') {
     meta.textContent = [`${((result.duration_ms || 0) / 1000).toFixed(1)} s`, result.total_cost_usd ? `US$ ${result.total_cost_usd.toFixed(3)}` : '',
       t.usedModel ? prettyModel(t.usedModel) : '', MODES[mode]].filter(Boolean).join(' · ');
     box.appendChild(meta);
-  } else {
-    chatAdd('error', esc(errText.trim() || 'Claude stopped before answering'), t);
   }
+  for (;;) {
+    const o = await api(`/api/output?id=${run}&out=${out}&err=${err}`);
+    if (o.error) break;
+    out += o.out_bytes; err += o.err_bytes; errText += o.err; buf += o.out;
+    let i; while ((i = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    if (o.code !== null && !o.out && !o.err) break;
+    await sleep(200);
+  }
+  if (buf.trim()) handle(buf);
+  thinking.remove();
+  if (!result) chatAdd('error', esc(errText.trim() || 'Claude stopped before answering'), t);
+  t.input = false;
+  // sent but never taken (stopped, or it ended first): back into the box, nothing is lost
+  const left = t.queued.splice(0).concat(t.later.splice(0)).map((el) => { el.remove(); return el.dataset.text; });
+  const stopped = t.stopped; t.stopped = false;
   runEnded(t);
+  // after ■ Stop they wait in the box; else they go now, as a new message
+  if (left.length && stopped) $('chatText').value = [...left, $('chatText').value].filter(Boolean).join('\n\n');
+  else if (left.length) chatSend(t, left.join('\n\n'));
   if (edited.size && t.project === project) {
     for (const p of edited) { const x = tabs.find((y) => y.path === p); if (x) await reloadTab(x); }
     await loadFiles();
