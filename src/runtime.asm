@@ -741,7 +741,8 @@ rt_rec_parse:
     cmp ecx, 9
     ja .f_dot
     call .f_digit
-    jc .fallback
+    test edx, edx
+    jnz .fallback
     inc rsi
     jmp .f_int
 .f_dot:
@@ -756,7 +757,8 @@ rt_rec_parse:
     cmp ecx, 9
     ja .fallback
     call .f_digit
-    jc .fallback
+    test edx, edx
+    jnz .fallback
     dec r10
     inc rsi
     jmp .f_frac
@@ -777,8 +779,9 @@ rt_rec_parse:
     jz .store
     bts rax, 63
     jmp .store
-.f_digit:                           ; ecx = digit: into m, unless there are already 15 (CF = 1)
-    mov r11d, 1
+.f_digit:                           ; ecx = digit: into m, unless there are already 15 (edx = 1)
+    xor edx, edx                    ; (an answer in a register, not in CF: a flag that crosses a
+    mov r11d, 1                     ; call and a ret cannot be translated for the Mac)
     test rax, rax
     jnz .f_count
     test ecx, ecx
@@ -790,10 +793,9 @@ rt_rec_parse:
     imul rax, rax, 10
     add rax, rcx
 .f_digit_ok:
-    clc
     ret
 .f_too_many:
-    stc
+    mov edx, 1
     ret
     ; ---- INT
 .int:
@@ -1663,10 +1665,18 @@ gc_init:
     cmp rax, -4096
     jae rt_alloc.without_memory
     mov [GC_MINCORE], rax
-    mov rax, [BASE_CODE + 64 + 56 + 16]   ; the data PT_LOAD: p_vaddr …
+    mov rax, [PLAT_DATA_END]        ; given by the platform, or …
+    test rax, rax
+    jnz .data_end
+    mov rax, [BASE_CODE + 64 + 56 + 16]   ; … the data PT_LOAD: p_vaddr …
     add rax, [BASE_CODE + 64 + 56 + 40]   ; … + p_memsz
+.data_end:
     mov [GC_DATA_END], rax
+    mov rax, [PLAT_STACK_TOP]       ; given by the platform, or found in /proc/self/maps
+    test rax, rax
+    jnz .stack_top
     call gc_stack_top
+.stack_top:
     mov [GC_STACK_TOP], rax
     mov rax, GC_MIN
     cmp qword [GC_STACK_TOP], 0
@@ -3969,3 +3979,7 @@ ASSERT_AT t_rec_parse,    RT_REC_PARSE
 ASSERT_AT t_lines,        RT_LINES
 ASSERT_AT t_net_connect,  RT_NET_CONNECT
 ASSERT_AT t_concat_int,   RT_CONCAT_INT
+
+; the last 4 bytes: where the data starts (rt_data, from the start of the runtime), for the Mac's
+; translator, which turns only the code before it into ARM64
+    dd rt_data - $$

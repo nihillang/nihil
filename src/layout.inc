@@ -78,6 +78,11 @@
 %define GC_STAT_STEPS   (BASE_DATA + 0x6B0)
 %define GC_STAT_STEPMAX (BASE_DATA + 0x6B8)
 %define GC_STAT_STEPT0  (BASE_DATA + 0x6C0)
+; what the platform gives instead of finding it out (0 on Linux, where it is found out): the top of
+; the program's stack (else /proc/self/maps) and the end of the data (else the ELF header). The
+; Mac's translated runtime runs on an emulated stack in a data area of its own: its start sets them.
+%define PLAT_STACK_TOP  (BASE_DATA + 0x6C8)
+%define PLAT_DATA_END   (BASE_DATA + 0x6D0)
 %define OUTPUT_BUF       (BASE_DATA + 0x1000)   ; standard output buffer
 %define OUTPUT_CAP       65536
 %define IN_BUF         (BASE_DATA + 0x11000)  ; standard input buffer
