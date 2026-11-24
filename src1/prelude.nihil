@@ -598,6 +598,9 @@ __nihil_kc_size = -1;
 __nihil_kc_stamp = 0;
 __nihil_kc_cap = 0;
 __nihil_kf_line = "";
+__nihil_kt_cof = "";                            // key_stat: the path __nihil_kt_cpath ends with 0
+__nihil_kt_cpath = "";
+__nihil_kt_sbuf = "";                           // and its stat buffer
 __nihil_kf_j = 0;                               // key_find's slot (where the key is, or where it would go)
 __nihil_kf_c = 0;                               // and the index's capacity
 __nihil_kc_idx = "";                            // the index's path for __nihil_kc_idxof (made once)
@@ -623,8 +626,13 @@ __nihil_ki_rw = false;
 // runtime's (mtime in nanoseconds + inode × 0x9E3779B97F4A7C15), and the table open in __nihil_kt_fd
 // (the same file as before, or opened again)
 __nihil_key_stat(path = "") {
-    __p = path + "\0";
-    __b = __nihil_bytes(144);
+    __nihil_kt_cof != path {                        // the path with its 0, made once per table
+        __nihil_kt_cpath = path + "\0";
+        __nihil_kt_cof = path;
+    }
+    __p = __nihil_kt_cpath;
+    #__nihil_kt_sbuf != 144 { __nihil_kt_sbuf = __nihil_bytes(144); }
+    __b = __nihil_kt_sbuf;                          // read at once below: one buffer serves
     __nihil_syscall([262, -100, __nihil_addr(__p), __nihil_addr(__b), 0]) < 0 {   // newfstatat
         __nihil_kt_path == path { __nihil_key_forget(); }
         : -1;
@@ -743,7 +751,9 @@ __nihil_key_find(key = "", path = "", size = 0, stamp = 0, schema = [0], names =
     __tfd = -1;                                     // the table's fd, while the caller's stamp is the last stat's
     __nihil_kt_path == path && __nihil_kt_stamp == stamp { __tfd = __nihil_kt_fd; }
     __w = __nihil_rec_width(schema) + 1;
-    #__nihil_kslot != 4 { __nihil_kslot = __nihil_bytes(4); }
+    #__nihil_kslot != 64 { __nihil_kslot = __nihil_bytes(64); }
+    __wa = 0;                                       // the slots read: from __wa, __wn of them
+    __wn = 0;
     #__nihil_kline != __w - 1 { __nihil_kline = __nihil_bytes(__w - 1); }
     __ka = 0;                                       // the key field: its offset in a line, width and type
     __i = 0;
@@ -755,8 +765,16 @@ __nihil_key_find(key = "", path = "", size = 0, stamp = 0, schema = [0], names =
     __left = __c;
     * __left > 0 {
         __v = -1;
-        __nihil_ki_fd >= 0 && __nihil_syscall([17, __nihil_ki_fd, __nihil_addr(__nihil_kslot), 4, 16 + __j * 4]) == 4 {
-            __v = __nihil_le_at(__nihil_kslot, 0, 4);
+        // the slots come 16 at a time (one read): linear probing looks at the next ones. Only for
+        // this lookup: a write may change them before the next one.
+        __nihil_ki_fd >= 0 && (__j < __wa || __j >= __wa + __wn) {
+            __wa = __j;
+            __wn = __c - __j;
+            __wn > 16 { __wn = 16; }
+            __nihil_syscall([17, __nihil_ki_fd, __nihil_addr(__nihil_kslot), __wn * 4, 16 + __j * 4]) != __wn * 4 { __wn = 0; }
+        }
+        __nihil_ki_fd >= 0 && __j >= __wa && __j < __wa + __wn {
+            __v = __nihil_le_at(__nihil_kslot, (__j - __wa) * 4, 4);
         }
         __v < 0 {
             __p = __nihil_pread(__idx, 16 + __j * 4, 4);
