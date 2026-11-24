@@ -1,0 +1,180 @@
+// site/make_learn.nihil: runs every program of examples/learn and writes site/learn.html with
+// each one and the output it printed, so the page never shows an example that does not work.
+// From the root of the repository: nihil run site/make_learn.nihil (NIHIL=./build/nihil picks the compiler).
+@ "std:env.nihil";
+
+LEARN = "examples/learn";
+SLUGS = [""];
+TITLES = [""];
+INTROS = [""];
+SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling"];
+TITLES = [
+    "Hello",
+    "Values and types",
+    "Conditions and loops",
+    "Methods",
+    "Arrays, text and the library",
+    "Optionals: the value that is not there",
+    "Maps",
+    "Files and input",
+    "Tables on disk",
+    "The standard library",
+    "Globals and locals: the one rule to remember",
+    "Automatic keys",
+    "Modeling data"
+];
+INTROS = [
+    "Install Nihil (see the <a href=\"index.html#install\">home page</a>), save this as " +
+      "<code>hello.nihil</code> and run <code>nihil run hello.nihil</code>. <code>&gt;&gt;</code> writes " +
+      "to the standard output and adds no line break of its own. <code>nihil hello.nihil</code> compiles " +
+      "it into a native executable, <code>./hello</code>, instead.",
+    "There are no declarations: a variable is created by its first assignment, and its type comes from " +
+      "the value and stays. The four basic types are INT, FLOAT, BOOL and STRING. Nothing converts " +
+      "implicitly: <code>$</code> makes text, <code>.n</code> turns an INT into a FLOAT, <code>#f</code> a " +
+      "FLOAT into an INT (and <code>#</code> of a STRING or an ARRAY is its length).",
+    "There are no keywords: the expression before a <code>{</code> decides what the block does. A BOOL " +
+      "makes it an if, and <code>} || … {</code> continues as else if or else. An INT repeats the block " +
+      "that many times. A <code>*</code> before a BOOL makes it a while loop.",
+    "A method is a name, parameters and a block. Every parameter has a default, which gives its type, so " +
+      "calls may leave arguments out. <code>:</code> returns a value, and the type of the result is worked " +
+      "out from what is returned.",
+    "An ARRAY holds values of one type; <code>[0 ; n]</code> makes <code>n</code> copies. The library is " +
+      "called on a value after a <code>.</code>, so its names never take one from your program. " +
+      "<code>$</code> of an ARRAY of INT makes text from its bytes, which is why <code>show</code> builds " +
+      "the text itself.",
+    "<code>_</code> is the absence of a value. A variable created with a <code>?</code> may hold it; an " +
+      "ordinary one never does. The only way to take the value out is <code>||</code> with a fallback, so " +
+      "a missing value can never be used by accident.",
+    "A MAP holds values by key, in memory. Reading a key gives an optional, because the key may not be " +
+      "there; assigning <code>_</code> deletes it.",
+    "<code>@</code> reads a whole file, <code>@&gt;&gt;</code> replaces it atomically and " +
+      "<code>@+&gt;&gt;</code> appends to it. <code>@?</code> gives <code>_</code> instead of an error " +
+      "when the file is not there. <code>&lt;&lt;</code> reads a line from the input into a variable of " +
+      "any basic type. (The output below is with <code>Ana</code> typed as the input.)",
+    "A data model describes a record of fixed width; <code>#</code> marks its key. A table is a plain " +
+      "text file, one record per line, with a hash index on disk for reading, writing and deleting by key. " +
+      "Queries like <code>where</code>, <code>sort</code> and <code>sum</code> take an expression of the " +
+      "fields.",
+    "Libraries that ship with the compiler are included with <code>@ \"std:name.nihil\";</code>: " +
+      "<code>std:env.nihil</code> (configuration from <code>.env</code> and the environment), " +
+      "<code>std:json.nihil</code> (writing JSON) and <code>std:mcp.nihil</code> (an MCP server for AI " +
+      "agents). Reading JSON is built into the library: a JSON value stays text, and each call takes a " +
+      "part of it.",
+    "Variables assigned at the top level are <b>globals</b>, and a name that belongs to a global always " +
+      "means that global, even inside a method: there, <code>total = …</code> changes the global instead " +
+      "of creating a local. Give locals names no global uses. Only a parameter may share a global's name, " +
+      "and then it hides the global inside its method.",
+    "A key marked <code>#+</code> is numbered by the table: write a record with key 0 by key " +
+      "(<code>@{}&gt;&gt;</code>) and it gets the next number, which the record then holds. The counter is " +
+      "kept next to the table, so a deleted number is never given again and a second run goes on from " +
+      "where the first stopped. In the IDE, <code>orders.dat</code> then appears under Database, where its " +
+      "records can be filtered, added, changed and deleted.",
+    "There is no database apart from the program and no schema file: <b>the model is the schema</b>, " +
+      "declared in the code, and each model is a type, so the compiler checks every field name. A " +
+      "<b>table</b> is a text file in which every line is one record of the same width: it opens in an " +
+      "editor, goes into git, and record <i>i</i> starts at byte <i>i</i> × the width, so one record is " +
+      "read or changed without loading the rest. Next to it, <code>.nihil-idx</code> (the index of the " +
+      "key) and <code>.nihil-seq</code> (the counter of an automatic key) are caches that are rebuilt when " +
+      "they are missing or out of date.</p><p><b>Relations</b> are keys: a field holds the key of a record " +
+      "in another table (<code>customer</code> below holds a <code>CUSTOMER</code> id). The table does not " +
+      "enforce the link, so the program checks it when it writes (<code>sell</code>), and a <b>join</b> is " +
+      "a lookup by key (<code>CUSTOMER @{s.customer} CUSTOMERS</code>), a few small reads through the " +
+      "index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and " +
+      "<code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> " +
+      "are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of " +
+      "its lines, so the old table no longer reads with the new model. Convert it once, reading it with " +
+      "the old model and writing it with the new one:</p><pre class=\"nihil\">OLD = @[#id: INT(4); name: " +
+      "STRING(12)];\nNEW = @[#id: INT(4); name: STRING(12); city: STRING(14)];\n\nold = OLD @ " +
+      "&quot;customers.dat&quot;;\nnew = [NEW() ; #old];\ni = 0;\n* i &lt; #old { new[i] = NEW(old[i].id, " +
+      "old[i].name, &quot;&quot;); i = i + 1; }\n@&gt;&gt; &quot;customers.dat&quot;, new;               // " +
+      "the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the " +
+      "table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields " +
+      "than the key, and several programs writing one table at the same time (a table is meant for one " +
+      "writer). How fast all this is, from a thousand records to a million: <a " +
+      "href=\"performance.html\">Performance</a>. The full rules are in <a " +
+      "href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1\">SPEC " +
+      "§20</a>."
+];
+JUNK = ["products.dat", "products.dat.nihil-idx", "notes.txt", "orders.dat", "orders.dat.nihil-idx",
+    "orders.dat.nihil-seq", "customers.dat", "customers.dat.nihil-idx", "sales.dat", "sales.dat.nihil-idx",
+    "sales.dat.nihil-seq"];
+
+// what html.escape does: the five characters that would change the page
+escape(raw = "") {
+    : raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#x27;");
+}
+
+// the text without the line breaks at its end
+chomp(text = "") {
+    cut = text;
+    * cut.ends_with("\n") { cut = cut.slice(0, #cut - 1); }
+    : cut;
+}
+
+COMPILER = env("NIHIL", "nihil");
+"build".make_dir();
+OUT_FILE = "build/learn-out.txt";
+ERR_FILE = "build/learn-err.txt";
+TOC = ["" ; #SLUGS];
+BODY = ["" ; #SLUGS];
+k = 0;
+* k < #SLUGS {
+    slug = SLUGS[k];
+    j = 0;
+    * j < #JUNK { (LEARN + "/" + JUNK[j]).remove(); j = j + 1; }
+    started? = [COMPILER, "run", slug + ".nihil"].start(OUT_FILE, ERR_FILE, LEARN);
+    started == _ { !>> "cannot start " + COMPILER + "\n"; :: 1; }
+    child = started || -1;
+    child.write("Ana\n");
+    child.close_input();
+    child.wait() != 0 { !>> slug + " failed: " + (@? ERR_FILE || "") + "\n"; :: 1; }
+    program = chomp(@ (LEARN + "/" + slug + ".nihil"));
+    printed = chomp(@ OUT_FILE);
+    anchor = slug.slice(3);
+    TOC[k] = "<li><a href=\"#" + anchor + "\">" + TITLES[k] + "</a></li>";
+    BODY[k] = "<h2 id=\"" + anchor + "\">" + $(k + 1) + ". " + TITLES[k] + "</h2>\n<p>" + INTROS[k] + "</p>\n" +
+        "<pre class=\"nihil\">" + escape(program) + "</pre>\n<p class=\"out\">Output:</p>\n" +
+        "<pre class=\"output\">" + escape(printed) + "</pre>";
+    k = k + 1;
+}
+OUT_FILE.remove();
+ERR_FILE.remove();
+HEAD =
+    "<!doctype html>\n" +
+    "<html lang=\"en\">\n" +
+    "<head>\n" +
+    "<meta charset=\"utf-8\">\n" +
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+    "<title>Learn Nihil</title>\n" +
+    "<meta name=\"description\" content=\"Nihil in thirteen short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys, modeling data and the standard library.\">\n" +
+    "<link rel=\"icon\" type=\"image/png\" href=\"icon-64.png\">\n" +
+    "<link rel=\"stylesheet\" href=\"style.css\">\n" +
+    "</head>\n" +
+    "<body>\n" +
+    "<nav class=\"top\"><div class=\"wrap\">\n" +
+    "  <a class=\"brand\" href=\"index.html\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"icon-dark-64.png\"><img src=\"icon-64.png\" alt=\"\"></picture>Nihil</a>\n" +
+    "  <a class=\"here\" href=\"learn.html\">Learn</a>\n" +
+    "  <a href=\"library.html\">Library</a>\n" +
+    "  <a href=\"performance.html\">Performance</a>\n" +
+    "  <a href=\"https://github.com/nihillang\">GitHub</a>\n" +
+    "</div></nav>\n" +
+    "<main class=\"doc\"><div class=\"wrap\">\n" +
+    "<h1>Learn Nihil</h1>\n" +
+    "<p>Thirteen short chapters. Every example is a complete program, and the output under it is what it prints.\n" +
+    "The full reference is <a href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md\">SPEC.md</a>.</p>\n" +
+    "<ol class=\"toc\">\n";
+MIDDLE =
+    "\n" +
+    "</ol>\n";
+TAIL =
+    "\n" +
+    "<h2 id=\"next\">Next</h2>\n" +
+    "<p>The <a href=\"library.html\">library reference</a> lists every call on texts, arrays, tables, JSON and maps.\n" +
+    "Questions: <a href=\"mailto:contact@nihil-lang.dev\">contact@nihil-lang.dev</a>.</p>\n" +
+    "</div></main>\n" +
+    "<footer><div class=\"wrap row\"><span>Nihil · MIT License</span><span><a href=\"index.html\">nihil-lang.dev</a></span></div></footer>\n" +
+    "<script src=\"nihil.js\"></script>\n" +
+    "</body>\n" +
+    "</html>\n";
+@>> "site/learn.html", HEAD + TOC.join("\n") + MIDDLE + BODY.join("\n") + TAIL;
+>> "ok " + $#SLUGS + " chapters\n";
