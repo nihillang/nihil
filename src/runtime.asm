@@ -1419,10 +1419,6 @@ rt_alloc:                           ; rcx = n → rax (keeps every register but 
     lea rsi, [rel s_without_memory]
     jmp rt_error
 
-gc_class_size:
-    dq 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072
-    dq 4096, 6144, 8192, 12288, 16384, 24576, 32768
-
 ; r8 = class: puts a new page of free blocks of that class in its list
 ; (collecting first if there is no page left). Keeps every register but rax.
 gc_small_page:
@@ -3828,7 +3824,13 @@ rt_concat:
     ret
 
 ; ---- data ------------------------------------------------------------------
+; Everything from rt_data on is data, and nothing before it is (the Mac's translator turns the
+; code into ARM64 and copies the data as it is).
 align 8
+rt_data:
+gc_class_size:                      ; the collector's size classes (bytes of a small block)
+    dq 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072
+    dq 4096, 6144, 8192, 12288, 16384, 24576, 32768
 pow10_table:                        ; 10^0 … 10^22: every one exact as a double (Clinger's fast path)
     dq 1.0e0, 1.0e1, 1.0e2, 1.0e3, 1.0e4, 1.0e5, 1.0e6, 1.0e7, 1.0e8, 1.0e9, 1.0e10, 1.0e11
     dq 1.0e12, 1.0e13, 1.0e14, 1.0e15, 1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22
