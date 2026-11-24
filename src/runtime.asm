@@ -1897,13 +1897,19 @@ gc_collect:
     pop rax
     ret
 
-; the threshold after a collection: as many new bytes as are in use, at least GC_MIN
+; the threshold after a collection: GC_GROW quarters of the bytes in use (4: as many new bytes as
+; are in use, so the heap reaches about twice what is live), at least GC_MIN
+%ifndef GC_GROW
+%define GC_GROW 4
+%endif
 gc_threshold:
     mov qword [GC_ALLOCATED], 0
 %ifdef GC_STRESS
     mov eax, GC_MIN
 %else
     mov rax, [GC_LIVE]
+    imul rax, rax, GC_GROW
+    shr rax, 2
     cmp rax, GC_MIN
     jae .set
     mov eax, GC_MIN
