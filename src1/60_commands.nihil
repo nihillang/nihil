@@ -895,7 +895,7 @@ increment(k = 0) {
             eb(0x48 | rex_b(r), 0x81, 0xC0 | (r & 7));                         // add r, imm32
             emit_d(v);
         }
-    } || f & FLAG_GLOBAL != 0 {
+    } || f & FLAG_GLOBAL != 0 && f & FLAG_TOP == 0 {
         v == 1 || v == -1 {
             eb(0x48, 0xFF);
             v == 1 { emit(0x04); } || { emit(0x0C); }                         // inc / dec [disp32]

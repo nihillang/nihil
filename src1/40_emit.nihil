@@ -95,7 +95,7 @@ emit_load_var(k = 0) {
         emit_mov_rax_reg(s_end[k]);
         :;
     }
-    s_flags[k] & FLAG_GLOBAL != 0 {
+    s_flags[k] & FLAG_GLOBAL != 0 && s_flags[k] & FLAG_TOP == 0 {
         eb(0x48, 0x8B, 0x04, 0x25);         // mov rax, [disp32]
         emit_d(s_end[k]);
         s_flags[k] & FLAG_OPT != 0 {
@@ -118,7 +118,7 @@ emit_store_var(k = 0) {
         emit_mov_reg_rax(s_end[k]);
         :;
     }
-    s_flags[k] & FLAG_GLOBAL != 0 {
+    s_flags[k] & FLAG_GLOBAL != 0 && s_flags[k] & FLAG_TOP == 0 {
         emit_store_global(s_end[k]);
         s_flags[k] & FLAG_OPT != 0 {
             eb(0x48, 0x89, 0x14, 0x25);     // mov [disp32 + 8], rdx
