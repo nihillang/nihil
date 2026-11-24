@@ -1300,10 +1300,18 @@ handle(c = 0, req = "") {
     path == "/api/file" && method == "GET" {
         rel = req.http_param("path") || "";
         t? = "";
-        safe_rel(rel) && rel.ends_with(".nihil") { t = @? (project + "/" + rel); } || { t = _; }
+        // std:name.nihil: a file of the standard library (SPEC §16), read only (go to definition)
+        std = rel.starts_with("std:");
+        name = rel;
+        std { name = rel.slice(4); }
+        std && safe_rel(name) && !name.contains("/") && name.ends_with(".nihil") {
+            t = @? (DOCS + "/std/" + name);
+        } || !std && safe_rel(rel) && rel.ends_with(".nihil") {
+            t = @? (project + "/" + rel);
+        } || { t = _; }
         t == _ { c.respond(404, "application/json", "{\"error\": \"file not found\"}"); :; }
         c.respond(200, "application/json", "{\"path\": " + q(rel) + ", \"content\": " + q(t || "") + ", \"editable\": "
-            + $editable(project, rel) + ", \"hash\": " + $fnv(t || "") + "}");
+            + $(!std && editable(project, rel)) + ", \"hash\": " + $fnv(t || "") + "}");
         :;
     }
     path == "/api/file" {
