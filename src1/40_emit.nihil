@@ -75,6 +75,7 @@ emit_store_global(a = 0) {
 }
 
 emit_load_var(k = 0) {
+    note_use(k);
     s_flags[k] & FLAG_REG != 0 {
         emit_mov_rax_reg(s_end[k]);
         :;
@@ -97,6 +98,7 @@ emit_load_var(k = 0) {
 }
 
 emit_store_var(k = 0) {
+    note_use(k);
     s_flags[k] & FLAG_REG != 0 {
         emit_mov_reg_rax(s_end[k]);
         :;
