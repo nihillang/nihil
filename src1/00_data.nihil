@@ -188,6 +188,12 @@ s_nparam = [0 ; MAX_SYM];
 s_end = [0 ; MAX_SYM];
 s_extra = [0 ; MAX_SYM];
 s_regs = [0 ; MAX_SYM];   // methods: saved registers (learned in the previous pass)
+s_ord = [0 ; MAX_SYM];    // locals: their place among the method's locals (64: none)
+s_pref = [0 ; MAX_SYM];   // methods: which locals (bits by s_ord) get registers, learned in the
+                          // previous pass from their uses; 0: not known yet, every local may
+decl_w = [0 ; 64];        // the current method's locals: their uses, weighted by loop depth
+n_decl = 0;               // locals created so far in the current method
+loop_depth = 0;           // loops around the code being compiled
 n_sym = 0;
 n_globals = 0;
 

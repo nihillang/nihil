@@ -197,7 +197,9 @@ counted_loop(with_block = true) {
         eb(0x0F, 0x8E);                     // jle rel32
         leave = size_code;
         emit_d(0);
+        loop_depth = loop_depth + 1;
         with_block { block(); } || { cmd_call(); }
+        loop_depth = loop_depth - 1;
         eb(0x48 | rex_b(r), 0xFF, 0xC8 | (r & 7));                          // dec r
         emit_jmp_to(top);
         patch_here(leave);
@@ -213,7 +215,9 @@ counted_loop(with_block = true) {
     eb(0x00, 0x0F, 0x8E);                   // 0 ; jle rel32
     leave = size_code;
     emit_d(0);
+    loop_depth = loop_depth + 1;
     with_block { block(); } || { cmd_call(); }
+    loop_depth = loop_depth - 1;
     eb(0x48, 0xFF, 0x8D);                   // dec qword [rbp+disp32]
     emit_d(d);
     emit_jmp_to(top);
@@ -273,6 +277,7 @@ conditional() {
 // * cond { … }    top: cond ; test ; jz end ; … ; jmp top ; end:
 cmd_while() {
     next_token();
+    loop_depth = loop_depth + 1;            // the condition runs on every turn too
     top = size_code;
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
@@ -288,6 +293,7 @@ cmd_while() {
     block();
     emit_jmp_to(top);
     patch_here(leave);
+    loop_depth = loop_depth - 1;
 }
 
 // -----------------------------------------------------------------------------
@@ -337,6 +343,10 @@ cmd_method(k = 0) {
     candidates = 0;
     demand = 0;
     base_frame = 8 * limit_regs;
+    n_decl = 0;
+    i = 0;
+    64 { decl_w[i] = 0; i = i + 1; }
+    loop_depth = 0;
 
     next_token();                        // name → "("
     next_token();
@@ -414,6 +424,11 @@ cmd_method(k = 0) {
     method_current = -1;
     optimize && demand != s_regs[k] {
         s_regs[k] = demand;                // the next pass saves other registers
+        altered = true;
+    }
+    pm = prefer_locals();
+    optimize && pm != s_pref[k] {
+        s_pref[k] = pm;                    // the next pass gives the registers to other locals
         altered = true;
     }
     limit_regs = 0;
