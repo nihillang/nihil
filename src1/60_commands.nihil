@@ -192,12 +192,15 @@ counted_loop(with_block = true) {
     r >= 0 {
         // counter in a register: mov r, rax ; top: test r, r ; jle end ; … ; dec r ; jmp top
         emit_mov_reg_rax(r);
+        align_loop();
         top = size_code;
         eb(0x48 | (rex_b(r) * 5), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
         eb(0x0F, 0x8E);                     // jle rel32
         leave = size_code;
         emit_d(0);
+        loop_depth = loop_depth + 1;
         with_block { block(); } || { cmd_call(); }
+        loop_depth = loop_depth - 1;
         eb(0x48 | rex_b(r), 0xFF, 0xC8 | (r & 7));                          // dec r
         emit_jmp_to(top);
         patch_here(leave);
@@ -207,13 +210,16 @@ counted_loop(with_block = true) {
     }
     d = new_slot();
     emit_store_local(d);
+    align_loop();
     top = size_code;
     eb(0x48, 0x83, 0xBD);                   // cmp qword [rbp+disp32], imm8
     emit_d(d);
     eb(0x00, 0x0F, 0x8E);                   // 0 ; jle rel32
     leave = size_code;
     emit_d(0);
+    loop_depth = loop_depth + 1;
     with_block { block(); } || { cmd_call(); }
+    loop_depth = loop_depth - 1;
     eb(0x48, 0xFF, 0x8D);                   // dec qword [rbp+disp32]
     emit_d(d);
     emit_jmp_to(top);
@@ -273,6 +279,8 @@ conditional() {
 // * cond { … }    top: cond ; test ; jz end ; … ; jmp top ; end:
 cmd_while() {
     next_token();
+    loop_depth = loop_depth + 1;            // the condition runs on every turn too
+    align_loop();
     top = size_code;
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
@@ -288,6 +296,7 @@ cmd_while() {
     block();
     emit_jmp_to(top);
     patch_here(leave);
+    loop_depth = loop_depth - 1;
 }
 
 // -----------------------------------------------------------------------------
@@ -337,6 +346,10 @@ cmd_method(k = 0) {
     candidates = 0;
     demand = 0;
     base_frame = 8 * limit_regs;
+    n_decl = 0;
+    i = 0;
+    64 { decl_w[i] = 0; i = i + 1; }
+    loop_depth = 0;
 
     next_token();                        // name → "("
     next_token();
@@ -414,6 +427,11 @@ cmd_method(k = 0) {
     method_current = -1;
     optimize && demand != s_regs[k] {
         s_regs[k] = demand;                // the next pass saves other registers
+        altered = true;
+    }
+    pm = prefer_locals();
+    optimize && pm != s_pref[k] {
+        s_pref[k] = pm;                    // the next pass gives the registers to other locals
         altered = true;
     }
     limit_regs = 0;
@@ -816,6 +834,10 @@ assign(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
         expect(';', "';'");
         :;
     }
+    verify && t == TYPE_INT && s_type[k] == TYPE_INT && reg_update(k) {
+        expect(';', "';'");
+        :;
+    }
     verify && t != TYPE_UNKNOWN && s_type[k] != 0 && s_type[k] != t {
         restore_pos(pi, pl, pn, pli);
         error_start();
@@ -873,7 +895,7 @@ increment(k = 0) {
             eb(0x48 | rex_b(r), 0x81, 0xC0 | (r & 7));                         // add r, imm32
             emit_d(v);
         }
-    } || f & FLAG_GLOBAL != 0 {
+    } || f & FLAG_GLOBAL != 0 && f & FLAG_TOP == 0 {
         v == 1 || v == -1 {
             eb(0x48, 0xFF);
             v == 1 { emit(0x04); } || { emit(0x0C); }                         // inc / dec [disp32]
@@ -896,6 +918,58 @@ increment(k = 0) {
         }
     }
     : true;
+}
+
+// x = x op y with x in a register (op: + - & | ^), emitted as
+//   … y in rax … ; mov rcx, rax ; mov rax, rX ; op rax, rcx    (y not simple)
+//   mov rax, rX ; y into rcx ; op rax, rcx                      (y simple)
+// becomes op rX, rax / y into rcx ; op rX, rcx: the variable changes in its register, with no
+// copies through rax (which cost a cycle each where the processor does not drop them). true if
+// it was rewritten (the value is already in x: nothing to store).
+reg_update(k = 0) {
+    a = start_assignment;
+    !optimize || a < 0 || s_flags[k] & FLAG_REG == 0 { : false; }
+    r = s_end[k];
+    e = size_code;
+    e - a < 6 { : false; }
+    o = code[e - 2];
+    code[e - 3] != 0x48 || code[e - 1] != 0xC8 { : false; }
+    o != 0x01 && o != 0x29 && o != 0x21 && o != 0x09 && o != 0x31 { : false; }
+    lx = 0x48;                              // mov rax, rX: REX.W (+ REX.R from r12 on) 89 C0|(r&7)<<3
+    r >= 8 { lx = 0x4C; }
+    lm = 0xC0 | ((r & 7) << 3);
+    rex = 0x48 | rex_b(r);
+    // y not simple: … ; mov rcx, rax ; mov rax, rX ; op rax, rcx
+    e - a >= 9 && code[e - 9] == 0x48 && code[e - 8] == 0x89 && code[e - 7] == 0xC1
+        && code[e - 6] == lx && code[e - 5] == 0x89 && code[e - 4] == lm
+        && last_target <= e - 9 && (n_fix == 0 || fix_pos[n_fix - 1] < e - 9) {
+        size_code = e - 9;
+        eb(rex, o, 0xC0 | (r & 7));         // op rX, rax
+        : true;
+    }
+    // y simple: mov rax, rX ; y into rcx ; op rax, rcx (the whole assignment)
+    code[a] == lx && code[a + 1] == 0x89 && code[a + 2] == lm
+        && last_target <= a && (n_fix == 0 || fix_pos[n_fix - 1] < a) {
+        n = e - 3 - (a + 3);                // y's load
+        !rcx_load(a + 3, n) { : false; }
+        i = 0;
+        n { code[a + i] = code[a + 3 + i]; i = i + 1; }
+        size_code = a + n;
+        eb(rex, o, 0xC8 | (r & 7));         // op rX, rcx
+        : true;
+    }
+    : false;
+}
+
+// code[a .. a + n) is exactly one simple load into rcx, as reload_in_rcx makes it
+rcx_load(a = 0, n = 0) {
+    n == 5 && code[a] == 0xB9 { : true; }                                            // mov ecx, imm32
+    n == 7 && code[a] == 0x48 && code[a + 1] == 0xC7 && code[a + 2] == 0xC1 { : true; } // mov rcx, simm32
+    n == 10 && code[a] == 0x48 && code[a + 1] == 0xB9 { : true; }                    // mov rcx, imm64
+    n == 8 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x0C && code[a + 3] == 0x25 { : true; }
+    n == 7 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x8D { : true; }  // mov rcx, [rbp + d]
+    n == 3 && (code[a] == 0x48 || code[a] == 0x4C) && code[a + 1] == 0x89 && code[a + 2] & 0xC7 == 0xC1 { : true; }
+    : false;
 }
 
 global_early(k = 0, pi = 0, pl = 0, pn = 0, pli = 0) {

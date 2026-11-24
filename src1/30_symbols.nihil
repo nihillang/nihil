@@ -138,6 +138,7 @@ new_symbol(start = 0, n = 0, t = 0) {
     k = n_sym;
     s_ofs[k] = start;
     s_len[k] = n;
+    s_ord[k] = 64;
     s_type[k] = t;
     s_flags[k] = 0;
     s_nparam[k] = 0;
@@ -158,9 +159,20 @@ create_global(start = 0, n = 0, t = 0) {
 // local: takes a new frame slot (rbp - 8 × slot)
 // local: in a register (optimized, inside a method) or in a frame slot
 create_local(start = 0, n = 0, t = 0) {
-    r = take_register();
+    o = 64;
+    method_current >= 0 {
+        o = n_decl;
+        n_decl = n_decl + 1;
+        o >= 64 { o = 64; }
+    }
+    r = -1;
+    // the locals most used in loops get the registers (s_pref, from the previous pass)
+    p = 0;
+    method_current >= 0 { p = s_pref[method_current]; }
+    p == 0 || o < 64 && (p >> o) & 1 != 0 { r = take_register(); }
     r >= 0 {
         k = new_symbol(start, n, t);
+        s_ord[k] = o;
         s_end[k] = r;
         s_flags[k] = FLAG_REG;
         : k;
@@ -168,7 +180,58 @@ create_local(start = 0, n = 0, t = 0) {
     d = new_slot();
     k = new_symbol(start, n, t);
     s_end[k] = d;
+    s_ord[k] = o;
     : k;
+}
+
+// a use of the variable k: a local's weight grows 8 times with each loop around it
+note_use(k = 0) {
+    f = s_flags[k];
+    f & FLAG_GLOBAL != 0 {
+        method_current >= 0 {
+            g_meth_cur[k] = true;
+            f & FLAG_TOP != 0 { g_redo = true; }    // kept at the top level, but a method uses it
+        } || {
+            d = loop_depth;
+            d > 6 { d = 6; }
+            g_w[k] = g_w[k] + (1 << (d * 3));
+        }
+        :;
+    }
+    o = s_ord[k];
+    o < 64 && method_current >= 0 {
+        d = loop_depth;
+        d > 6 { d = 6; }
+        decl_w[o] = decl_w[o] + (1 << (d * 3));
+    }
+}
+
+// at the end of a method: the locals with the 5 largest weights (and any as heavy) → their bits
+prefer_locals() {
+    n = n_decl;
+    n > 64 { n = 64; }
+    n <= 5 { : 0; }                         // registers enough for all of them
+    // the 5th largest weight
+    t = 0;
+    j = 0;
+    * j < 5 {
+        best = -1;
+        i = 0;
+        * i < n {
+            w = decl_w[i];
+            (j == 0 || w < t) && w > best { best = w; }
+            i = i + 1;
+        }
+        best < 0 { j = 5; } || { t = best; j = j + 1; }
+    }
+    m = 0;
+    i = 0;
+    * i < n {
+        decl_w[i] >= t && decl_w[i] > 0 { m = m | (1 << i); }
+        i = i + 1;
+    }
+    m == 0 { : 0; }
+    : m;
 }
 
 // counts a register candidate and returns a free one, or -1
