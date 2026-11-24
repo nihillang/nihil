@@ -12,7 +12,7 @@
 #
 # The same script for every platform: on Linux x86_64 the compiler writes the executable itself;
 # on macOS (Apple silicon) its x86-64 code is translated to ARM64 and linked by clang with the
-# runtime (docs/macos-arm64.md), which needs the Xcode Command Line Tools (clang, objdump, python3).
+# runtime (docs/macos-arm64.md), which needs the Xcode Command Line Tools (clang, objdump).
 set -eu
 
 # where this installation is: bin/nihil, resolving the symbolic link that put it on the PATH
@@ -202,13 +202,13 @@ compile() {
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
     if [ -x "$lib/nihilc1-native" ]; then
-        # macOS: the compiler emits x86-64 code and a map; translate.py makes ARM64 assembly of it
+        # macOS: the compiler emits x86-64 code and a map; the translator makes ARM64 assembly of it
         if ! printf '%s\n' "$option-map $src" | "$lib/nihilc1-native" > "$work/p.x86" 2> "$work/p.map"; then
             grep -v '^nihil-map' "$work/p.map" >&2 || true
             exit 1
         fi
         grep -v '^nihil-map' "$work/p.map" >&2 || true
-        python3 "$lib/translate.py" "$work/p.x86" "$work/p.map" "$work/p.s" 2> "$work/t.err" || { cat "$work/t.err" >&2; exit 1; }
+        printf '%s\n%s\n%s\n' "$work/p.x86" "$work/p.map" "$work/p.s" | "$lib/translate" 2> "$work/t.err" || { cat "$work/t.err" >&2; exit 1; }
         clang -arch arm64 -o "$out" "$work/p.s" "$lib/rt.o"
     else
         # Linux x86_64: the compiler writes the ELF executable to its standard output

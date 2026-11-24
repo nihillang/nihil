@@ -1,6 +1,6 @@
 // a record query (sum, sort, where) in a method with many locals: on the Mac the translator
 // computed the address of a local past the 32nd into the register that held the value to store,
-// so the query's hidden total started with an address (fixed in macos/translate.py: x15)
+// so the query's hidden total started with an address (fixed in macos/translate.nihil: x15)
 RANKED = @[ean: STRING(24); revenue: FLOAT(20); qty: FLOAT(20); companies: INT(4); stores: INT(6)];
 m10() {
     v0 = 0; v1 = 1; v2 = 2; v3 = 3; v4 = 4; v5 = 5; v6 = 6; v7 = 7; v8 = 8; v9 = 9;

@@ -1,0 +1,1598 @@
+// =============================================================================
+// macos/translate.nihil — Nihil on macOS (Apple silicon): the x86-64 code the compiler emits, and the
+// Linux runtime in front of it (src/runtime.asm), translated into ARM64 assembly that clang links with
+// arm64/rt.c (the system calls and the emulated stack). See docs/macos-arm64.md.
+//
+// Input (one per line, on the standard input): the program (.x86, written with -map), the map (the
+// line "nihil-map RUNTIME_END CODE_END SIZE") and the assembly to write.
+//
+// The program's code is a closed set of forms (a stack machine), translated instruction by instruction:
+//   - registers: rax rcx rdx rsi rdi → x9 x10 x11 x12 x13; rbx r12 r13 r14 r15 (the optimizer's) →
+//     x19 x20 x21 x22 x23; rbp → x29; rsp → x28: the x86 stack is emulated exactly (8-byte slots) in
+//     its own area, so parameters sit where the code expects them; the real sp stays 16-aligned.
+//   - globals (absolute addresses in the data segment) → _nh_globals_start + offset, through x27;
+//     constants (rip-relative) → the constants copied after the code (Lconst).
+//   - runtime calls → bl to the translated runtime's routine (its call label, which pushes the return
+//     address on the x86 stack, as call does); the collector scans that stack from x28 to the top the
+//     start gives it (PLAT_STACK_TOP).
+//   - flags: cmp/test → cmp/tst, ucomisd → fcmp; the conditions are mapped for each.
+//
+// The runtime uses any instruction, so each one is translated with its exact meaning:
+//   - registers as above, and r8 r9 r10 → x24 x25 x26, r11 → x7 (a system call destroys r11 anyway);
+//     32-bit operations on w registers (they zero the upper half, as on x86); 8- and 16-bit writes
+//     change only those bits (bfi).
+//   - memory: [base + index*scale + disp]; an absolute address in the data segment is relative to
+//     x27, as the globals are; so is an immediate that is such an address (mov rsi, OUTPUT_BUF).
+//   - flags: set in ARM only when a later instruction reads them. A compare, a subtraction and a
+//     negation map the conditions directly; a logical operation is followed by cmp #0. A carry read
+//     after an addition, an inc or a dec is refused, and so is a flag read across a call, a ret or a
+//     jump: translation stops if the runtime ever does one.
+//   - calls: each routine has two labels, L_x for jumps and L_x_c for calls, which pushes the return
+//     address on the x86 stack (x28) as call does; ret pops it.
+//   - syscall → Lsys: the Linux registers (rax, rdi, rsi, rdx, r10, r8, r9) to nh_linux_syscall.
+//   - rep movs/stos, repne scas, rep cmps → loops; div after xor edx, edx and idiv after cqo →
+//     udiv/sdiv (a 128-bit dividend is not translated).
+// The disassembly comes from clang and objdump (the Xcode Command Line Tools).
+// =============================================================================
+
+BASE = 0x400000;
+HEADER = 0xB0;
+OFS_GLOBALS = 0x21000;
+BASE_DATA = 0x40000000;
+GLOBALS = BASE_DATA + OFS_GLOBALS;
+DATA_LIMIT = BASE_DATA + 0x10000000;        // an absolute value up to here is an address in the data
+
+// the program's registers
+P64 = {"rax": "x9", "rcx": "x10", "rdx": "x11", "rsi": "x12", "rdi": "x13", "rbx": "x19", "r12": "x20",
+       "r13": "x21", "r14": "x22", "r15": "x23", "rbp": "x29", "rsp": "x28"};
+P32 = {"eax": "rax", "ecx": "rcx", "edx": "rdx", "esi": "rsi", "edi": "rdi", "ebx": "rbx", "r12d": "r12",
+       "r13d": "r13", "r14d": "r14", "r15d": "r15"};
+P8 = {"al": "rax", "cl": "rcx", "dl": "rdx", "bl": "rbx"};
+INT_COND = {"e": "eq", "z": "eq", "ne": "ne", "nz": "ne", "l": "lt", "le": "le", "g": "gt", "ge": "ge",
+            "b": "lo", "be": "ls", "a": "hi", "ae": "hs", "s": "mi", "ns": "pl"};
+FP_COND = {"e": "eq", "z": "eq", "ne": "ne", "nz": "ne", "a": "gt", "ae": "ge", "b": "lt", "be": "le",
+           "p": "vs", "np": "vc"};
+
+// the runtime's registers
+X64 = {"rax": "x9", "rcx": "x10", "rdx": "x11", "rsi": "x12", "rdi": "x13", "rbx": "x19", "r12": "x20",
+       "r13": "x21", "r14": "x22", "r15": "x23", "rbp": "x29", "rsp": "x28",
+       "r8": "x24", "r9": "x25", "r10": "x26", "r11": "x7"};
+R32 = {"eax": "rax", "ecx": "rcx", "edx": "rdx", "esi": "rsi", "edi": "rdi", "ebx": "rbx", "ebp": "rbp",
+       "r8d": "r8", "r9d": "r9", "r10d": "r10", "r11d": "r11", "r12d": "r12", "r13d": "r13", "r14d": "r14",
+       "r15d": "r15"};
+R16 = {"ax": "rax", "cx": "rcx", "dx": "rdx", "bx": "rbx", "si": "rsi", "di": "rdi"};
+R8 = {"al": "rax", "cl": "rcx", "dl": "rdx", "bl": "rbx", "sil": "rsi", "dil": "rdi",
+      "r8b": "r8", "r9b": "r9", "r10b": "r10", "r11b": "r11", "r12b": "r12", "r13b": "r13", "r14b": "r14",
+      "r15b": "r15"};
+// conditions after a compare/subtraction (and after a logical operation followed by cmp #0)
+COND = {"e": "eq", "z": "eq", "ne": "ne", "nz": "ne", "l": "lt", "le": "le", "g": "gt", "ge": "ge",
+        "nl": "ge", "ng": "le", "nge": "lt", "nle": "gt",
+        "b": "lo", "c": "lo", "nae": "lo", "be": "ls", "na": "ls", "a": "hi", "nbe": "hi",
+        "ae": "hs", "nb": "hs", "nc": "hs", "s": "mi", "ns": "pl", "o": "vs", "no": "vc"};
+CARRY = ["b", "c", "nae", "be", "na", "a", "nbe", "ae", "nb", "nc"];
+SIGNED_CMP = ["l", "le", "g", "ge", "nl", "ng", "nge", "nle"];
+TRANSPARENT = ["mov", "movabs", "movzx", "movsx", "movsxd", "lea", "push", "pop", "nop", "prefetcht0",
+               "cqo", "bswap", "not", "xchg", "movq", "cvtsi2sd", "divsd"];
+HEXITS = "0123456789abcdef";
+
+// ---- failures: a translation that cannot be made stops the instruction (a protected call) ----
+BOOM = [0];
+ERR = "";
+HEADER_READ = false;
+// the instruction cannot be translated faithfully
+unsupported(why = "") { ERR = why; boom = BOOM[1]; }
+// a read of the executable's ELF header, which the Mac's translation does not have: the code that does
+// it runs only on Linux (the Mac gives PLAT_DATA_END), so it becomes a trap
+code_header() { HEADER_READ = true; ERR = "the ELF header"; boom = BOOM[1]; }
+
+// ---- the output: one line each, in an ARRAY that doubles ----
+LINES = ["" ; 65536];
+NLINES = 0;
+line(text = "") {
+    NLINES == #LINES {
+        bigger = ["" ; #LINES * 2];
+        j = 0;
+        * j < NLINES { bigger[j] = LINES[j]; j = j + 1; }
+        LINES = bigger;
+    }
+    LINES[NLINES] = text;
+    NLINES = NLINES + 1;
+}
+emit(text = "") { line("    " + text); }
+
+// ---- text ----
+hex(n = 0) {
+    n == 0 { : "0"; }
+    digits = [0 ; 16];
+    k = 16;
+    v = n;
+    * v != 0 { k = k - 1; digits[k] = HEXITS[v & 15]; v = (v >> 4) & 0x0FFFFFFFFFFFFFFF; }
+    : ($digits).slice(k);
+}
+is_hex(c = 0) { : c >= '0' && c <= '9' || c >= 'a' && c <= 'f'; }
+is_digit(c = 0) { : c >= '0' && c <= '9'; }
+is_space(c = 0) { : c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 11 || c == 12; }
+is_word(c = 0) { : c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_'; }
+is_alnum_lower(c = 0) { : c >= '0' && c <= '9' || c >= 'a' && c <= 'z'; }
+
+// the first word (split at spaces and tabs) and what follows it
+first_word(text = "") {
+    a = 0;
+    * a < #text && is_space(text[a]) { a = a + 1; }
+    b = a;
+    * b < #text && !is_space(text[b]) { b = b + 1; }
+    : text.slice(a, b);
+}
+after_word(text = "") {
+    a = 0;
+    * a < #text && is_space(text[a]) { a = a + 1; }
+    * a < #text && !is_space(text[a]) { a = a + 1; }
+    * a < #text && is_space(text[a]) { a = a + 1; }
+    : text.slice(a);
+}
+no_spaces(text = "") { : text.replace(" ", ""); }
+
+// -?(0x[0-9a-f]+ | [0-9]+): an immediate as objdump writes it
+is_imm(text = "") {
+    a = 0;
+    #text > 0 && text[0] == '-' { a = 1; }
+    #text - a > 2 && text[a] == '0' && text[a + 1] == 'x' {
+        k = a + 2;
+        * k < #text { !is_hex(text[k]) { : false; } k = k + 1; }
+        : true;
+    }
+    #text - a == 0 { : false; }
+    k = a;
+    * k < #text { !is_digit(text[k]) { : false; } k = k + 1; }
+    : true;
+}
+// its value (as Python's int(text, 0), in 64 bits); a sign + is allowed
+parse_int(text = "") {
+    a = 0;
+    neg = false;
+    #text > 0 && (text[0] == '-' || text[0] == '+') { neg = text[0] == '-'; a = 1; }
+    v = 0;
+    #text - a > 2 && text[a] == '0' && text[a + 1] == 'x' {
+        k = a + 2;
+        * k < #text {
+            c = text[k];
+            c <= '9' { v = (v << 4) | (c - '0'); } || { v = (v << 4) | (c - 'a' + 10); }
+            k = k + 1;
+        }
+    } || {
+        k = a;
+        * k < #text { v = v * 10 + (text[k] - '0'); k = k + 1; }
+    }
+    neg { : -v; }
+    : v;
+}
+// Python's v > 0x7FFFFFFF for an immediate's text: a number from 2^63 up wraps to a negative here
+above_int32(text = "", v = 0) { : v > 0x7FFFFFFF || v < 0 && !text.starts_with("-"); }
+
+// [ … ] of a memory operand, without spaces
+inner(op = "") {
+    a? = op.find("[");
+    b = #op - 1;
+    * b >= 0 && op[b] != ']' { b = b - 1; }
+    : op.slice((a || 0) + 1, b).replace(" ", "");
+}
+// the operands, split at the commas outside [ ]
+split_ops(rest = "") {
+    #rest == 0 { : ["" ; 0]; }
+    n = 1;
+    depth = 0;
+    k = 0;
+    * k < #rest { rest[k] == '[' { depth = depth + 1; } rest[k] == ']' { depth = depth - 1; } rest[k] == ',' && depth == 0 { n = n + 1; } k = k + 1; }
+    parts = ["" ; n];
+    depth = 0;
+    at = 0;
+    from = 0;
+    k = 0;
+    * k < #rest {
+        rest[k] == '[' { depth = depth + 1; }
+        rest[k] == ']' { depth = depth - 1; }
+        rest[k] == ',' && depth == 0 { parts[at] = rest.slice(from, k).trim(); at = at + 1; from = k + 1; }
+        k = k + 1;
+    }
+    parts[at] = rest.slice(from).trim();
+    : parts;
+}
+// the first n of a list
+take(list = [""], n = 0) {
+    part = ["" ; n];
+    k = 0;
+    * k < n { part[k] = list[k]; k = k + 1; }
+    : part;
+}
+lg(size = 0) { size == 1 { : 0; } size == 2 { : 1; } size == 4 { : 2; } : 3; }
+
+// ---- the executable's bytes ----
+DATA = "";
+u32(at = 0) { : DATA[at] | (DATA[at + 1] << 8) | (DATA[at + 2] << 16) | (DATA[at + 3] << 24); }
+u64(at = 0) { : u32(at) | (u32(at + 4) << 32); }
+bytes_lines(from = 0, to = 0) {
+    k = from;
+    * k < to {
+        e = k + 32;
+        e > to { e = to; }
+        parts = ["" ; e - k];
+        j = k;
+        * j < e { parts[j - k] = $DATA[j]; j = j + 1; }
+        line("    .byte " + parts.join(", "));
+        k = e;
+    }
+}
+
+// the target of a relative call or jump (rel8 or rel32), or -1
+s32(raw = "", at = 0) {
+    v = raw[at] | (raw[at + 1] << 8) | (raw[at + 2] << 16) | (raw[at + 3] << 24);
+    v >= 0x80000000 { : v - 0x100000000; }
+    : v;
+}
+s8(raw = "", at = 0) { raw[at] >= 128 { : raw[at] - 256; } : raw[at]; }
+branch_target(addr = 0, raw = "") {
+    op = raw[0];
+    op == 0xE8 || op == 0xE9 { : addr + #raw + s32(raw, 1); }
+    op == 0xEB || op >= 0x70 && op <= 0x7F { : addr + #raw + s8(raw, 1); }
+    op == 0x0F && #raw > 1 && raw[1] >= 0x80 && raw[1] <= 0x8F { : addr + #raw + s32(raw, 2); }
+    : -1;
+}
+
+// ---- disassembly: clang assembles the bytes (.incbin) and objdump prints them ----
+D_ADDR = [0];
+D_RAW = [""];
+D_TEXT = [""];
+D_N = 0;
+tool(cmd = [""], out = "") {
+    started? = cmd.start(out, "", "");
+    started == _ { !>> "translate: cannot start " + cmd[0] + "\n"; :: 1; }
+    p = started || -1;
+    p.close_input();
+    p.wait() != 0 { !>> "translate: " + cmd[0] + " failed\n"; :: 1; }
+}
+disassemble(prog = "", start = 0, end = 0, tmp = "") {
+    @>> tmp + ".s", ".text\n.globl _code\n_code:\n.incbin \"" + prog + "\", " + $start + ", " + $(end - start) + "\n";
+    tool(["clang", "-target", "x86_64-apple-macos", "-c", tmp + ".s", "-o", tmp + ".o"], "");
+    tool(["objdump", "-d", "--x86-asm-syntax=intel", tmp + ".o"], tmp + ".txt");
+    rows = (@ (tmp + ".txt")).split("\n");
+    (tmp + ".s").remove();
+    (tmp + ".o").remove();
+    (tmp + ".txt").remove();
+    D_ADDR = [0 ; #rows];
+    D_RAW = ["" ; #rows];
+    D_TEXT = ["" ; #rows];
+    D_N = 0;
+    r = 0;
+    * r < #rows {
+        row = rows[r];
+        r = r + 1;
+        k = 0;
+        * k < #row && is_space(row[k]) { k = k + 1; }
+        a = k;
+        * k < #row && is_hex(row[k]) { k = k + 1; }
+        k > a && k < #row && row[k] == ':' {
+            off = parse_int("0x" + row.slice(a, k));
+            k = k + 1;
+            w = k;
+            * k < #row && is_space(row[k]) { k = k + 1; }
+            nbytes = 0;
+            bs = [0 ; #row];
+            * k > w && k + 2 < #row && is_hex(row[k]) && is_hex(row[k + 1]) && (row[k + 2] == ' ' || row[k + 2] == '\t') {
+                bs[nbytes] = parse_int("0x" + row.slice(k, k + 2));
+                nbytes = nbytes + 1;
+                k = k + 3;
+            }
+            nbytes > 0 {
+                * k < #row && is_space(row[k]) { k = k + 1; }
+                text = row.slice(k);
+                hash? = text.find("#");
+                hash != _ { text = text.slice(0, hash || 0); }
+                D_ADDR[D_N] = BASE + start + off;
+                D_RAW[D_N] = ($bs).slice(0, nbytes);
+                D_TEXT[D_N] = text.trim();
+                D_N = D_N + 1;
+            }
+        }
+    }
+}
+
+// ---- shared by both translations ----
+imm(reg = "", value = 0) {
+    value == 0 { emit("mov " + reg + ", #0"); :; }
+    first = true;
+    k = 0;
+    * k < 4 {
+        part = (value >> (16 * k)) & 0xFFFF;
+        part != 0 || first && k == 3 {
+            first { emit("movz " + reg + ", #" + $part + ", lsl #" + $(16 * k)); } || { emit("movk " + reg + ", #" + $part + ", lsl #" + $(16 * k)); }
+            first = false;
+        }
+        k = k + 1;
+    }
+    first { emit("mov " + reg + ", #0"); }
+}
+add_imm(dst = "", src = "", value = 0) {
+    value >= 0 && value <= 4095 { emit("add " + dst + ", " + src + ", #" + $value); :; }
+    value >= -4095 && value < 0 { emit("sub " + dst + ", " + src + ", #" + $(-value)); :; }
+    imm("x17", value);
+    emit("add " + dst + ", " + src + ", x17");
+}
+flag_reader(mn = "") { : mn.starts_with("j") && mn != "jmp" || mn.starts_with("set") || mn.starts_with("cmov"); }
+cond_of(mn = "") {
+    mn.starts_with("set") { : mn.slice(3); }
+    mn.starts_with("cmov") { : mn.slice(4); }
+    mn.starts_with("j") { : mn.slice(1); }
+    : "";
+}
+wreg(xr = "") { : "w" + xr.slice(1); }
+last_char(text = "") { : text.slice(#text - 1); }
+
+// =============================================================================
+// the program
+// =============================================================================
+RUNTIME_END = 0;
+CODE_END = 0;
+CONST_START = 0;
+FLAGS = "int";
+RT_CALLS = {0: true ; 1024};
+P_ADDR = [0];
+P_RAW = [""];
+P_TEXT = [""];
+P_N = 0;
+
+preg(name = "") {
+    P64.contains(name) { : P64[name] || ""; }
+    P32.contains(name) { : P64[P32[name] || ""] || ""; }
+    P8.contains(name) { : P64[P8[name] || ""] || ""; }
+    unsupported("register " + name);
+    : "";
+}
+
+// a memory operand → base register, offset, index register ("" for none) and scale
+PA_BASE = "";
+PA_OFF = 0;
+PA_INDEX = "";
+PA_SCALE = 1;
+p_address(operand = "") {
+    t = inner(operand);
+    #t > 2 && t.starts_with("0x") && is_imm(t) {           // an absolute address: a global
+        a = parse_int(t);
+        off = a - GLOBALS;
+        off < 0 { unsupported("absolute address below the globals: " + t); }
+        PA_BASE = "x27"; PA_OFF = off; PA_INDEX = ""; PA_SCALE = 1;
+        :;
+    }
+    t.starts_with("rip") && (t.slice(3, 6) == "+0x" || t.slice(3, 6) == "-0x") && is_imm(t.slice(4)) {
+        unsupported("rip-relative memory access");
+    }
+    // base(+d*index)?([+-]0x… | [+-]digits)?
+    k = 0;
+    * k < #t && is_alnum_lower(t[k]) { k = k + 1; }
+    base = t.slice(0, k);
+    scale = "";
+    index = "";
+    #base > 0 && k + 3 < #t && t[k] == '+' && is_digit(t[k + 1]) && t[k + 2] == '*' && is_alnum_lower(t[k + 3]) {
+        e = k + 3;
+        * e < #t && is_alnum_lower(t[e]) { e = e + 1; }
+        scale = t.slice(k + 1, k + 2);
+        index = t.slice(k + 3, e);
+        k = e;
+    }
+    disp = t.slice(k);
+    good = #base > 0 && (#disp == 0 || (disp[0] == '+' || disp[0] == '-') && is_imm(disp.slice(1)));
+    !good {
+        plus? = t.find("+");
+        p = plus || -1;
+        p > 0 && is_alnum_lower(t[0]) {
+            left = t.slice(0, p);
+            right = t.slice(p + 1);
+            ok = #right > 0;
+            j = 0;
+            * j < #left { !is_alnum_lower(left[j]) { ok = false; } j = j + 1; }
+            j = 0;
+            * j < #right { !is_alnum_lower(right[j]) { ok = false; } j = j + 1; }
+            ok {                                              // [rax+rcx]
+                PA_BASE = preg(left); PA_OFF = 0; PA_INDEX = preg(right); PA_SCALE = 1;
+                :;
+            }
+        }
+        unsupported("memory operand " + operand);
+    }
+    PA_OFF = 0;
+    #disp > 0 { PA_OFF = parse_int(disp); }
+    PA_BASE = preg(base);
+    PA_INDEX = "";
+    PA_SCALE = 1;
+    #index > 0 { PA_INDEX = preg(index); PA_SCALE = parse_int(scale); }
+}
+
+// x15 = base + off, for an address ARM cannot reach with an immediate. x15 holds nothing else: x16 and
+// x17 carry values (a constant to store, an operand)
+addr_reg(base = "", off = 0) {
+    off >= -4095 && off <= 4095 { add_imm("x15", base, off); } || {
+        imm("x15", off);
+        emit("add x15, " + base + ", x15");
+    }
+    : "x15";
+}
+
+// an ARM memory operand for a load/store of size bytes (PM_U: ldur/stur)
+PM_U = false;
+p_mem(operand = "", size = 8) {
+    PM_U = false;
+    p_address(operand);
+    base = PA_BASE;
+    off = PA_OFF;
+    #PA_INDEX > 0 {
+        index = PA_INDEX;
+        shift = lg(PA_SCALE);
+        off != 0 { base = addr_reg(base, off); }
+        shift != 0 && shift != lg(size) {
+            emit("add x17, " + base + ", " + index + ", lsl #" + $shift);
+            : "[x17]";
+        }
+        shift != 0 { : "[" + base + ", " + index + ", lsl #" + $shift + "]"; }
+        : "[" + base + ", " + index + "]";
+    }
+    off >= 0 && off <= 4095 * size && off % size == 0 {
+        off != 0 { : "[" + base + ", #" + $off + "]"; }
+        : "[" + base + "]";
+    }
+    off >= -256 && off <= 255 { PM_U = true; : "[" + base + ", #" + $off + "]"; }
+    : "[" + addr_reg(base, off) + "]";
+}
+p_load(dst = "", operand = "", size = 8) {
+    m = p_mem(operand, size);
+    reg = dst;
+    size != 8 { reg = wreg(dst); }
+    PM_U {
+        size == 8 { emit("ldur " + reg + ", " + m); } || { emit("ldurb " + reg + ", " + m); }
+    } || {
+        size == 8 { emit("ldr " + reg + ", " + m); } || { emit("ldrb " + reg + ", " + m); }
+    }
+}
+p_store(src = "", operand = "", size = 8) {
+    m = p_mem(operand, size);
+    reg = src;
+    size != 8 { reg = wreg(src); }
+    PM_U {
+        size == 8 { emit("stur " + reg + ", " + m); } || { emit("sturb " + reg + ", " + m); }
+    } || {
+        size == 8 { emit("str " + reg + ", " + m); } || { emit("strb " + reg + ", " + m); }
+    }
+}
+// the value of a source operand in a register (the register itself, or scratch)
+operand_value(op = "", scratch = "x16") {
+    o = op.trim();
+    is_imm(o) { imm(scratch, parse_int(o)); : scratch; }
+    o.contains("[") { p_load(scratch, o, 8); : scratch; }
+    : preg(o);
+}
+CONST_LABEL = "";
+CONST_OFF = 0;
+const_address(target = 0) {
+    target >= BASE + CONST_START { CONST_LABEL = "Lconst"; CONST_OFF = target - (BASE + CONST_START); :; }
+    BASE + RUNTIME_END <= target && target < BASE + CODE_END { CONST_LABEL = "L_" + hex(target); CONST_OFF = 0; :; }
+    unsupported("rip-relative address 0x" + hex(target));
+}
+push(reg = "") { emit("str " + reg + ", [x28, #-8]!"); }
+pop(reg = "") { emit("ldr " + reg + ", [x28], #8"); }
+// the next instruction reads the flags (a jump, set or move on a condition)
+consumer(nxt = "") {
+    #nxt == 0 { : false; }
+    : flag_reader(first_word(nxt));
+}
+pcond(c = "") {
+    FLAGS == "fp" { : FP_COND[c] || ""; }
+    : INT_COND[c] || "";
+}
+
+p_translate(i = 0) {
+    addr = P_ADDR[i];
+    raw = P_RAW[i];
+    text = P_TEXT[i];
+    nxt = "";
+    i + 1 < P_N { nxt = P_TEXT[i + 1]; }
+    mn = first_word(text);
+    ops = split_ops(after_word(text));
+    target = branch_target(addr, raw);
+
+    mn == "push" {
+        is_imm(ops[0]) {                                    // push imm (sign-extended to 64 bits)
+            v = parse_int(ops[0]);
+            above_int32(ops[0], v) { v = v - (1 << 32); }
+            imm("x16", v);
+            push("x16");
+        } || ops[0].contains("[") {
+            p_load("x16", ops[0], 8);
+            push("x16");
+        } || {
+            push(preg(ops[0]));
+        }
+        :;
+    }
+    mn == "pop" { pop(preg(ops[0])); :; }
+    mn == "call" {
+        target < BASE + RUNTIME_END {                       // into the runtime (its jump table)
+            RT_CALLS[target] = true;
+            emit("bl L_" + hex(target) + "_c");
+        } || {
+            emit("bl L_" + hex(target));
+        }
+        :;
+    }
+    mn == "ret" { pop("x30"); emit("ret"); :; }
+    mn == "leave" { emit("mov x28, x29"); pop("x29"); :; }
+    mn == "jmp" { emit("b L_" + hex(target)); :; }
+    mn.starts_with("j") { emit("b." + pcond(mn.slice(1)) + " L_" + hex(target)); :; }
+    mn.starts_with("set") { emit("cset " + preg(ops[0]) + ", " + pcond(mn.slice(3))); :; }
+    mn.starts_with("cmov") {
+        c = pcond(mn.slice(4));
+        d = preg(ops[0]);
+        s = operand_value(ops[1], "x16");
+        emit("csel " + d + ", " + s + ", " + d + ", " + c);
+        :;
+    }
+    mn == "cmp" || mn == "test" {
+        FLAGS = "int";
+        a = "x16";
+        ops[0].contains("[") { p_load("x16", ops[0], 8); } || { a = preg(ops[0]); }
+        b = operand_value(ops[1], "x17");
+        mn == "cmp" { emit("cmp " + a + ", " + b); :; }
+        w = "x";
+        P32.contains(ops[0]) || #ops > 1 && P32.contains(ops[1]) { w = "w"; }
+        emit("tst " + w + a.slice(1) + ", " + w + b.slice(1));
+        :;
+    }
+    mn == "ucomisd" {
+        FLAGS = "fp";
+        emit("fcmp d" + last_char(ops[0]) + ", d" + last_char(ops[1]));
+        :;
+    }
+    mn == "mov" || mn == "movabs" { p_mov(ops); :; }
+    mn == "movzx" {
+        d = preg(ops[0]);
+        ops[1].contains("[") { p_load(d, ops[1], 1); } || { emit("and " + d + ", " + preg(ops[1]) + ", #0xff"); }
+        :;
+    }
+    mn == "lea" {
+        d = preg(ops[0]);
+        t = inner(ops[1]);
+        t.starts_with("rip") && (t.slice(3, 6) == "+0x" || t.slice(3, 6) == "-0x") && is_imm(t.slice(4)) {
+            const_address(addr + #raw + parse_int(t.slice(3)));
+            emit("adrp " + d + ", " + CONST_LABEL + "@PAGE");
+            emit("add " + d + ", " + d + ", " + CONST_LABEL + "@PAGEOFF");
+            CONST_OFF != 0 { add_imm(d, d, CONST_OFF); }
+            :;
+        }
+        p_address(ops[1]);
+        #PA_INDEX > 0 {
+            emit("add " + d + ", " + PA_BASE + ", " + PA_INDEX + ", lsl #" + $lg(PA_SCALE));
+            PA_OFF != 0 { add_imm(d, d, PA_OFF); }
+        } || {
+            add_imm(d, PA_BASE, PA_OFF);
+        }
+        :;
+    }
+    mn == "add" || mn == "sub" || mn == "and" || mn == "or" || mn == "xor" || mn == "imul" || mn == "shl" || mn == "sar" || mn == "shr" {
+        arith(mn, ops, nxt);
+        :;
+    }
+    mn == "inc" { arith("add", [ops[0], "1"], nxt); :; }
+    mn == "dec" { arith("sub", [ops[0], "1"], nxt); :; }
+    mn == "neg" {
+        d = preg(ops[0]);
+        consumer(nxt) { emit("negs " + d + ", " + d); FLAGS = "int"; } || { emit("neg " + d + ", " + d); }
+        :;
+    }
+    mn == "not" { d = preg(ops[0]); emit("mvn " + d + ", " + d); :; }
+    mn == "btc" {
+        d = preg(ops[0]);
+        imm("x16", 1 << parse_int(ops[1]));
+        emit("eor " + d + ", " + d + ", x16");
+        :;
+    }
+    mn == "movq" {
+        a = ops[0];
+        b = ops[1];
+        a.starts_with("xmm") && b.starts_with("xmm") { emit("fmov d" + last_char(a) + ", d" + last_char(b)); }
+        || a.starts_with("xmm") && b.contains("[") { p_load("x16", b, 8); emit("fmov d" + last_char(a) + ", x16"); }
+        || a.starts_with("xmm") { emit("fmov d" + last_char(a) + ", " + preg(b)); }
+        || a.contains("[") { emit("fmov x16, d" + last_char(b)); p_store("x16", a, 8); }
+        || { emit("fmov " + preg(a) + ", d" + last_char(b)); }
+        :;
+    }
+    mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd" {
+        op = "fadd";
+        mn == "subsd" { op = "fsub"; } mn == "mulsd" { op = "fmul"; } mn == "divsd" { op = "fdiv"; }
+        emit(op + " d" + last_char(ops[0]) + ", d" + last_char(ops[0]) + ", d" + last_char(ops[1]));
+        :;
+    }
+    mn == "cvtsi2sd" { emit("scvtf d" + last_char(ops[0]) + ", " + preg(ops[1])); :; }
+    mn == "cvttsd2si" {
+        // x86 gives the smallest INT for NaN and out of range; ARM saturates (and gives 0 for NaN)
+        d = preg(ops[0]);
+        s = "d" + last_char(ops[1]);
+        emit("fcvtzs " + d + ", " + s);
+        imm("x16", 1 << 63);
+        imm("x17", (1 << 63) - 1);
+        emit("cmp " + d + ", x17");
+        emit("csel " + d + ", x16, " + d + ", eq");
+        emit("fcmp " + s + ", " + s);
+        emit("csel " + d + ", x16, " + d + ", vs");
+        :;
+    }
+    mn == "int3" || mn == "nop" { :; }
+    unsupported(text);
+}
+
+p_mov(ops = [""]) {
+    d = ops[0];
+    s = ops[1];
+    d.contains("[") {
+        size = 8;
+        d.starts_with("byte") { size = 1; }
+        v = "x16";
+        is_imm(s) { imm("x16", parse_int(s)); } || { v = preg(s); }
+        p_store(v, d, size);
+        :;
+    }
+    dr = preg(d);
+    s.contains("[") { p_load(dr, s, 8); :; }
+    is_imm(s) {
+        v = parse_int(s);
+        P32.contains(d) { v = v & 0xFFFFFFFF; }
+        imm(dr, v);
+        :;
+    }
+    sr = preg(s);
+    P32.contains(d) { emit("mov w" + dr.slice(1) + ", w" + sr.slice(1)); :; }
+    dr != sr { emit("mov " + dr + ", " + sr); }
+}
+
+arith(mn = "", ops = [""], nxt = "") {
+    flags = consumer(nxt);
+    ops[0].contains("[") {                                 // read, change, write back (add/inc/dec in memory)
+        p_load("x14", ops[0], 8);
+        b = operand_value(ops[1], "x17");
+        mn != "add" && mn != "sub" { unsupported(mn + " in memory"); }
+        s = "";
+        flags { s = "s"; }
+        emit(mn + s + " x14, x14, " + b);
+        p_store("x14", ops[0], 8);
+        flags { FLAGS = "int"; }
+        :;
+    }
+    d = preg(ops[0]);
+    w = P32.contains(ops[0]) || P8.contains(ops[0]);
+    P8.contains(ops[0]) && (mn == "and" || mn == "or") {
+        b = preg(ops[1]);
+        mn == "and" { emit("and " + d + ", " + d + ", " + b); } || { emit("orr " + d + ", " + d + ", " + b); }
+        :;
+    }
+    w && mn == "xor" && ops[1] == ops[0] { emit("mov " + d + ", #0"); :; }
+    w && mn == "xor" {
+        imm("x16", parse_int(ops[1]));
+        emit("eor w" + d.slice(1) + ", w" + d.slice(1) + ", w16");
+        :;
+    }
+    mn == "shl" || mn == "sar" || mn == "shr" {
+        op = "lsl";
+        mn == "sar" { op = "asr"; } mn == "shr" { op = "lsr"; }
+        ops[1] == "cl" { emit(op + " " + d + ", " + d + ", x10"); } || { emit(op + " " + d + ", " + d + ", #" + $parse_int(ops[1])); }
+        :;
+    }
+    mn == "imul" {
+        #ops == 3 {
+            s = operand_value(ops[1], "x16");
+            imm("x17", parse_int(ops[2]));
+            emit("mul " + d + ", " + s + ", x17");
+        } || {
+            s = operand_value(ops[1], "x16");
+            emit("mul " + d + ", " + d + ", " + s);
+        }
+        :;
+    }
+    src = ops[1];
+    (mn == "add" || mn == "sub") && is_imm(src) && parse_int(src) >= 0 && parse_int(src) <= 4095 {
+        s = "";
+        flags { s = "s"; }
+        emit(mn + s + " " + d + ", " + d + ", #" + $parse_int(src));
+    } || {
+        b = operand_value(src, "x16");
+        op = mn;
+        mn == "or" { op = "orr"; } mn == "xor" { op = "eor"; }
+        flags && (op == "add" || op == "sub" || op == "and") { op = op + "s"; }
+        emit(op + " " + d + ", " + d + ", " + b);
+    }
+    flags {
+        mn != "add" && mn != "sub" && mn != "and" { emit("cmp " + d + ", #0"); }
+        FLAGS = "int";
+    }
+}
+
+// =============================================================================
+// the runtime
+// =============================================================================
+RT_START = 0;
+RT_DATA = 0;
+RT_END = 0;
+KIND = "";                // what set the flags: sub, add, incdec, logic, ovf, bit, zero ("" for nothing)
+USES_SYS = false;
+LOCAL = 0;
+RT_CALL_TARGETS = {0: true ; 1024};
+R_ADDR = [0];
+R_RAW = [""];
+R_TEXT = [""];
+R_N = 0;
+
+size_of(op = "") {
+    op.starts_with("byte ptr") { : 1; }
+    op.starts_with("word ptr") { : 2; }
+    op.starts_with("dword ptr") { : 4; }
+    op.starts_with("qword ptr") { : 8; }
+    : 0;
+}
+reg_size(name = "") {
+    X64.contains(name) { : 8; }
+    R32.contains(name) { : 4; }
+    R16.contains(name) { : 2; }
+    R8.contains(name) { : 1; }
+    : 0;
+}
+local_label() { LOCAL = LOCAL + 1; : "Lrl" + $LOCAL; }
+
+// the 64-bit ARM register under any x86 name
+rx(name = "") {
+    n = name;
+    R32.contains(n) { n = R32[n] || ""; }
+    R16.contains(n) { n = R16[n] || ""; }
+    R8.contains(n) { n = R8[n] || ""; }
+    X64.contains(n) { : X64[n] || ""; }
+    unsupported("register " + name);
+    : "";
+}
+// a value (an x register, in its low bits) into the x86 register name, by its size
+write_reg(name = "", value = "") {
+    d = rx(name);
+    n = reg_size(name);
+    n == 8 { value != d { emit("mov " + d + ", " + value); } :; }
+    n == 4 { emit("mov " + wreg(d) + ", " + wreg(value)); :; }      // zeroes the upper half, as x86 does
+    n == 2 { emit("bfi " + d + ", " + value + ", #0, #16"); :; }
+    emit("bfi " + d + ", " + value + ", #0, #8");
+}
+
+// the address of a memory operand → base x register, index x register ("" for none), shift, disp
+RA_BASE = "";
+RA_INDEX = "";
+RA_SHIFT = 0;
+RA_DISP = 0;
+r_address(op = "") {
+    t = inner(op);
+    #t >= 3 && t[1] == 's' && t[2] == ':' && t[0] >= 'a' && t[0] <= 'z' { t = t.slice(3); }
+    t.starts_with("rip") { unsupported("rip-relative memory (lea it first): " + op); }
+    base = "";
+    index = "";
+    shift = 0;
+    disp = 0;
+    k = 0;
+    * k < #t {
+        sign = "";
+        t[k] == '+' || t[k] == '-' { sign = t.slice(k, k + 1); k = k + 1; }
+        e = k;
+        * e < #t && t[e] != '+' && t[e] != '-' { e = e + 1; }
+        term = t.slice(k, e);
+        k = e;
+        #term >= 3 && is_digit(term[0]) && term[1] == '*' {
+            index = rx(term.slice(2));
+            shift = lg(parse_int(term.slice(0, 1)));
+        } || is_imm(term) {
+            disp = disp + parse_int(sign + term);
+        } || base == "" {
+            sign == "-" { unsupported("negative register in " + op); }
+            base = rx(term);
+        } || index == "" {
+            index = rx(term);
+        } || {
+            unsupported("memory operand " + op);
+        }
+    }
+    BASE_DATA <= disp && disp < DATA_LIMIT {               // in the data segment: relative to x27
+        disp = disp - GLOBALS;
+        base == "" { base = "x27"; }
+        || index == "" { index = base; shift = 0; base = "x27"; }
+        || { emit("add x15, x27, " + base); base = "x15"; }
+    } || base == "" && index == "" {
+        BASE <= disp && disp < BASE + 0x1000 { code_header(); }     // the ELF header: read only on Linux
+        unsupported("absolute address outside the data: " + op);
+    } || base == "" {
+        base = index;
+        index = "";
+        shift != 0 { unsupported("scaled index without a base: " + op); }
+    }
+    RA_BASE = base; RA_INDEX = index; RA_SHIFT = shift; RA_DISP = disp;
+}
+
+// an ARM addressing for a load or store of size bytes (RM_U: ldur/stur)
+RM_U = false;
+r_mem(op = "", size = 8) {
+    RM_U = false;
+    r_address(op);
+    base = RA_BASE;
+    index = RA_INDEX;
+    shift = RA_SHIFT;
+    disp = RA_DISP;
+    index != "" {
+        disp != 0 { add_imm("x15", base, disp); base = "x15"; }
+        shift != 0 && shift != lg(size) {
+            emit("add x15, " + base + ", " + index + ", lsl #" + $shift);
+            : "[x15]";
+        }
+        shift != 0 { : "[" + base + ", " + index + ", lsl #" + $shift + "]"; }
+        : "[" + base + ", " + index + "]";
+    }
+    disp == 0 { : "[" + base + "]"; }
+    disp >= 0 && disp <= 4095 * size && disp % size == 0 { : "[" + base + ", #" + $disp + "]"; }
+    disp >= -256 && disp <= 255 { RM_U = true; : "[" + base + ", #" + $disp + "]"; }
+    add_imm("x15", base, disp);
+    : "[x15]";
+}
+// dst_x (an x register) = the size bytes at op, zero-extended (or sign-extended)
+r_load(dst = "", op = "", size = 8, signed = false) {
+    m = r_mem(op, size);
+    ins = "ldr";
+    size == 1 { ins = "ldrb"; } size == 2 { ins = "ldrh"; }
+    reg = dst;
+    signed && size < 8 {
+        size == 1 { ins = "ldrsb"; } size == 2 { ins = "ldrsh"; } size == 4 { ins = "ldrsw"; }
+    } || size != 8 {
+        reg = wreg(dst);
+    }
+    RM_U { ins = ins.replace("ldr", "ldur"); }
+    emit(ins + " " + reg + ", " + m);
+}
+r_store(src = "", op = "", size = 8) {
+    m = r_mem(op, size);
+    ins = "str";
+    size == 1 { ins = "strb"; } size == 2 { ins = "strh"; }
+    reg = src;
+    size != 8 { reg = wreg(src); }
+    RM_U { ins = ins.replace("str", "stur"); }
+    emit(ins + " " + reg + ", " + m);
+}
+
+// an operand's value in an x register (zero-extended to its size, or sign-extended)
+r_value(operand = "", size = 8, scratch = "", signed = false) {
+    op = operand.trim();
+    is_imm(op) {
+        v = parse_int(op);
+        BASE_DATA <= v && v < DATA_LIMIT && size == 8 {    // an address in the data segment
+            add_imm(scratch, "x27", v - GLOBALS);
+            : scratch;
+        }
+        size < 8 {
+            v = v & ((1 << (8 * size)) - 1);
+            signed && (v >> (8 * size - 1)) != 0 { v = v - (1 << (8 * size)); }
+        }
+        imm(scratch, v);
+        : scratch;
+    }
+    op.contains("[") { r_load(scratch, op, size, signed); : scratch; }
+    xr = rx(op);
+    n = reg_size(op);
+    n == 8 { : xr; }
+    op == "ah" { unsupported("ah"); }
+    ext = "b";
+    n == 4 { ext = "w"; } n == 2 { ext = "h"; }
+    signed {
+        n < 4 { emit("sxt" + ext + " " + scratch + ", " + wreg(xr)); } || { emit("sxtw " + scratch + ", " + wreg(xr)); }
+    } || n == 4 {
+        emit("mov " + wreg(scratch) + ", " + wreg(xr));
+    } || {
+        emit("uxt" + ext + " " + wreg(scratch) + ", " + wreg(xr));
+    }
+    : scratch;
+}
+op_size(ops = [""]) {
+    k = 0;
+    * k < #ops {
+        o = ops[k];
+        n = 0;
+        o.contains("[") { n = size_of(o); } || { n = reg_size(o.trim()); }
+        n != 0 { : n; }
+        k = k + 1;
+    }
+    : 8;
+}
+
+set_kind(k = "") { KIND = k; }
+rcond(c = "", mn_text = "") {
+    KIND == "" { unsupported("flags read with no instruction that set them before: " + mn_text); }
+    KIND == "ovf" {
+        c != "o" && c != "no" { unsupported("after imul only o/no: " + mn_text); }
+        c == "o" { : "ne"; }
+        : "eq";
+    }
+    KIND == "bit" {
+        c == "b" || c == "c" { : "ne"; }
+        c == "ae" || c == "nc" || c == "nb" { : "eq"; }
+        unsupported("after bt only b/ae: " + mn_text);
+    }
+    KIND == "zero" && c != "e" && c != "z" && c != "ne" && c != "nz" { unsupported("only e/ne here: " + mn_text); }
+    (KIND == "add" || KIND == "incdec") && CARRY.contains(c) {
+        KIND == "add" && (c == "b" || c == "c" || c == "nae") { : "cs"; }
+        KIND == "add" && (c == "ae" || c == "nb" || c == "nc") { : "cc"; }
+        unsupported("a carry read after an addition, inc or dec: " + mn_text);
+    }
+    : COND[c] || "";
+}
+
+// the flags instruction i sets are read later: the instructions after it, through those that leave the
+// flags as they are, up to one that reads them (true) or sets them, calls, returns or jumps (false)
+needs_flags(i = 0) {
+    j = i + 1;
+    last = i + 40;
+    last > R_N { last = R_N; }
+    * j < last {
+        mn = first_word(R_TEXT[j]);
+        flag_reader(mn) { : true; }
+        !TRANSPARENT.contains(mn) { : false; }
+        j = j + 1;
+    }
+    : false;
+}
+
+// the instruction before i that decides rdx for a division, nearest first: "" if none
+div_setter(i = 0) {
+    k = i - 1;
+    * k >= 0 && k > i - 8 {
+        p = R_TEXT[k];
+        q = p.replace(" ", "").replace("\t", "");
+        q == "xoredx,edx" || q == "xorrdx,rdx" || q == "cqo" { : q; }
+        w = first_word(p);
+        r = after_word(p);
+        writes = false;
+        w0 = 0;
+        * w0 < #p && is_word(p[w0]) { w0 = w0 + 1; }
+        w0 > 0 && w0 < #p && is_space(p[w0]) {
+            regs = ["rdx", "edx", "dx", "dl"];
+            j = 0;
+            * j < #regs {
+                rg = regs[j];
+                r.starts_with(rg) && (#r == #rg || !is_word(r[#rg])) { writes = true; }
+                j = j + 1;
+            }
+        }
+        writes || w == "call" || w == "syscall" || w == "mul" || w == "div" || w == "idiv" || w == "pop" { : ""; }
+        w == "jmp" || w == "ret" || flag_reader(w) && p.starts_with("j") { : ""; }
+        k = k - 1;
+    }
+    : "";
+}
+
+r_translate(i = 0) {
+    addr = R_ADDR[i];
+    raw = R_RAW[i];
+    text = R_TEXT[i];
+    nxt = "";
+    i + 1 < R_N { nxt = R_TEXT[i + 1]; }
+    F = needs_flags(i);
+    target = branch_target(addr, raw);
+    mn = first_word(text);
+    rest = after_word(text);
+    mn == "rep" || mn == "repne" || mn == "repe" { string_op(mn, rest); :; }
+    ops = split_ops(rest);
+    n = op_size(ops);
+
+    mn == "syscall" { USES_SYS = true; emit("bl Lsys"); KIND = ""; :; }
+    mn == "call" { emit("bl L_" + hex(target) + "_c"); KIND = ""; :; }
+    mn == "ret" { emit("ldr x30, [x28], #8"); emit("ret"); KIND = ""; :; }
+    mn == "jmp" {
+        rest.contains("[") {                               // jmp [mem]: an address the program gave (an ARM label)
+            r_load("x16", rest, 8, false);
+            emit("br x16");
+        } || {
+            emit("b L_" + hex(target));
+        }
+        :;
+    }
+    flag_reader(mn) && mn.starts_with("j") { emit("b." + rcond(cond_of(mn), text) + " L_" + hex(target)); :; }
+    mn.starts_with("set") {
+        emit("cset w16, " + rcond(cond_of(mn), text));
+        write_reg(ops[0], "x16");
+        :;
+    }
+    mn.starts_with("cmov") {
+        c = rcond(cond_of(mn), text);
+        s = r_value(ops[1], n, "x16", false);
+        d = rx(ops[0]);
+        n == 4 { emit("csel " + wreg(d) + ", " + wreg(s) + ", " + wreg(d) + ", " + c); } || { emit("csel " + d + ", " + s + ", " + d + ", " + c); }
+        :;
+    }
+    mn == "push" {
+        s = "x16";
+        is_imm(ops[0]) {
+            v = parse_int(ops[0]);
+            above_int32(ops[0], v) { v = v - (1 << 32); }
+            imm("x16", v);
+        } || {
+            s = r_value(ops[0], 8, "x16", false);
+        }
+        emit("str " + s + ", [x28, #-8]!");
+        :;
+    }
+    mn == "pop" { emit("ldr " + rx(ops[0]) + ", [x28], #8"); :; }
+    mn == "mov" || mn == "movabs" { r_mov(ops); :; }
+    mn == "movzx" || mn == "movsxd" || mn == "movsx" {
+        src_n = reg_size(ops[1]);
+        ops[1].contains("[") { src_n = size_of(ops[1]); }
+        v = r_value(ops[1], src_n, "x16", mn != "movzx");
+        write_reg(ops[0], v);
+        :;
+    }
+    mn == "lea" { r_lea(addr, raw, ops); :; }
+    mn == "add" || mn == "sub" || mn == "and" || mn == "or" || mn == "xor" || mn == "cmp" || mn == "test" || mn == "adc" || mn == "sbb" {
+        alu(mn, ops, n, F, nxt, false);
+        :;
+    }
+    mn == "inc" { alu("add", [ops[0], "1"], n, F, nxt, true); :; }
+    mn == "dec" { alu("sub", [ops[0], "1"], n, F, nxt, true); :; }
+    mn == "neg" {
+        F { unary(ops[0], n, "negs"); set_kind("sub"); } || { unary(ops[0], n, "neg"); }
+        :;
+    }
+    mn == "not" { unary(ops[0], n, "mvn"); :; }
+    mn == "shl" || mn == "shr" || mn == "sar" || mn == "sal" { shift_op(mn, ops, n, F); :; }
+    mn == "imul" { r_imul(ops, n, F); :; }
+    mn == "mul" {
+        s = r_value(ops[0], 8, "x16", false);
+        emit("umulh x17, x9, " + s);
+        emit("mul x9, x9, " + s);
+        emit("mov x11, x17");
+        KIND = "";
+        :;
+    }
+    mn == "div" || mn == "idiv" {
+        // the dividend's upper half (rdx) must be known: the last instruction before that writes rdx is
+        // xor edx, edx (div) or cqo (idiv); then a 64-bit division is exact
+        setter = div_setter(i);
+        mn == "div" && setter != "xoredx,edx" && setter != "xorrdx,rdx" { unsupported("div without xor edx, edx before it: " + text); }
+        mn == "idiv" && setter != "cqo" { unsupported("idiv without cqo before it: " + text); }
+        s = r_value(ops[0], 8, "x16", false);
+        op = "sdiv";
+        mn == "div" { op = "udiv"; }
+        emit(op + " x17, x9, " + s);
+        emit("msub x11, x17, " + s + ", x9");
+        emit("mov x9, x17");
+        KIND = "";
+        :;
+    }
+    mn == "cqo" { emit("asr x11, x9, #63"); :; }
+    mn == "bsr" {
+        s = r_value(ops[1], 8, "x16", false);
+        F { emit("cmp " + s + ", #0"); set_kind("zero"); }
+        emit("clz x17, " + s);
+        emit("mov x16, #63");
+        emit("sub " + rx(ops[0]) + ", x16, x17");
+        :;
+    }
+    mn == "bt" || mn == "bts" || mn == "btr" || mn == "btc" {
+        d = rx(ops[0]);
+        !is_imm(ops[1]) { unsupported("bt with a register bit: " + text); }
+        imm("x16", 1 << parse_int(ops[1]));
+        F { emit("tst " + d + ", x16"); set_kind("bit"); }
+        mn == "bts" { emit("orr " + d + ", " + d + ", x16"); }
+        mn == "btr" { emit("bic " + d + ", " + d + ", x16"); }
+        mn == "btc" { emit("eor " + d + ", " + d + ", x16"); }
+        :;
+    }
+    mn == "bswap" {
+        d = rx(ops[0]);
+        reg_size(ops[0]) == 4 { emit("rev " + wreg(d) + ", " + wreg(d)); } || { emit("rev " + d + ", " + d); }
+        :;
+    }
+    mn == "xchg" {
+        #ops == 2 && (ops[0] == "ah" && ops[1] == "al" || ops[0] == "al" && ops[1] == "ah") {
+            emit("rev16 w16, w9");
+            emit("bfi x9, x16, #0, #16");
+            :;
+        }
+        a = rx(ops[0]);
+        b = rx(ops[1]);
+        reg_size(ops[0]) == 8 && reg_size(ops[1]) == 8 {
+            emit("mov x16, " + a);
+            emit("mov " + a + ", " + b);
+            emit("mov " + b + ", x16");
+            :;
+        }
+        unsupported(text);
+    }
+    mn.starts_with("prefetch") {
+        r_address(ops[0]);
+        RA_INDEX == "" && RA_DISP >= 0 && RA_DISP <= 32760 && RA_DISP % 8 == 0 {
+            emit("prfm pldl1keep, [" + RA_BASE + ", #" + $RA_DISP + "]");
+        }
+        :;
+    }
+    mn == "cvtsi2sd" { emit("scvtf d" + ops[0].slice(3) + ", " + r_value(ops[1], 8, "x16", false)); :; }
+    mn == "divsd" || mn == "mulsd" || mn == "addsd" || mn == "subsd" {
+        arm = "fdiv";
+        mn == "mulsd" { arm = "fmul"; } mn == "addsd" { arm = "fadd"; } mn == "subsd" { arm = "fsub"; }
+        d = "d" + ops[0].slice(3);
+        s = "";
+        ops[1].contains("[") {
+            m = r_mem(ops[1], 8);
+            RM_U { emit("ldur d16, " + m); } || { emit("ldr d16, " + m); }
+            s = "d16";
+        } || {
+            s = "d" + ops[1].slice(3);
+        }
+        emit(arm + " " + d + ", " + d + ", " + s);
+        :;
+    }
+    mn == "movq" {
+        a = ops[0];
+        b = ops[1];
+        a.starts_with("xmm") && !b.starts_with("xmm") && !b.contains("[") { emit("fmov d" + a.slice(3) + ", " + rx(b)); :; }
+        b.starts_with("xmm") && !a.starts_with("xmm") && !a.contains("[") { emit("fmov " + rx(a) + ", d" + b.slice(3)); :; }
+        unsupported(text);
+    }
+    mn == "nop" || mn == "int3" || mn == "endbr64" { :; }
+    mn == "clc" || mn == "stc" || mn == "cmc" { unsupported("the carry as an answer (rewrite the runtime to use a register): " + text); }
+    unsupported(text);
+}
+
+r_mov(ops = [""]) {
+    d = ops[0];
+    s = ops[1];
+    d.contains("[") {
+        n = size_of(d);
+        n == 0 { n = reg_size(s); }
+        is_imm(s) {
+            v = parse_int(s);
+            n == 8 && BASE_DATA <= v && v < DATA_LIMIT { add_imm("x16", "x27", v - GLOBALS); } || {
+                n < 8 { v = v & ((1 << (8 * n)) - 1); }
+                imm("x16", v);
+            }
+            r_store("x16", d, n);
+        } || {
+            s == "ah" { unsupported("ah"); }
+            r_store(rx(s), d, n);
+        }
+        :;
+    }
+    n = reg_size(d);
+    s.contains("[") {
+        n == 8 || n == 4 { r_load(rx(d), s, n, false); } || {
+            r_load("x16", s, n, false);
+            write_reg(d, "x16");
+        }
+        :;
+    }
+    is_imm(s) {
+        v = parse_int(s);
+        (n == 4 || n == 8) && BASE_DATA <= v && v < DATA_LIMIT {
+            // an address in the data segment (nasm writes mov rdi, OUTPUT_BUF as mov edi, …: 32 bits zero
+            // the upper half, so it is the whole address): in the Mac's data area
+            add_imm(rx(d), "x27", v - GLOBALS);
+            :;
+        }
+        n == 4 { v = v & 0xFFFFFFFF; }
+        n >= 4 { imm(rx(d), v); } || {
+            imm("x16", v);
+            write_reg(d, "x16");
+        }
+        :;
+    }
+    write_reg(d, r_value(s, reg_size(s), "x16", false));
+}
+
+r_lea(addr = 0, raw = "", ops = [""]) {
+    d = ops[0];
+    t = inner(ops[1]);
+    t.starts_with("rip") && (t.slice(3, 6) == "+0x" || t.slice(3, 6) == "-0x") && is_imm(t.slice(4)) {
+        target = addr + #raw + parse_int(t.slice(3));
+        label = "";
+        off = 0;
+        RT_DATA <= target && target < RT_END { label = "Lrtdata"; off = target - RT_DATA; }
+        || RT_START <= target && target < RT_DATA { label = "L_" + hex(target); }
+        || { const_address(target); label = CONST_LABEL; off = CONST_OFF; }
+        emit("adrp x16, " + label + "@PAGE");
+        emit("add x16, x16, " + label + "@PAGEOFF");
+        off != 0 { add_imm("x16", "x16", off); }
+        write_reg(d, "x16");
+        :;
+    }
+    // [scale*index + disp], no base
+    terms = t.replace("-", "+-").split("+");
+    scaled = 0;
+    other = 0;
+    disp = 0;
+    idx = "";
+    k = 0;
+    * k < #terms {
+        term = terms[k];
+        bare = term;
+        bare.starts_with("-") { bare = bare.slice(1); }
+        #bare >= 3 && is_digit(bare[0]) && bare[1] == '*' { scaled = scaled + 1; #idx == 0 { idx = bare; } }
+        || is_imm(bare) { disp = disp + parse_int(term); }
+        || #bare > 0 { other = other + 1; }
+        k = k + 1;
+    }
+    scaled > 0 && other == 0 {
+        emit("lsl x16, " + rx(idx.slice(2)) + ", #" + $lg(parse_int(idx.slice(0, 1))));
+        disp != 0 { add_imm("x16", "x16", disp); }
+        write_reg(d, "x16");
+        :;
+    }
+    r_address(ops[1]);
+    RA_INDEX != "" {
+        RA_SHIFT != 0 { emit("add x16, " + RA_BASE + ", " + RA_INDEX + ", lsl #" + $RA_SHIFT); } || { emit("add x16, " + RA_BASE + ", " + RA_INDEX); }
+        RA_DISP != 0 { add_imm("x16", "x16", RA_DISP); }
+    } || {
+        add_imm("x16", RA_BASE, RA_DISP);
+    }
+    write_reg(d, "x16");
+}
+
+unary(op = "", n = 8, ins = "") {
+    op.contains("[") {
+        r_load("x14", op, n, false);
+        d = "w14";
+        n == 8 { d = "x14"; }
+        emit(ins + " " + d + ", " + d);
+        r_store("x14", op, n);
+        :;
+    }
+    xr = rx(op);
+    n == 8 { emit(ins + " " + xr + ", " + xr); :; }
+    n == 4 { emit(ins + " " + wreg(xr) + ", " + wreg(xr)); :; }
+    unsupported("8/16-bit " + ins + " ?, ?");
+}
+
+// w(r) when wide is false: the 32-bit name of an x register
+ww(r = "", wide = true) { wide { : r; } : wreg(r); }
+
+alu(mn = "", ops = [""], n = 8, F = false, nxt = "", incdec = false) {
+    dst = ops[0];
+    signed = false;
+    F && #nxt > 0 {
+        c = "";
+        flag_reader(first_word(nxt)) { c = cond_of(first_word(nxt)); }
+        signed = SIGNED_CMP.contains(c) || c == "s" || c == "ns" || c == "o" || c == "no";
+    }
+    mn == "cmp" || mn == "test" || dst.contains("[") || n < 4 {
+        // operate in scratch registers: a in x14, b in x16/x17
+        a = "x14";
+        dst.contains("[") { r_load("x14", dst, n, signed && n < 8 && mn == "cmp"); } || { a = r_value(dst, n, "x14", signed && mn == "cmp"); }
+        b = r_value(ops[1], n, "x17", signed && mn == "cmp");
+        wide = n == 8 || signed && n < 8 && mn == "cmp";
+        mn == "cmp" { emit("cmp " + ww(a, wide) + ", " + ww(b, wide)); set_kind("sub"); :; }
+        mn == "test" {
+            a == b { emit("cmp " + ww(a, wide) + ", #0"); } || {
+                emit("and x16, " + a + ", " + b);
+                emit("cmp " + ww("x16", wide) + ", #0");
+            }
+            set_kind("logic");
+            :;
+        }
+        a != "x14" { emit("mov x14, " + a); }
+        op = "";
+        mn == "add" { op = "add"; } mn == "sub" { op = "sub"; } mn == "and" { op = "and"; } mn == "or" { op = "orr"; } mn == "xor" { op = "eor"; }
+        op == "" { unsupported(mn + " on memory or a byte"); }
+        w8 = n >= 8;
+        s = "";
+        F && (mn == "add" || mn == "sub") && n >= 4 { s = "s"; }
+        emit(op + s + " " + ww("x14", w8) + ", " + ww("x14", w8) + ", " + ww(b, w8));
+        dst.contains("[") { r_store("x14", dst, n); } || { write_reg(dst, "x14"); }
+        F {
+            (mn == "add" || mn == "sub") && n >= 4 {
+                incdec { set_kind("incdec"); } || { set_kind(mn); }
+            } || {
+                n < 4 {
+                    emit("tst w14, #" + $((1 << (8 * n)) - 1));
+                    emit("cmp w14, w14");
+                    unsupported("flags of an 8/16-bit operation");
+                }
+                emit("cmp " + ww("x14", w8) + ", #0");
+                set_kind("logic");
+            }
+        }
+        :;
+    }
+    d = rx(dst);
+    w4 = n != 4;
+    mn == "xor" && ops[1] == dst {
+        n == 4 { emit("mov " + wreg(d) + ", #0"); } || { emit("mov " + d + ", #0"); }
+        F { emit("cmp " + d + ", #0"); set_kind("logic"); }
+        :;
+    }
+    s1 = ops[1];
+    (mn == "add" || mn == "sub") && is_imm(s1) && parse_int(s1) >= 0 && parse_int(s1) <= 4095 {
+        s = "";
+        F { s = "s"; }
+        emit(mn + s + " " + ww(d, w4) + ", " + ww(d, w4) + ", #" + $parse_int(s1));
+    } || (mn == "add" || mn == "sub") && is_imm(s1) && parse_int(s1) >= -4095 && parse_int(s1) < 0 {
+        other = "add";
+        mn == "add" { other = "sub"; }
+        F { unsupported("flags of an add/sub of a negative immediate"); }
+        emit(other + " " + ww(d, w4) + ", " + ww(d, w4) + ", #" + $(-parse_int(s1)));
+    } || {
+        b = r_value(s1, n, "x16", false);
+        op = "";
+        mn == "add" { op = "add"; } mn == "sub" { op = "sub"; } mn == "and" { op = "and"; } mn == "or" { op = "orr"; } mn == "xor" { op = "eor"; }
+        op == "" { unsupported(mn); }
+        F && (mn == "add" || mn == "sub") { op = op + "s"; }
+        emit(op + " " + ww(d, w4) + ", " + ww(d, w4) + ", " + ww(b, w4));
+    }
+    F {
+        mn == "add" || mn == "sub" {
+            incdec { set_kind("incdec"); } || { set_kind(mn); }
+        } || {
+            emit("cmp " + ww(d, w4) + ", #0");
+            set_kind("logic");
+        }
+    }
+}
+
+shift_op(mn = "", ops = [""], n = 8, F = false) {
+    op = "lsl";
+    mn == "shr" { op = "lsr"; } mn == "sar" { op = "asr"; }
+    ops[0].contains("[") { unsupported("shift in memory"); }
+    d = rx(ops[0]);
+    w4 = n != 4;
+    n < 4 { unsupported("8/16-bit shift"); }
+    amount = "1";
+    #ops > 1 { amount = ops[1]; }
+    amount == "cl" { emit(op + " " + ww(d, w4) + ", " + ww(d, w4) + ", " + ww("x10", w4)); } || {
+        mask = 31;
+        n == 8 { mask = 63; }
+        k = parse_int(amount) & mask;
+        k != 0 { emit(op + " " + ww(d, w4) + ", " + ww(d, w4) + ", #" + $k); }
+    }
+    F { emit("cmp " + ww(d, w4) + ", #0"); set_kind("zero"); }
+}
+
+r_imul(ops = [""], n = 8, F = false) {
+    n != 8 { unsupported("32-bit imul"); }
+    d = rx(ops[0]);
+    a = d;
+    b = "";
+    #ops == 3 {
+        a = r_value(ops[1], 8, "x14", false);
+        b = r_value(ops[2], 8, "x17", false);
+    } || {
+        b = r_value(ops[1], 8, "x17", false);
+    }
+    F {
+        emit("smulh x16, " + a + ", " + b);
+        emit("mul " + d + ", " + a + ", " + b);
+        emit("cmp x16, " + d + ", asr #63");           // overflow: the high half is not the sign
+        set_kind("ovf");
+    } || {
+        emit("mul " + d + ", " + a + ", " + b);
+    }
+}
+
+// rep movsb/movsq/stosb/stosq, repne scasb, rep(e) cmpsb: loops on rcx (x10), rsi (x12), rdi (x13)
+string_op(prefix = "", rest = "") {
+    op = first_word(rest);
+    end = local_label();
+    top = local_label();
+    emit("cbz x10, " + end);
+    line(top + ":");
+    op == "movsb" || op == "movsq" {
+        op == "movsb" { emit("ldrb w16, [x12], #1"); emit("strb w16, [x13], #1"); } || { emit("ldr x16, [x12], #8"); emit("str x16, [x13], #8"); }
+        emit("sub x10, x10, #1");
+        emit("cbnz x10, " + top);
+    } || op == "stosb" || op == "stosq" {
+        op == "stosb" { emit("strb w9, [x13], #1"); } || { emit("str x9, [x13], #8"); }
+        emit("sub x10, x10, #1");
+        emit("cbnz x10, " + top);
+    } || op == "scasb" && prefix == "repne" {
+        emit("ldrb w16, [x13], #1");
+        emit("sub x10, x10, #1");
+        emit("and w17, w9, #0xff");
+        emit("cmp w17, w16");
+        emit("b.eq " + end);
+        emit("cbnz x10, " + top);
+        set_kind("zero");
+    } || op == "cmpsb" && (prefix == "rep" || prefix == "repe") {
+        emit("ldrb w16, [x12], #1");
+        emit("ldrb w17, [x13], #1");
+        emit("sub x10, x10, #1");
+        emit("cmp w16, w17");
+        emit("b.ne " + end);
+        emit("cbnz x10, " + top);
+        set_kind("zero");
+    } || {
+        unsupported(prefix + " " + rest);
+    }
+    line(end + ":");
+}
+
+// Lsys: a Linux system call (rax = number, rdi rsi rdx r10 r8 r9) by nh_linux_syscall; rcx and r11 are
+// destroyed, as by the kernel, every other register kept
+glue_sys() {
+    line("Lsys:");
+    emit("stp x30, x11, [sp, #-32]!");
+    emit("stp x12, x13, [sp, #16]");
+    emit("mov x0, x9"); emit("mov x1, x13"); emit("mov x2, x12"); emit("mov x3, x11");
+    emit("mov x4, x26"); emit("mov x5, x24"); emit("mov x6, x25");
+    emit("bl _nh_linux_syscall");
+    emit("mov x9, x0");
+    emit("ldp x12, x13, [sp, #16]");
+    emit("ldp x30, x11, [sp], #32");
+    emit("ret");
+}
+
+// =============================================================================
+// the whole translation
+// =============================================================================
+ERRORS = [""];
+NERRORS = 0;
+failed_at(addr = 0, text = "") {
+    why = ERR;
+    why == "" { why = ?!; }
+    NERRORS < #ERRORS { ERRORS[NERRORS] = "0x" + hex(addr) + ": " + text + "   (" + why + ")"; }
+    NERRORS = NERRORS + 1;
+}
+report(what = "", most = 30) {
+    shown = NERRORS;
+    shown > most { shown = most; }
+    !>> "translate: " + $NERRORS + " " + what + " not supported:\n  " + take(ERRORS, shown).join("\n  ") + "\n";
+    :: 1;
+}
+
+translate_all(prog = "", out = "") {
+    rt_data_off = HEADER + u32(RUNTIME_END - 4);
+    !(HEADER < rt_data_off && rt_data_off < RUNTIME_END) {
+        !>> "translate: the runtime does not say where its data starts (an older runtime?)\n";
+        :: 1;
+    }
+    RT_START = BASE + HEADER;
+    RT_DATA = BASE + rt_data_off;
+    RT_END = BASE + RUNTIME_END;
+    ERRORS = ["" ; 40];
+
+    // the runtime's instructions, and the routines it calls itself
+    disassemble(prog, HEADER, rt_data_off, out + ".dis");
+    R_ADDR = D_ADDR; R_RAW = D_RAW; R_TEXT = D_TEXT; R_N = D_N;
+    k = 0;
+    * k < R_N {
+        t = branch_target(R_ADDR[k], R_RAW[k]);
+        t >= 0 && R_RAW[k][0] == 0xE8 { RT_CALL_TARGETS[t] = true; }
+        k = k + 1;
+    }
+    // the program's
+    disassemble(prog, RUNTIME_END, CODE_END, out + ".dis");
+    P_ADDR = D_ADDR; P_RAW = D_RAW; P_TEXT = D_TEXT; P_N = D_N;
+    targets = {0: true ; 4096};
+    entries = {0: true ; 1024};
+    k = 0;
+    * k < P_N {
+        addr = P_ADDR[k];
+        t = branch_target(addr, P_RAW[k]);
+        t >= 0 && t >= BASE + RUNTIME_END {
+            targets[t] = true;
+            P_RAW[k][0] == 0xE8 { entries[t] = true; }
+        }
+        text = P_TEXT[k];
+        first_word(text) == "lea" {                       // a code address taken (where a protected call resumes)
+            r = no_spaces(after_word(text)).replace("\t", "");
+            at? = r.find(",[rip");
+            a = at || -1;
+            a > 0 && r.ends_with("]") {
+                d = r.slice(a + 5, #r - 1);
+                (d.starts_with("+0x") || d.starts_with("-0x")) && is_imm(d.slice(1)) {
+                    there = addr + #P_RAW[k] + parse_int(d);
+                    BASE + RUNTIME_END <= there && there < BASE + CODE_END { targets[there] = true; }
+                }
+            }
+        }
+        k = k + 1;
+    }
+
+    entry = "L_" + hex(BASE + RUNTIME_END);
+    line("// generated by macos/translate.nihil from the x86-64 code of the Nihil compiler — do not edit");
+    emit(".text"); emit(".p2align 2"); emit(".globl _main"); line("_main:");
+    emit("stp x29, x30, [sp, #-16]!"); emit("mov x29, sp");
+    emit("bl _nh_emu_stack"); emit("mov x28, x0"); emit("mov x29, x0");
+    emit("adrp x27, _nh_globals_start@PAGE"); emit("add x27, x27, _nh_globals_start@PAGEOFF");
+    // the platform's part (PLAT_STACK_TOP, PLAT_DATA_END): the emulated stack's top and the data's end
+    emit("movz x17, #" + $((OFS_GLOBALS - 0x6C8) & 0xFFFF));
+    emit("movk x17, #" + $((OFS_GLOBALS - 0x6C8) >> 16) + ", lsl #16");
+    emit("sub x16, x27, x17"); emit("str x28, [x16]");
+    emit("adrp x17, _nh_globals_end@PAGE"); emit("add x17, x17, _nh_globals_end@PAGEOFF");
+    emit("str x17, [x16, #8]");
+    emit("b " + entry);
+    !targets.contains(BASE + RUNTIME_END) { line(entry + ":"); }
+
+    // the program
+    NERRORS = 0;
+    k = 0;
+    * k < P_N {
+        addr = P_ADDR[k];
+        targets.contains(addr) {
+            line("L_" + hex(addr) + ":");
+            entries.contains(addr) { emit("str x30, [x28, #-8]!"); }     // a method: its return address on the x86 stack
+        }
+        ERR = "";
+        ?p_translate(k);
+        ?! != "" { failed_at(addr, P_TEXT[k]); }
+        k = k + 1;
+    }
+    program_errors = NERRORS;
+    saved = ERRORS;
+
+    // the runtime
+    ERRORS = ["" ; 40];
+    NERRORS = 0;
+    k = 0;
+    * k < R_N {
+        line("L_" + hex(R_ADDR[k]) + ":");
+        ERR = "";
+        HEADER_READ = false;
+        ?r_translate(k);
+        ?! != "" {
+            HEADER_READ { emit("brk #0x6e68"); } || { failed_at(R_ADDR[k], R_TEXT[k]); }     // never reached on the Mac
+        }
+        k = k + 1;
+    }
+    NERRORS > 0 { report("runtime instructions", 40); }
+    program_errors > 0 { ERRORS = saved; NERRORS = program_errors; report("instructions", 30); }
+
+    // L_x_c for each routine called: the return address on the x86 stack, then the routine
+    called = RT_CALL_TARGETS;
+    calls = RT_CALLS.keys();
+    k = 0;
+    * k < #calls { called[calls[k]] = true; k = k + 1; }
+    called[0] = _;
+    stubs = called.keys().sort();
+    k = 0;
+    * k < #stubs {
+        line("L_" + hex(stubs[k]) + "_c:");
+        emit("str x30, [x28, #-8]!");
+        emit("b L_" + hex(stubs[k]));
+        k = k + 1;
+    }
+    USES_SYS { glue_sys(); }
+
+    // the runtime's data (messages, tables), its slots and buffers, the globals and the constants
+    emit(".data"); emit(".p2align 4"); line("Lrtdata:");
+    bytes_lines(rt_data_off, RUNTIME_END);
+    emit(".p2align 4"); line("_nh_data_start:"); emit(".space " + $OFS_GLOBALS);
+    phoff = u64(32);
+    memsz = u64(phoff + 56 + 40);
+    globals_size = memsz - OFS_GLOBALS;
+    globals_size < 8 { globals_size = 8; }
+    emit(".data"); emit(".p2align 4"); emit(".globl _nh_globals_start, _nh_globals_end"); line("_nh_globals_start:");
+    emit(".space " + $globals_size); line("_nh_globals_end:"); emit(".p2align 4"); line("Lconst:");
+    bytes_lines(CONST_START, #DATA);
+    line("");
+    @>> out, take(LINES, NLINES).join("\n");
+    !>> "translate: " + $P_N + " instructions\n";
+}
+
+main() {
+    prog = "";
+    map = "";
+    out = "";
+    << prog;
+    << map;
+    << out;
+    m = @ map;
+    at? = m.find("nihil-map ");
+    at == _ { !>> "translate: no \"nihil-map\" line in " + map + "\n"; :: 1; }
+    nums = m.slice((at || 0) + 10).split("\n")[0].trim().split(" ");
+    #nums < 2 { !>> "translate: no \"nihil-map\" line in " + map + "\n"; :: 1; }
+    RUNTIME_END = nums[0].int() || 0;
+    CODE_END = nums[1].int() || 0;
+    CONST_START = (CODE_END + 7) & ~7;
+    DATA = @ prog;
+    RT_CALLS[0] = _;
+    RT_CALL_TARGETS[0] = _;
+    translate_all(prog, out);
+}
+
+main();

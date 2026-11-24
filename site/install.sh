@@ -32,8 +32,8 @@ main() {
     esac
 
     if [ "$platform" = macos-arm64 ]; then
-        # translating and linking programs needs clang, objdump and python3
-        if ! xcode-select -p >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+        # translating and linking programs needs clang and objdump
+        if ! xcode-select -p >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v objdump >/dev/null 2>&1; then
             fail "Nihil on macOS needs the Xcode Command Line Tools: run 'xcode-select --install', then this installer again"
         fi
     fi
