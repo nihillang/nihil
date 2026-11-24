@@ -2965,14 +2965,34 @@ rt_read_byte:                         ; → rax = 0…255, or -1 at the end of i
 
 ; ---- strings ----------------------------------------------------------------
 rt_str_equal:                       ; rax, rcx → rax = 1 if the contents are equal
+    cmp rax, rcx
+    je .equal                       ; the same text
     mov rdx, [rax - 8]
     cmp rdx, [rcx - 8]
     jne .different
     mov rsi, rax
     mov rdi, rcx
-    mov rcx, rdx
-    repe cmpsb
+.words:                             ; 8 bytes at a time (a text's block has room for whole words
+    cmp rdx, 8                      ; only up to its length: the rest goes a byte at a time)
+    jb .bytes
+    mov rcx, [rsi]
+    cmp rcx, [rdi]
     jne .different
+    add rsi, 8
+    add rdi, 8
+    sub rdx, 8
+    jmp .words
+.bytes:
+    test rdx, rdx
+    jz .equal
+    mov cl, [rsi]
+    cmp cl, [rdi]
+    jne .different
+    inc rsi
+    inc rdi
+    dec rdx
+    jmp .bytes
+.equal:
     mov eax, 1
     ret
 .different:
