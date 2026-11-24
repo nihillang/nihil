@@ -368,7 +368,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
     </div>
     <div id="chatResize" hidden title="Drag to resize the Claude panel"></div>
     <section id="chat" hidden>
-      <div class="chat-head"><b>✦ Claude</b><span id="chatAccount" title="The account Claude Code uses (click to see it again; /login, /logout)">…</span><div class="spacer"></div><span id="chatState" class="tool"></span></div>
+      <div class="chat-head"><b>✦ Claude</b><span id="chatAccount" title="The account this tab's agent uses in the IDE (click to see it again; /login, /logout)">…</span><div class="spacer"></div><span id="chatState" class="tool"></span></div>
       <div id="chatTabs"></div>
       <div id="usage" title="The plan's usage, from Claude's last answer (seeing it costs nothing)"></div>
       <div class="chat-ctx" title="What goes with each message">send along:
@@ -388,6 +388,8 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
             <option value="edits" title="Changes and creates files inside this project and runs shell commands, without asking">accept edits</option>
             <option value="plan" title="Reads and writes a plan; no edits and no commands until you accept it">plan</option>
             <option value="auto" title="Claude Code's auto mode: it decides its steps, including edits in this project and shell commands">auto</option></select></label>
+          <label title="Who answers in this tab: Claude Code, or OpenAI's Codex CLI (codex login). Changing it starts a new conversation">agent <select id="chatEngine">
+            <option value="claude">Claude</option><option value="codex">Codex</option></select></label>
           <label title="The model for this tab's next message">model <select id="chatModel">
             <option value="">default</option><option value="fable">fable</option><option value="opus">opus</option>
             <option value="sonnet">sonnet</option><option value="haiku">haiku</option></select></label></div>
@@ -1480,13 +1482,13 @@ function newChat(saved) {
   const log = document.createElement('div'); log.className = 'chat-log'; log.hidden = true; log.innerHTML = EMPTY_CHAT;
   $('chatLogs').appendChild(log);
   return { id: s.id || 'c' + Date.now().toString(36) + nextChat++, title: s.title || '', session: s.session || '',
-    mode: MODES[s.mode] ? s.mode : 'ask', model: s.model || '', usedModel: s.usedModel || '', allow: Array.isArray(s.allow) ? s.allow : [],
+    mode: MODES[s.mode] ? s.mode : 'ask', engine: s.engine === 'codex' ? 'codex' : 'claude', model: s.model || '', usedModel: s.usedModel || '', allow: Array.isArray(s.allow) ? s.allow : [],
     run: null, step: '', now: '', queued: [], later: [], agents: [], files: new Map(), shells: new Map(), tasks: new Map(), log, project, unread: false, closed: false };
 }
 function chatKey(p = project) { return 'nihil-ide-claude:' + p; }
 function saveChatsOf(p) {
   const c = chatsByProject.get(p); if (!c) return;
-  const data = { active: c.active, tabs: c.tabs.map((t) => ({ id: t.id, title: t.title, session: t.session, mode: t.mode, model: t.model, usedModel: t.usedModel, allow: t.allow })) };
+  const data = { active: c.active, tabs: c.tabs.map((t) => ({ id: t.id, title: t.title, session: t.session, mode: t.mode, engine: t.engine, model: t.model, usedModel: t.usedModel, allow: t.allow })) };
   try { localStorage.setItem(chatKey(p) + ':tabs', JSON.stringify(data)); } catch (e) {}
 }
 function loadChat() {
@@ -1600,7 +1602,8 @@ function showChat() {
   const t = cur(); if (!t) return;
   applyView(); loadHistory(t);
   t.unread = false;
-  $('chatMode').value = t.mode; $('chatModel').value = t.model;
+  $('chatEngine').value = t.engine; fillModels(t); $('chatMode').value = t.mode; $('chatModel').value = t.model;
+  if (accountOf && accountOf !== authApi(t)) showAccount();
   setChatBusy(!!t.run);
   renderChatTabs(); renderChatInfo(); renderActivity(); renderTabs();
 }
@@ -1608,7 +1611,7 @@ function showChat() {
 // shown above anything new when the tab is first seen after the page opens. Nothing is sent to
 // Claude, so it costs no tokens; the next message goes on with the same conversation (--resume).
 async function loadHistory(t) {
-  if (t.histDone || !t.session) return;
+  if (t.histDone || !t.session || t.engine === 'codex') return;
   t.histDone = true;                               // once per tab; a message sent meanwhile wins
   const sent = t.sent || 0;
   const r = await api('/api/claude/history?session=' + encodeURIComponent(t.session));
@@ -1701,8 +1704,16 @@ function clearChat(t) {
 }
 // "opus 5.5" for claude-opus-5-5
 const prettyModel = (m) => m.replace(/^claude-/, '').replace(/-(\d+)-(\d+)(-\d{8})?/, ' $1.$2').replace(/\[1m\]$/i, ' (1M)');
+// each agent's models in the menu (any other name goes with /model)
+const MODELS = { claude: ['fable', 'opus', 'sonnet', 'haiku'], codex: [] };
+function fillModels(t) {
+  const sel = $('chatModel'), list = MODELS[t.engine].concat(t.model && !MODELS[t.engine].includes(t.model) ? [t.model] : []);
+  sel.innerHTML = '<option value="">default</option>' + list.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  sel.value = t.model;
+}
 function renderChatInfo() {
   const t = cur(); if (!t) return;
+  document.querySelector('.chat-head b').textContent = t.engine === 'codex' ? '✦ Codex' : '✦ Claude';
   const used = t.usedModel ? prettyModel(t.usedModel) : '';
   const next = t.model && !(t.usedModel || '').includes(t.model) ? t.model + (used ? ' from the next message' : '') : '';
   $('chatState').textContent = (next || used || 'default model') + ' · ' + MODES[t.mode];
@@ -1757,7 +1768,7 @@ function renderActivity() {
     if (reads.length) { if (edits.length) v.append('; '); v.append('read '); reads.forEach((f, i) => { if (i) v.append(', '); v.appendChild(fileLink(f)); }); }
   });
   row('tabs', (v) => { v.textContent = tabs.length ? tabs.map((x) => x.path.slice(x.path.lastIndexOf('/') + 1) + (x.dirty ? ' ●' : '')).join(', ') : 'none open'; });
-  const progs = runningNow.filter((r) => r.kind === 'program'), others = runningNow.filter((r) => r.kind === 'claude' && r.run !== t.run);
+  const progs = runningNow.filter((r) => r.kind === 'program'), others = runningNow.filter((r) => (r.kind === 'claude' || r.kind === 'codex') && r.run !== t.run);
   row('programs', (v) => {
     if (!progs.length) { v.textContent = 'none running'; return; }
     progs.forEach((r, i) => { if (i) v.append(', '); const d = document.createElement('span'); d.className = 'dot'; v.appendChild(d);
@@ -1906,6 +1917,14 @@ $('chatResize').onmousedown = (e) => {
 };
 $('chatMode').onchange = () => { const t = cur(); t.mode = $('chatMode').value; saveChatsOf(t.project); renderChatInfo(); renderChatTabs(); };
 $('chatModel').onchange = () => { const t = cur(); t.model = $('chatModel').value; saveChatsOf(t.project); renderChatInfo(); };
+// another agent: a new conversation in this tab (one agent cannot go on with the other's)
+$('chatEngine').onchange = () => {
+  const t = cur(), e = $('chatEngine').value;
+  if (t.run) { $('chatEngine').value = t.engine; toast('Wait for the answer, or stop it, to change the agent'); return; }
+  t.engine = e; t.model = ''; t.usedModel = '';
+  if (t.session) { t.session = ''; chatAdd('assistant', `<i>From here on this tab talks to ${e === 'codex' ? 'Codex' : 'Claude'}: a new conversation.</i>`, t); }
+  fillModels(t); saveChatsOf(t.project); renderChatInfo(); renderChatTabs(); showAccount();
+};
 $('chatText').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); } });
 // ↑ and ↓ in the message box: the messages sent before (per project, the last 100), as in a terminal.
 // They change the message only from its first line (↑) or its last line (↓); ↓ past the newest
@@ -2039,6 +2058,52 @@ function toolLine(t, box, b) {
   if (b.name === 'Write' && inp.content) el.append(` (${inp.content.split('\n').length} lines)`);
   box.appendChild(el); scrollEl(el);
 }
+// Codex's events (codex exec --json) as Claude Code's, so the panel shows both the same way:
+// thread.started → init (the thread is the session), an agent_message → text, a
+// command_execution → a shell and its result, a file_change → an edit per file, turn.completed
+// → the result (Codex gives tokens, not a cost), turn.failed and error → an error.
+function codexAdapter(t) {
+  let thread = '', t0 = Date.now(), n = 0;
+  const started = new Set();
+  const unwrap = (c) => {         // "/bin/zsh -lc 'ls -la'" → ls -la
+    const m = /^\S*\/(?:ba|z)?sh -l?c ([\s\S]*)$/.exec(c || ''); if (!m) return c || '';
+    const a = m[1];
+    return (a[0] === "'" || a[0] === '"') && a.endsWith(a[0]) ? a.slice(1, -1) : a;
+  };
+  const tool = (id, name, input) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } });
+  return (line) => {
+    let e; try { e = JSON.parse(line); } catch (x) { return []; }
+    const it = e.item || {}, out = [];
+    if (e.type === 'thread.started') { thread = e.thread_id || ''; return [{ type: 'system', subtype: 'init', session_id: thread, model: 'codex' + (t.model ? ' ' + t.model : '') }]; }
+    if (e.type === 'turn.started') { t0 = Date.now(); return []; }
+    if (e.type === 'item.started' && it.type === 'command_execution') { started.add(it.id); return [tool(it.id, 'Bash', { command: unwrap(it.command) })]; }
+    if (e.type === 'item.completed') {
+      if (it.type === 'agent_message' && (it.text || '').trim()) return [{ type: 'assistant', message: { content: [{ type: 'text', text: it.text }] } }];
+      if (it.type === 'command_execution') {
+        if (!started.has(it.id)) out.push(tool(it.id, 'Bash', { command: unwrap(it.command) }));
+        const o = it.aggregated_output || '';
+        out.push({ type: 'user', tool_use_result: { stdout: o, stderr: '' },
+          message: { content: [{ type: 'tool_result', tool_use_id: it.id, content: o, is_error: it.status === 'failed' || (it.exit_code !== 0 && it.exit_code != null) }] } });
+        return out;
+      }
+      if (it.type === 'file_change') {
+        for (const c of it.changes || []) out.push(tool(it.id + ':' + (n++), c.kind === 'add' ? 'Write' : c.kind === 'delete' ? 'deleted' : 'Edit', { file_path: c.path }));
+        return out;
+      }
+      if (it.type === 'mcp_tool_call') return [tool(it.id, `${it.server || 'mcp'}.${it.tool || ''}`, {})];
+      if (it.type === 'web_search') return [tool(it.id, 'searched the web', { pattern: it.query || '' })];
+      if (it.type === 'error' && it.message) return [{ type: 'assistant', message: { content: [{ type: 'text', text: '⚠ ' + it.message }] } }];
+      return [];
+    }
+    if (e.type === 'turn.completed') {
+      const u = e.usage || {};
+      return [{ type: 'result', session_id: thread, duration_ms: Date.now() - t0, codex_tokens: (u.input_tokens || 0) + (u.output_tokens || 0) }];
+    }
+    if (e.type === 'turn.failed') return [{ type: 'result', is_error: true, session_id: thread, duration_ms: Date.now() - t0, result: (e.error && e.error.message) || 'Codex stopped with an error' }];
+    if (e.type === 'error' && e.message) return [{ type: 'assistant', message: { content: [{ type: 'text', text: '⚠ ' + e.message }] } }];
+    return [];
+  };
+}
 // shells: the commands Claude runs (Bash), in front or in the background, and its monitors. Each one
 // is a line in the answer that opens to show the command and its output; a background one is
 // followed live from the file Claude Code writes its output to (/api/claude/taskout).
@@ -2128,9 +2193,13 @@ async function reloadTab(t) {
   renderTabs();
 }
 
+// the account of the tab's agent: each has its own folder in the IDE (~/.claude-ide, ~/.codex-ide)
+const authApi = (t = cur()) => t && t.engine === 'codex' ? '/api/codex' : '/api/claude';
 // the account in the panel's header
+let accountOf = '';
 async function showAccount() {
-  const el = $('chatAccount'), s = await api('/api/claude/auth').catch(() => null), st = s && s.ok && s.status;
+  accountOf = authApi();
+  const el = $('chatAccount'), s = await api(accountOf + '/auth').catch(() => null), st = s && s.ok && s.status;
   el.classList.toggle('out', !(st && st.loggedIn));
   el.textContent = !s || !s.ok ? '' : !st.loggedIn ? 'not signed in · /login'
     : (st.email || st.authMethod || 'signed in') + (st.subscriptionType ? ' · ' + st.subscriptionType : '');
@@ -2154,7 +2223,7 @@ function runEnded(t) {
 // /login: `claude auth login` on the server's machine. It opens the browser there; the link is
 // also shown here, and, if the sign-in page gives a code, it is pasted here and goes to its input.
 async function chatLogin(t, useConsole) {
-  const r = await api('/api/claude/login', { console: useConsole });
+  const r = await api(authApi(t) + '/login', { console: useConsole });
   if (!r.ok) { chatAdd('error', esc(r.error || 'could not start the sign-in'), t); return; }
   runStarted(t, r.run, 'signing in');
   const box = chatAdd('assistant', '', t);
@@ -2182,7 +2251,7 @@ async function chatLogin(t, useConsole) {
   runEnded(t);
   box.querySelector('.login-code').remove();
   if (code === 0) {
-    const s = await api('/api/claude/auth');
+    const s = await api(authApi(t) + '/auth');
     box.innerHTML = s.ok ? accountLine(s.status) : 'Signed in.';
     showAccount();
   } else {
@@ -2336,6 +2405,10 @@ async function chatSend(t = cur(), preset = '') {
     const name = slash[1].toLowerCase();
     if (name === 'clear' || name === 'reset') { clearChat(t); return; }
     if (name === 'new') { addChat(); return; }
+    if (t.engine === 'codex' && !['rename', 'model', 'help', 'login', 'logout', 'status', 'account'].includes(name)) {
+      chatAdd('user', esc(text), t);
+      chatAdd('assistant', `This tab talks to Codex: <code>/${esc(name)}</code> is a Claude Code command. The panel answers <code>/new</code>, <code>/clear</code>, <code>/rename</code>, <code>/model</code>, <code>/login</code>, <code>/logout</code> and <code>/status</code>.`, t); return;
+    }
     if (name === 'rename') {
       const n = text.slice(slash[0].length).trim();
       chatAdd('user', esc(text), t);
@@ -2346,13 +2419,13 @@ async function chatSend(t = cur(), preset = '') {
     }
     chatAdd('user', esc(text), t);
     if (name === 'login') return chatLogin(t, /\bconsole\b/i.test(text));
-    if (name === 'logout') { const s = await api('/api/claude/logout', {}); showAccount(); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
+    if (name === 'logout') { const s = await api(authApi(t) + '/logout', {}); showAccount(); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
     if (name === 'mcp') return chatMcp(t);
-    if (name === 'status' || name === 'account') { const s = await api('/api/claude/auth'); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
+    if (name === 'status' || name === 'account') { const s = await api(authApi(t) + '/auth'); chatAdd(s.ok ? 'assistant' : 'error', s.ok ? accountLine(s.status) : esc(s.error), t); return; }
     if (name === 'model') {
       const m = text.slice(slash[0].length).trim().toLowerCase(), v = m === 'default' ? '' : m;
       if (!m) { chatAdd('assistant', `This tab uses <b>${esc(t.model || 'the default model')}</b>` + (t.usedModel ? ` (last answer: ${esc(prettyModel(t.usedModel))})` : '') + '. To change it: <code>/model opus</code>, <code>sonnet</code>, <code>haiku</code>, <code>fable</code> or <code>default</code>.', t); return; }
-      if (!/^[a-z0-9-]+$/.test(v || 'x')) { chatAdd('error', 'A model is an alias (opus, sonnet, haiku, fable) or a name like claude-opus-5-5.', t); return; }
+      if (!/^[a-z0-9._-]+$/i.test(v || 'x')) { chatAdd('error', 'A model is an alias (opus, sonnet, haiku, fable) or a name like claude-opus-5-5.', t); return; }
       if (v && ![...$('chatModel').options].some((o) => o.value === v)) { const o = document.createElement('option'); o.value = o.textContent = v; $('chatModel').appendChild(o); }
       t.model = v; saveChatsOf(t.project); if (t === cur()) { $('chatModel').value = v; renderChatInfo(); }
       chatAdd('assistant', `Model of this tab: <b>${esc(v || 'default')}</b>, from the next message.`, t); return;
@@ -2375,11 +2448,12 @@ async function chatSend(t = cur(), preset = '') {
   // a command goes as it is (the IDE's context would become its arguments)
   const context = slash ? '' : ideContext();
   if (!slash) { pins = []; renderPins(); }
-  const r = await api('/api/claude', { message: text, context, session: t.session, mode: t.mode, model: t.model, name: t.title, allow: t.allow.join(' ') });
+  const r = await api('/api/claude', { engine: t.engine, message: text, context, session: t.session, mode: t.mode, model: t.model, name: t.title, allow: t.allow.join(' ') });
   if (!r.ok) { chatAdd('error', esc(r.error || 'could not start Claude'), t); renderChatTabs(); return; }
   runStarted(t, r.run, 'starting…');
-  t.input = true;                  // its input: more messages can go to it (chatJoin) until it is closed
-  const run = r.run, mode = t.mode;
+  const codex = t.engine === 'codex';
+  t.input = !codex;                // its input: more messages can go to it (chatJoin) until it is closed (Codex: closed already)
+  const run = r.run, mode = t.mode, fromCodex = codexAdapter(t);
   let box = null, thinking = null;
   let textEl = null, raw = '', out = 0, err = 0, buf = '', errText = '', result = null, plan = '', streamed = false;
   let echoes = 0, idle = false, bg = 0;
@@ -2406,7 +2480,7 @@ async function chatSend(t = cur(), preset = '') {
     return [b.name, f];
   };
   const handle = (line) => {
-    let d; try { d = JSON.parse(line); } catch (e) { return; }
+    let d = line; if (typeof d === 'string') { try { d = JSON.parse(line); } catch (e) { return; } }
     // Claude takes a message (its echo): the first is the run's own; a later one was sent while it worked
     if (d.type === 'user' && d.message && typeof d.message.content === 'string') {
       idle = false;
@@ -2508,6 +2582,7 @@ async function chatSend(t = cur(), preset = '') {
     if (d.type === 'rate_limit_event' && d.rate_limit_info) { saveUsage(d.rate_limit_info); renderActivity(); }
     if (d.type === 'result') { result = d; addCost(t, d.total_cost_usd); endTurn(d); idle = true; maybeClose(); }
   };
+  const feed = (line) => { if (!codex) return handle(line); for (const d of fromCodex(line)) handle(d); };
   // a turn ends (one per message taken, and one when background work it waited for ends)
   function endTurn(result) {
     thinking.remove();
@@ -2543,6 +2618,7 @@ async function chatSend(t = cur(), preset = '') {
     }
     const meta = document.createElement('div'); meta.className = 'meta';
     meta.textContent = [`${((result.duration_ms || 0) / 1000).toFixed(1)} s`, result.total_cost_usd ? `US$ ${result.total_cost_usd.toFixed(3)}` : '',
+      result.codex_tokens ? `${(result.codex_tokens / 1000).toFixed(1)}k tokens` : '',
       t.usedModel ? prettyModel(t.usedModel) : '', MODES[mode]].filter(Boolean).join(' · ');
     box.appendChild(meta);
   }
@@ -2550,11 +2626,11 @@ async function chatSend(t = cur(), preset = '') {
     const o = await api(`/api/output?id=${run}&out=${out}&err=${err}`);
     if (o.error) break;
     out += o.out_bytes; err += o.err_bytes; errText += o.err; buf += o.out;
-    let i; while ((i = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    let i; while ((i = buf.indexOf('\n')) >= 0) { feed(buf.slice(0, i)); buf = buf.slice(i + 1); }
     if (o.code !== null && !o.out && !o.err) break;
     await sleep(200);
   }
-  if (buf.trim()) handle(buf);
+  if (buf.trim()) feed(buf);
   thinking.remove();
   if (!result) chatAdd('error', esc(errText.trim() || 'Claude stopped before answering'), t);
   t.input = false;
