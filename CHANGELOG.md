@@ -4,6 +4,11 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## Unreleased
+
+- `NIHIL-AGENTS.md`: a short reference for coding agents (about 1,800 tokens against the SPEC's 27,600): a table from C, Go and Python to Nihil, the ten traps a model trained on other languages falls into, the core syntax in two examples, and pointers to the SPEC's sections. The IDE puts it in its agents' instructions (Claude Code's system prompt, Codex's first message) and points to the SPEC only for details; without the file it gives the old instructions. It ships in `share/nihil`, and `tests/stage1/agents_reference_*` keep its examples and claims true
+  - *Why:* The IDE told its agents to read the SPEC before writing code. Measured on the same repair tasks, a small model given the SPEC spent 2.6 times the tokens; the short reference as a file still cost it an extra turn, while the same text in the instructions halved its tokens against the SPEC, cut its reasoning below having no reference at all, and kept it to the protocol. Larger models were unaffected either way
+
 ## v4.9.0
 
 - LIST, an ARRAY that grows (SPEC §28): `[x ; *]` is an empty list of x's type (`[x ; *n]` with room for n), `v[] = x;` adds at the end, and `v[i]`, `v[i] = x`, `#v` and `xs : x, i { … }` work as on an ARRAY. A list is a reference with a shared header, as a MAP is: every name of a list sees the same items however much it grows. `v.array()` copies the items to an ARRAY, every other ARRAY method works on such a copy, and `to_json` writes lists anywhere. Adding n items costs O(n) copies in all: 1,000,000 appends take 0.01 s

@@ -1,0 +1,12 @@
+// The example 2 of NIHIL-AGENTS.md (the short reference the IDE gives its agents): keep both in sync
+clamp(x = 0, lo = 0, hi = 100) {
+    x < lo { : lo; }
+    x > hi { : hi; }
+    : x;
+}
+find(v = [0], x = 0) {          // returns INT? because of `: _;`
+    v : e, i { e == x { : i; } }
+    : _;
+}
+pos = find([4, 8, 15], 8) || -1;
+>> clamp(150); >> " "; >> pos; >> "\n";
