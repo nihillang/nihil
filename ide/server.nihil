@@ -46,8 +46,7 @@ q(s = "") {
 // changed on disk since then is not overwritten without asking
 fnv(s = "") {
     h = 2166136261;
-    i = 0;
-    * i < #s { h = ((h ^ s[i]) * 16777619) & 0xFFFFFFFF; i = i + 1; }
+    s : byte { h = ((h ^ byte) * 16777619) & 0xFFFFFFFF; }
     : h;
 }
 
@@ -72,11 +71,9 @@ utf8_whole(t = "") {
 // zero byte would cut the path the kernel sees: "notes.txt\0.nihil" would open notes.txt)
 safe_rel(p = "") {
     #p == 0 || p.starts_with("/") { : false; }
-    i = 0;
-    * i < #p { p[i] < 32 { : false; } i = i + 1; }
+    p : byte { byte < 32 { : false; } }
     parts = p.split("/");
-    i = 0;
-    * i < #parts { parts[i] == ".." || parts[i] == "" { : false; } i = i + 1; }
+    parts : part { part == ".." || part == "" { : false; } }
     : true;
 }
 
@@ -117,8 +114,7 @@ projects_json() {
 
 save_projects(ps = [""]) {
     extra = ["" ; 0];
-    i = 0;
-    * i < #ps { ps[i] != ROOT { extra = extra + [ps[i]]; } i = i + 1; }
+    ps : one { one != ROOT { extra = extra + [one]; } }
     @>> PROJECTS_FILE, extra.join("\n") + "\n";
 }
 
@@ -233,20 +229,17 @@ files_json(project = "") {
     TABLES = ["" ; 0];
     DIRS = ["" ; 0];
     rs = roots_of(project);
-    i = 0;
-    * i < #rs { #rs[i] > 0 && (project + "/" + rs[i]).is_dir() { DIRS = DIRS + [rs[i]]; } walk(project, rs[i], 0); i = i + 1; }
+    rs : r { #r > 0 && (project + "/" + r).is_dir() { DIRS = DIRS + [r]; } walk(project, r, 0); }
     db = outside_db(project);
     #db > 0 { walk_db(db, "", 0); }
     f = ["" ; #FILES];
-    i = 0;
-    * i < #FILES { f[i] = q(FILES[i]); i = i + 1; }
+    FILES : file, i { f[i] = q(file); }
     t = ["" ; #TABLES];
     info = ["" ; #TABLES];
-    i = 0;
-    * i < #TABLES {
-        t[i] = q(TABLES[i]);
+    TABLES : tb, i {
+        t[i] = q(tb);
         // size and records without reading the table: its lines all have the first one's width
-        full = table_file(project, TABLES[i]);
+        full = table_file(project, tb);
         size = full.size() || 0;
         first = full.read_from(0, 4096) || "";
         nl? = first.find("\n");
@@ -254,12 +247,10 @@ files_json(project = "") {
         nl != _ { width = nl || 0; }
         records = 0;
         size > 0 { records = (size + 1) / (width + 1); }
-        info[i] = "{\"path\": " + q(TABLES[i]) + ", \"bytes\": " + $size + ", \"records\": " + $records + "}";
-        i = i + 1;
+        info[i] = "{\"path\": " + q(tb) + ", \"bytes\": " + $size + ", \"records\": " + $records + "}";
     }
     d = ["" ; #DIRS];
-    i = 0;
-    * i < #DIRS { d[i] = q(DIRS[i]); i = i + 1; }
+    DIRS : dir, i { d[i] = q(dir); }
     : "{\"files\": [" + f.join(", ") + "], \"tables\": [" + t.join(", ") + "], \"table_info\": [" + info.join(", ")
       + "], \"dirs\": [" + d.join(", ") + "]}";
 }
@@ -280,8 +271,7 @@ ident_char(c = 0) {
 // the text without // comments
 no_comments(t = "") {
     ls = t.split("\n");
-    i = 0;
-    * i < #ls { c? = ls[i].find("//"); c != _ { ls[i] = ls[i].slice(0, c || 0); } i = i + 1; }
+    ls : l, i { c? = l.find("//"); c != _ { ls[i] = l.slice(0, c || 0); } }
     : ls.join("\n");
 }
 
@@ -296,8 +286,7 @@ field_spec(part = "") {
     name = p.slice(0, colon || 0).trim();
     rest = p.slice((colon || 0) + 1).trim();
     #name == 0 { : ""; }
-    i = 0;
-    * i < #name { !ident_char(name[i]) { : ""; } i = i + 1; }
+    name : ch { !ident_char(ch) { : ""; } }
     typ = rest;
     width = 0;
     paren? = rest.find("(");
@@ -317,8 +306,7 @@ find_models(project = "") {
     FILES = ["" ; 0];
     TABLES = ["" ; 0];
     rs = roots_of(project);
-    i = 0;
-    * i < #rs { walk(project, rs[i], 0); i = i + 1; }
+    rs : r { walk(project, r, 0); }
     fi = 0;
     * fi < #FILES {
         text? = @? (project + "/" + FILES[fi]);
@@ -682,16 +670,14 @@ record_json(project = "", body = "") {
     width < 0 {                                     // an empty table: the model is the one the page chose
         mname = (body.json("model") || "\"\"").json_text() || "";
         find_models(project);
-        i = 0;
-        * i < #M_NAME { M_NAME[i] == mname && chosen < 0 { chosen = i; } i = i + 1; }
+        M_NAME : mn, i { mn == mname && chosen < 0 { chosen = i; } }
     } || { chosen = pick_model(project, rel, width); }
     chosen < 0 { : "{\"error\": \"no data model in the programs fits this table\"}"; }
     specs = M_FIELDS[chosen].split(";");
     total = 0;
     width > 0 { total = (size + 1) / (width + 1); }
     keyf = -1;
-    i = 0;
-    * i < #specs { specs[i].split("|")[3] != "0" { keyf = i; } i = i + 1; }
+    specs : spec, i { spec.split("|")[3] != "0" { keyf = i; } }
     m = M_NAME[chosen];
     // the record as the page saw it: the change is refused if it changed since
     op != "insert" && (keyf < 0 || index >= 0) {
@@ -728,8 +714,7 @@ record_json(project = "", body = "") {
     oldkey = "";
     keyf >= 0 && op != "insert" { oldkey = value_lit("key", specs[keyf].split("|")[1], cells[keyf]); }
     sets = "";
-    i = 0;
-    * i < #specs { sets = sets + "r." + specs[i].split("|")[0] + " = " + lits[i] + ";\n"; i = i + 1; }
+    specs : spec, si { sets = sets + "r." + spec.split("|")[0] + " = " + lits[si] + ";\n"; }
     op == "insert" {
         prog = prog + "r = " + m + "();\n" + sets;
         keyf >= 0 {
@@ -819,9 +804,8 @@ compile(project = "", rel = "", bin = "", optimize = true, base = "") {
     errs? = @? (base + ".cerr");
     ls = (errs || "").split("\n");
     parts = ["" ; 0];
-    i = 0;
     // the native compiler of the Mac names files by their whole path: the page wants them relative to the project
-    * i < #ls { #ls[i].trim() > 0 { parts = parts + [error_json(rel, ls[i].replace(project + "/", ""))]; } i = i + 1; }
+    ls : l { #l.trim() > 0 { parts = parts + [error_json(rel, l.replace(project + "/", ""))]; } }
     p == _ { parts = parts + [error_json(rel, "could not start the compiler")]; }
     COMPILE_ERRORS = "[" + parts.join(", ") + "]";
     (base + ".cout").remove();
@@ -875,8 +859,7 @@ run_json(project = "", body = "", asm = false) {
     !safe_rel(rel) || !(project + "/" + rel).is_file() { : "{\"ok\": false, \"errors\": [" + error_json(rel, "cannot compile " + rel) + "]}"; }
     running = 0;
     ids = RUN_PROC.keys();
-    k = 0;
-    * k < #ids { RUN_CODE.contains(ids[k]) == false { running = running + 1; } k = k + 1; }
+    ids : id { RUN_CODE.contains(id) == false { running = running + 1; } }
     running >= MAX_RUNS { : "{\"ok\": false, \"errors\": [" + error_json(rel, $MAX_RUNS + " programs are running: stop one first") + "]}"; }
     id = NEXT_RUN;
     NEXT_RUN = NEXT_RUN + 1;
@@ -930,8 +913,7 @@ check_json(project = "", body = "") {
     content = (body.json("content") || "\"\"").json_text() || "";
     !safe_rel(rel) || !rel.ends_with(".nihil") || !(project + "/" + rel).is_file() { : "{\"ok\": false, \"errors\": []}"; }
     last = 0;
-    i = 0;
-    * i < #rel { rel[i] == '/' { last = i + 1; } i = i + 1; }
+    rel : ch, i { ch == '/' { last = i + 1; } }
     tmp = rel.slice(0, last) + ".check-" + rel.slice(last);
     @>> (project + "/" + tmp), content;
     id = NEXT_RUN;
@@ -1019,8 +1001,7 @@ claude_prompt(project = "", shell = false, reads = false) {
 running_runs() {
     running = 0;
     ids = RUN_PROC.keys();
-    k = 0;
-    * k < #ids { RUN_CODE.contains(ids[k]) == false { running = running + 1; } k = k + 1; }
+    ids : id { RUN_CODE.contains(id) == false { running = running + 1; } }
     : running;
 }
 
@@ -1061,11 +1042,9 @@ claude_json(project = "", body = "") {
     // servers that only read); other servers when the tab allowed them ("allow": "mcp__server
     // mcp__other", from the button on a refusal)
     trusted = project_env(project, "CLAUDE_MCP").replace("\"", "").split(" ");
-    t = 0;
-    * t < #trusted { mcp_ok(trusted[t]) { tools = tools + [trusted[t]]; } t = t + 1; }
+    trusted : tool { mcp_ok(tool) { tools = tools + [tool]; } }
     allow = ((body.json("allow") || "\"\"").json_text() || "").split(" ");
-    a = 0;
-    * a < #allow { mcp_ok(allow[a]) { tools = tools + [allow[a]]; } a = a + 1; }
+    allow : tool { mcp_ok(tool) { tools = tools + [tool]; } }
     // edits and auto also run commands (Bash, in the background too, and monitors); ask and plan do not
     shell = mode == "edits" || mode == "auto";
     shell { tools = tools + ["Edit(./**)", "Write(./**)", "Bash", "Monitor", "TaskStop"]; }
@@ -1396,8 +1375,7 @@ handle(c = 0, req = "") {
         p = (body.json("path") || "\"\"").json_text() || "";
         ps = projects();
         keep = ["" ; 0];
-        i = 0;
-        * i < #ps { ps[i] != p { keep = keep + [ps[i]]; } i = i + 1; }
+        ps : one { one != p { keep = keep + [one]; } }
         save_projects(keep);
         c.respond(200, "application/json", projects_json());
         :;
@@ -1451,8 +1429,7 @@ handle(c = 0, req = "") {
             c.respond(409, "application/json", "{\"conflict\": true, \"error\": " + q(rel + " changed on disk since it was opened") + "}"); :;
         }
         last = 0;
-        i = 0;
-        * i < #full { full[i] == '/' { last = i; } i = i + 1; }
+        full : ch, i { ch == '/' { last = i; } }
         full.slice(0, last).make_dir();
         @>> full, content;
         c.respond(200, "application/json", "{\"ok\": true, \"path\": " + q(rel) + ", \"hash\": " + $fnv(content) + "}");
@@ -1484,8 +1461,7 @@ handle(c = 0, req = "") {
             c.respond(409, "application/json", "{\"error\": " + q(to + " already exists") + "}"); :;
         }
         last = 0;
-        i = 0;
-        * i < #to { to[i] == '/' { last = i; } i = i + 1; }
+        to : ch, i { ch == '/' { last = i; } }
         last > 0 { (project + "/" + to.slice(0, last)).make_dir(); }
         @>> project + "/" + to, text || "";
         !keep { (project + "/" + from).remove(); }
