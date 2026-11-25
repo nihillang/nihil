@@ -119,8 +119,10 @@ With `nasm` and `ld` (binutils) installed, `make` builds stage 0 (the compiler i
 and compiles stage 1 with it. Without them, it downloads the latest release's compiler
 (`dist/seed.sh`, checked against its `.sha256`), which compiles stage 1, and the result
 compiles it again: the same bytes stage 0 gives (`make seedcheck`). The runtime that goes
-into every executable is kept assembled in `src1/runtime_bin.nihil`; only a change to
-`src/runtime.asm` needs `nasm` (`make runtime`).
+into every executable is kept assembled in `src1/runtime_bin.nihil`; after a change to
+`src/runtime.asm`, `make runtime` assembles it again with Nihil's own assembler
+(`asm/asm.nihil`, built by stage 1), so nothing past stage 0 needs `nasm`. Where `nasm` is
+installed, `make runtime-check` also checks that it gives the same bytes.
 
 ```sh
 git clone https://github.com/nihillang/nihil.git && cd nihil

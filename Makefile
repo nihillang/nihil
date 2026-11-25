@@ -25,17 +25,52 @@ build/runtime.bin: src/runtime.asm src/layout.inc
 
 # ---- stage 1: the compiler written in Nihil ----
 # the runtime's bytes, which stage 1 copies into every executable, are kept in the repository
-# (src1/runtime_bin.nihil), so stage 1 builds without nasm; after a change to src/runtime.asm,
-# `make runtime` writes them again, and `make runtime-check` (CI) checks they are up to date
-RUNTIME_TEXT = { printf '// generated from src/runtime.asm by `make runtime` (nasm) — do not edit; `make runtime-check` compares\nruntime_bin = ['; \
-	  od -An -v -tu1 build/runtime.bin | tr -s ' \n' '  ' | sed 's/^ //; s/ $$//; s/ /, /g'; printf '\n];\n'; }
+# (src1/runtime_bin.nihil), so stage 1 builds without nasm. After a change to src/runtime.asm,
+# `make runtime` writes them again with Nihil's own assembler (asm/asm.nihil, built by stage 1:
+# no nasm), and `make runtime-check` (CI) checks they are up to date; where nasm is installed it
+# also checks that nasm gives the same bytes. -D names in NASMFLAGS (make gcstress) go to both.
+RUNTIME_DEFS = $(filter -D%,$(NASMFLAGS))
+HAVE_NASM = command -v "$(NASM)" >/dev/null 2>&1
+# $(1): the file to write (.bin: the bytes; else runtime_bin.nihil's text), $(2): the source, $(3): -D names
+ASSEMBLE = printf '%s\n%s\n%s\n%s\n\n' $(2) "src/ build/" $(1) "$(3)" | build/asm
 
-runtime: build/runtime.bin
-	$(RUNTIME_TEXT) > src1/runtime_bin.nihil
+# on macOS nihilc1.sh compiles with the native compiler (build/macos), not build/nihilc1
+ifeq ($(shell uname -s),Darwin)
+ASM_NEEDS :=
+else
+ASM_NEEDS := build/nihilc1
+endif
+build/asm: $(ASM_NEEDS) asm/asm.nihil
+	./nihilc1.sh asm/asm.nihil $@
 
-runtime-check: build/runtime.bin
-	$(RUNTIME_TEXT) > build/runtime_bin.nihil
+runtime: build/asm
+	$(call ASSEMBLE,src1/runtime_bin.nihil,src/runtime.asm,$(RUNTIME_DEFS))
+
+runtime-check: build/asm
+	$(call ASSEMBLE,build/runtime_bin.nihil,src/runtime.asm,$(RUNTIME_DEFS))
 	@cmp build/runtime_bin.nihil src1/runtime_bin.nihil || { echo "src1/runtime_bin.nihil is not src/runtime.asm's: make runtime" >&2; exit 1; }
+	@if $(HAVE_NASM); then "$(NASM)" -f bin $(NASMFLAGS) -o build/runtime_check_nasm.bin src/runtime.asm && \
+	  $(call ASSEMBLE,build/runtime_check_asm.bin,src/runtime.asm,$(RUNTIME_DEFS)) 2>/dev/null && \
+	  { cmp build/runtime_check_nasm.bin build/runtime_check_asm.bin || { echo "asm/asm.nihil and nasm give different bytes" >&2; exit 1; }; } && \
+	  echo "runtime: asm/asm.nihil and nasm give the same bytes"; fi
+
+# asm/asm.nihil against nasm (CI): the runtime and its debug builds, the forms of asm/test.asm, and
+# each case of asm/refuse.asm, which it must refuse (they are not checked with nasm)
+asm-check: build/asm
+	@$(HAVE_NASM) || { echo "make asm-check needs nasm" >&2; exit 1; }
+	@for d in "" "-DGC_STRESS" "-DGC_STATS" "-DGC_STRESS -DGC_STATS"; do \
+	  "$(NASM)" -f bin $(NASMFLAGS) $$d -o build/asm_nasm.bin src/runtime.asm && \
+	  $(call ASSEMBLE,build/asm_mine.bin,src/runtime.asm,$$d) 2>/dev/null && cmp build/asm_nasm.bin build/asm_mine.bin && \
+	  echo "asm: runtime $${d:-(as it is)}: the same bytes as nasm" || { echo "asm: runtime $$d differs from nasm" >&2; exit 1; }; done
+	@"$(NASM)" -f bin -o build/asm_nasm.bin asm/test.asm && $(call ASSEMBLE,build/asm_mine.bin,asm/test.asm,) 2>/dev/null && \
+	  cmp build/asm_nasm.bin build/asm_mine.bin && echo "asm: asm/test.asm: the same bytes as nasm"
+	@rm -rf build/refuse && mkdir -p build/refuse && \
+	  awk '/^; --- expect: / { n++; f = sprintf("build/refuse/%02d.asm", n); print "bits 64" > f; \
+	                           print substr($$0, 15) > (f ".expect"); next } /^;/ { next } n > 0 { print > f }' asm/refuse.asm && \
+	  for f in build/refuse/*.asm; do \
+	    if $(call ASSEMBLE,build/refuse/out.bin,$$f,) 2> build/refuse/err.txt; then echo "asm: $$f was not refused" >&2; exit 1; fi; \
+	    grep -qF "$$(cat $$f.expect)" build/refuse/err.txt || { echo "asm: $$f: expected \"$$(cat $$f.expect)\", got: $$(cat build/refuse/err.txt)" >&2; exit 1; }; done && \
+	  echo "asm: the $$(ls build/refuse/*.asm | wc -l | tr -d ' ') cases of asm/refuse.asm are refused, each with its message"
 
 # the prelude (bigint + float_text + prelude) becomes a STRING inside nihilc1
 PRELUDE := src1/bigint.nihil src1/float_text.nihil src1/prelude.nihil
@@ -123,7 +158,7 @@ floatcheck: build/nihilc
 # whatever is in use, runs the stage 1 suite, the fixed point and floatcheck
 gcstress:
 	rm -rf build/stress && mkdir -p build/stress
-	cp -r src src1 std tests Makefile nihilc1.sh build/stress/
+	cp -r src src1 std tests asm Makefile nihilc1.sh build/stress/
 	$(MAKE) -C build/stress NASMFLAGS="$(NASMFLAGS) -DGC_STRESS" runtime
 	$(MAKE) -C build/stress NASMFLAGS="$(NASMFLAGS) -DGC_STRESS" test1 fixedpoint floatcheck
 
@@ -136,4 +171,4 @@ build/ide-server: build/nihilc1 ide/server.nihil
 clean:
 	rm -rf build
 
-.PHONY: all runtime runtime-check seedcheck test test1 test1-O0 compare fixedpoint floatcheck gcstress ide clean
+.PHONY: all runtime runtime-check asm-check seedcheck test test1 test1-O0 compare fixedpoint floatcheck gcstress ide clean
