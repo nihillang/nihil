@@ -4,6 +4,23 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.7.1
+
+Eleven fixes in the prelude, found in a review by Codex, each confirmed by running it and its fix reviewed again:
+
+- `<< n` into an INT: a digit after `-9223372036854775808` gave `0` (v4.7.0's fix of `.int()` had not reached the input); it is the invalid-input error
+- a table path with a NUL byte: the fast reader opened the path up to the NUL (`"VERSION\0x"` read `VERSION`); it is refused
+- automatic keys: a counter behind the table with a free number gave a key below the largest; `.nihil-seq` now keeps the table's size and stamp, and while they match the counter is used without reading the table, else the largest key + 1 is found once (SPEC §20.5)
+- `json_keys()` changed a global variable called `keys`
+- `s.find(t, from)` with `from` near the largest INT gave an index error; it gives `_`
+- `rows.sort(key)` by a FLOAT: `0.0` and `-0.0` changed order; the sort is stable for them
+- `s.float()`: leading zeros used up the 768 places for digits (`"0" × 768 + "1"` read as `0.0`)
+- `MODEL.from_json` took a `\u` surrogate without its pair and made invalid UTF-8; it is refused, and the lenient `s.json_text()` gives U+FFFD for it (SPEC §26)
+- `http_host_is_local()` refused `[::1]`, which SPEC §23 names; `[::1]` with any port is local, `[::1].evil` is not
+- `cmd.start()` / `cmd.run()` of a program that cannot start gave a process that ended with 127 (`["/"].run()` was `127`); it is `_`, told by a pipe that `execve` closes
+- `find`, `contains`, `split` and `replace` compared at every position: `"a" × 200,000` searched for `"a" × 100,000 + "b"` took 10 s; a needle over 8 bytes uses Knuth–Morris–Pratt, linear
+  - *Why:* Wrong results at the edges, a table that could open another file or repeat a key, and a search that could take seconds
+
 ## v4.7.0
 
 - the runtime is assembled by Nihil's own assembler: `asm/asm.nihil` turns `src/runtime.asm` into `src1/runtime_bin.nihil` with the same bytes as nasm (the runtime and its `GC_STRESS` / `GC_STATS` builds, compared byte by byte), in about 40 ms; `make runtime` uses it, so a change to the runtime no longer needs nasm (only stage 0, the root of the bootstrap, does). It follows nasm's choices of encoding (short jumps and 8-bit values when they fit, a label's value always relocatable) and refuses with a message what it does not encode exactly. `make asm-check` (CI) compares it with nasm on the runtime and on `asm/test.asm` (186 more forms), and checks that the 38 cases of `asm/refuse.asm` are refused
