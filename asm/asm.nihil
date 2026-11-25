@@ -864,6 +864,7 @@ encode(mn = "", ops = [""]) {
             short8(0, OV[0]) { put(0x6A); imm(OV[0], 1); } || { put(0x68); imm(OV[0], 4); }
             :;
         }
+        OS[0] != 0 && OS[0] != 8 { fail(mn + " takes a 64-bit register or qword memory"); }
         mn == "push" { op_rm(0, false, [0xFF], 6, 0); } || { op_rm(0, false, [0x8F], 0, 0); }
         :;
     }
@@ -943,8 +944,10 @@ encode(mn = "", ops = [""]) {
     }
     mn == "movq" {
         (OS[0] == 16) == (OS[1] == 16) || OK[0] == 3 || OK[1] == 3 { fail("movq here: an xmm register and a 64-bit register or memory"); }
-        OS[1] == 16 { op_rm(0x66, true, [0x0F, 0x7E], OR[1], 0); :; }       // movq r/m64, xmm
-        op_rm(0x66, true, [0x0F, 0x6E], OR[0], 1);                         // movq xmm, r/m64
+        OK[0] == 2 { op_rm(0x66, false, [0x0F, 0xD6], OR[1], 0); :; }      // movq m64, xmm (nasm: 66 0F D6)
+        OK[1] == 2 { op_rm(0xF3, false, [0x0F, 0x7E], OR[0], 1); :; }      // movq xmm, m64 (nasm: F3 0F 7E)
+        OS[1] == 16 { op_rm(0x66, true, [0x0F, 0x7E], OR[1], 0); :; }       // movq r64, xmm
+        op_rm(0x66, true, [0x0F, 0x6E], OR[0], 1);                         // movq xmm, r64
         :;
     }
     mn == "prefetcht0" { op_rm(0, false, [0x0F, 0x18], 1, 0); :; }
