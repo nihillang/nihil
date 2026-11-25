@@ -7,7 +7,7 @@ LEARN = "examples/learn";
 SLUGS = [""];
 TITLES = [""];
 INTROS = [""];
-SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling", "14_errors"];
+SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling", "14_errors", "15_lists"];
 TITLES = [
     "Hello",
     "Values and types",
@@ -22,7 +22,8 @@ TITLES = [
     "Globals and locals: the one rule to remember",
     "Automatic keys",
     "Modeling data",
-    "Errors: protected calls"
+    "Errors: protected calls",
+    "Lists: arrays that grow"
 ];
 INTROS = [
     "Install Nihil (see the <a href=\"index.html#install\">home page</a>), save this as " +
@@ -103,7 +104,13 @@ INTROS = [
       "error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when " +
       "the call worked). <code>?! = text;</code> raises an error of your own, which a protected call " +
       "catches like any other. A server keeps running when one request fails, and a program can skip a " +
-      "bad line of its input and go on."
+      "bad line of its input and go on.",
+    "An ARRAY keeps the size it was made with. A LIST grows: <code>[x ; *]</code> makes an empty one " +
+      "(<code>x</code> only gives the type of its items), <code>v[] = x;</code> adds at the end, and " +
+      "<code>v[i]</code>, <code>#v</code> and the each loop work as on an ARRAY. Like a MAP, it is shared: " +
+      "every name and every method that receives it sees the same items. <code>[x ; *1000]</code> makes " +
+      "room for 1,000 items at first, when the size is roughly known. The methods of ARRAY work on a copy " +
+      "of the items, and <code>v.array()</code> gives that copy, an ARRAY of fixed size."
 ];
 JUNK = ["products.dat", "products.dat.nihil-idx", "notes.txt", "orders.dat", "orders.dat.nihil-idx",
     "orders.dat.nihil-seq", "customers.dat", "customers.dat.nihil-idx", "sales.dat", "sales.dat.nihil-idx",
@@ -156,7 +163,7 @@ HEAD =
     "<meta charset=\"utf-8\">\n" +
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
     "<title>Learn Nihil</title>\n" +
-    "<meta name=\"description\" content=\"Nihil in thirteen short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys, modeling data and the standard library.\">\n" +
+    "<meta name=\"description\" content=\"Nihil in fifteen short chapters: values, control without keywords, methods, arrays, optionals, maps, files, tables on disk, automatic keys, modeling data, the standard library, errors and lists.\">\n" +
     "<link rel=\"icon\" type=\"image/png\" href=\"icon-64.png\">\n" +
     "<link rel=\"stylesheet\" href=\"style.css\">\n" +
     "</head>\n" +
@@ -170,7 +177,7 @@ HEAD =
     "</div></nav>\n" +
     "<main class=\"doc\"><div class=\"wrap\">\n" +
     "<h1>Learn Nihil</h1>\n" +
-    "<p>Thirteen short chapters. Every example is a complete program, and the output under it is what it prints.\n" +
+    "<p>Fifteen short chapters. Every example is a complete program, and the output under it is what it prints.\n" +
     "The full reference is <a href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md\">SPEC.md</a>.</p>\n" +
     "<ol class=\"toc\">\n";
 MIDDLE =
