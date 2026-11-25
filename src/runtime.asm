@@ -1055,6 +1055,8 @@ rt_write_fd:
     jz .finish
     mov eax, 1                      ; sys_write
     syscall
+    cmp rax, -4                     ; -EINTR: again
+    je .repeat
     test rax, rax
     jle .finish
     add rsi, rax
@@ -1733,6 +1735,8 @@ gc_stack_top:
     sub rdx, rcx
     syscall
     pop rcx
+    cmp rax, -4                     ; -EINTR: again
+    je .read
     test rax, rax
     jle .close
     add rcx, rax
@@ -2969,11 +2973,14 @@ rt_read_byte:                         ; → rax = 0…255, or -1 at the end of i
     cmp qword [IN_END], 0
     jne .finish
     call rt_flush                 ; what was already written appears before waiting
+.read:
     xor eax, eax                    ; sys_read
     xor edi, edi
     mov rsi, IN_BUF
     mov edx, IN_CAP
     syscall
+    cmp rax, -4                     ; -EINTR: again
+    je .read
     test rax, rax
     jle .finished
     mov [IN_SIZE], rax
@@ -3130,6 +3137,8 @@ rt_read_file:
     mov rsi, rbx
     mov rdx, r13
     syscall
+    cmp rax, -4                     ; -EINTR: again
+    je .read
     test rax, rax
     js .fail_reading
     jz .shrank
@@ -3325,7 +3334,7 @@ rt_sleep:
 %define WF_FRAME    8192
 %define WF_FLAG     (WF_FRAME + 40) ; 0 replace, 1 append, 2 at an offset, 3 truncate, 4 at an offset without fsync, 5 truncate without fsync
 %define WF_OFFSET   (WF_FRAME + 48) ; where the next byte goes (flag 2)
-%define WF_MAX_PATH 4080            ; leaves room for ".nihil-tmp" and the 0
+%define WF_MAX_PATH 4064            ; leaves room for ".nihil-tmp.", the process id and the 0
 rt_write_at:
     push rdx
     push qword 2
@@ -3388,13 +3397,24 @@ rt_write_file:
     ja .report
     cmp qword [rsp + WF_FLAG], 0
     jne .append
-    lea rdi, [rsp + WF_TEMP]        ; temporary = path + ".nihil-tmp"
-    lea rsi, [rsp + WF_PATH]
+    lea rdi, [rsp + WF_TEMP]        ; temporary = path + ".nihil-tmp." + the process id: two
+    lea rsi, [rsp + WF_PATH]        ; programs replacing the same file never write one temporary
     mov rcx, rbx
     rep movsb
     lea rsi, [rel s_tmp_suffix]
     mov ecx, s_tmp_suffix_len
     rep movsb
+    push rdi                        ; where the digits go
+    mov eax, 39                     ; sys_getpid
+    syscall
+    lea rdi, [rsp + 8 + WF_TEMP]    ; the digits, built just below the temporary's room (the path
+                                    ; ends by byte 4065, the digits start at 4076 or later)
+    call rt_decimal                 ; → rsi = first digit, rdi = rsi
+    lea rcx, [rsp + 8 + WF_TEMP]
+    sub rcx, rsi                    ; how many digits
+    pop rdi
+    rep movsb
+    mov byte [rdi], 0
     lea r15, [rsp + WF_TEMP]
     mov edx, 0x241                  ; O_WRONLY | O_CREAT | O_TRUNC
     jmp .open
@@ -3871,7 +3891,7 @@ s_quote_nl:  db "'", 10
 s_write:     db "could not write '"
 s_write_len  equ $ - s_write
 s_quote_colon: db "': "
-s_tmp_suffix: db ".nihil-tmp", 0
+s_tmp_suffix: db ".nihil-tmp."
 s_tmp_suffix_len equ $ - s_tmp_suffix
 s_errno:     db "error "
 s_errno_len  equ $ - s_errno

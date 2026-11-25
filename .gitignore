@@ -1,7 +1,7 @@
 build/
 a.out
 __pycache__/
-*.nihil-tmp
+*.nihil-tmp*
 ide/workspace/*.dat
 ide/workspace/*.txt
 *.nihil-idx

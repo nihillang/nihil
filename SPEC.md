@@ -368,7 +368,7 @@ rows : r, i { r.qty > 0 { : i; } }            // an early return leaves the loop
 | `!>> expr;` | Like `>>`, but to **standard error**. It flushes standard output first, to keep the order on a terminal. |
 | `:: expr;` / `::;` | **Ends the program from anywhere**, including from inside methods, with exit code `expr` (an INT) or 0. Output is flushed first. |
 | `... expr;` | **Waits** `expr` milliseconds (an INT; `<= 0` does not wait). Output is flushed first, so what was written shows up before the pause. Uses `nanosleep` and resumes after a signal (stage 1). |
-| `@>> path, text;` | **Writes a file**: creates it or replaces its contents with the STRING `text` (stage 1). Atomic: the text goes to `path.nihil-tmp`, which is synced to disk (`fsync`) and renamed over `path`, so a crash leaves the old file or the new one, never a mix. A new file gets mode `0644` (minus the umask); a replaced file gets those permissions too. |
+| `@>> path, text;` | **Writes a file**: creates it or replaces its contents with the STRING `text` (stage 1). Atomic: the text goes to `path.nihil-tmp.PID` (`PID` = this process's id, so two programs replacing the same file never share a temporary), which is synced to disk (`fsync`) and renamed over `path`, so a crash leaves the old file or the new one, never a mix. A new file gets mode `0644` (minus the umask); a replaced file gets those permissions too. |
 | `@+>> path, text;` | **Appends** `text` to the file, creating it if needed, and syncs it to disk before going on (stage 1). |
 | `@[i]>> path, r;` | **Changes record `i`** of a table file in place, writing only that line (§20.4, stage 1). |
 | `@{}>> path, r;` | **Writes `r` under its key**: replaces the record with the same key, or adds `r` (§20.5, stage 1). |
@@ -386,7 +386,7 @@ nihil: could not write 'notes/today.txt': no such file or directory
 
 The reasons spelled out are: no such file or directory, permission denied, it
 is a directory, a part of the path is not a directory, no space left on the
-device, read-only file system, the path is too long (over 4080 bytes), disk
+device, read-only file system, the path is too long (over 4064 bytes), disk
 quota exceeded; any other one is shown as `error N` (the `errno`). A failed
 `@>>` removes its temporary file. Both commands sync every write, which makes
 them durable but slow in a tight loop (a few milliseconds each): build the text
