@@ -59,5 +59,8 @@ jobs:
       - name: Build (stage 1 from a seed)
         run: make && test -x build/nihilc1 && test ! -e build/nihilc
 
+      - name: The runtime assembled by Nihil's own assembler (asm/asm.nihil), no nasm
+        run: make runtime-check
+
       - name: Tests, stage 1
         run: make test1
