@@ -55,3 +55,38 @@ big = [1 ; 100000];
 count = 0;
 big : one { count = count + one; }
 >> $count + "\n";
+
+// from the review: a method with many locals (the optimizer's registers taken), nested loops
+// and calls, then new locals after the loop
+busy(v = [0]) {
+    a = 1; b = 2; c = 3; d = 4; e = 5;
+    s = 0;
+    v : x, i { [1, 2] : y { s = s + x * y + a + b + c + d + e + twice(i); } }
+    after = s + 1;
+    : after;
+}
+twice(n = 0) { : n * 2; }
+>> $busy([1, 2, 3]) + "\n";
+
+// the collection from a call is made once
+made = 0;
+make() { made = made + 1; : [5, 6, 7]; }
+got = 0;
+make() : m { got = got + m; }
+>> $made + " " + $got + "\n";
+
+// the array of the loop stays alive when the variable gets another one and memory is reclaimed
+keep = ["k" + $1, "k" + $2, "k" + $3];
+out = "";
+keep : w, j {
+    keep = [""];
+    junk = 0;
+    20000 { tmp = "x".repeat(100); junk = junk + #tmp; }
+    out = out + w;
+}
+>> out + "\n";
+
+// an empty STRING, and bytes of 128 or more
+"" : nothing { >> "never"; }
+"é" : byte { >> $byte + " "; }
+>> "\n";
