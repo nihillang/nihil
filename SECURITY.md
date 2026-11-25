@@ -1,7 +1,9 @@
 # Security
 
-Please report vulnerabilities privately to **security@nihil-lang.dev**, not in a
-public issue. Include the program or input that shows the problem, the version
+Please report vulnerabilities privately, not in a public issue: either with
+**Report a vulnerability** in the repository's
+[Security tab](https://github.com/nihillang/nihil/security/advisories/new), or by
+email to **security@nihil-lang.dev**. Include the program or input that shows the problem, the version
 (the commit) and what you expected to happen.
 
 You will get an answer within a few days. Once a fix is ready, the report is
