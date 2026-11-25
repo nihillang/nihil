@@ -4,6 +4,25 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.7.0
+
+- the runtime is assembled by Nihil's own assembler: `asm/asm.nihil` turns `src/runtime.asm` into `src1/runtime_bin.nihil` with the same bytes as nasm (the runtime and its `GC_STRESS` / `GC_STATS` builds, compared byte by byte), in about 40 ms; `make runtime` uses it, so a change to the runtime no longer needs nasm (only stage 0, the root of the bootstrap, does). It follows nasm's choices of encoding (short jumps and 8-bit values when they fit, a label's value always relocatable) and refuses with a message what it does not encode exactly. `make asm-check` (CI) compares it with nasm on the runtime and on `asm/test.asm` (186 more forms), and checks that the 38 cases of `asm/refuse.asm` are refused
+  - *Why:* A change to the runtime needed nasm, the last tool from outside past stage 0; the language now assembles its own runtime
+- three safety fixes, found in a review of the compiler by Codex and each confirmed by running it:
+  - `s.repeat(n)`: `#s * n` past the largest INT went round to a small size and the copies ran past the block (`"AB".repeat(2^63 - 1)` wrote about 1 GB outside it); it is now a runtime error, `text too large`. `join`, `replace` and the text of a table check their sizes the same way
+  - `s.int()`: a digit after `-9223372036854775808` gave `0`; it gives `_`
+  - `MODEL.from_json` took a cut or broken document as a record (`{"qty": 5` gave 5); the whole text is now checked by JSON's grammar (RFC 8259, UTF-8 strings), and anything else is a runtime error (SPEC §26). `s.json(key)` stays lenient
+  - *Why:* A language that says it is safe must not write outside a block, nor read a broken document as data
+- the IDE's chat can talk to **Codex** (OpenAI's Codex CLI) as well as Claude: each tab chooses its agent. Codex has its own folder in the IDE (`~/.codex-ide`, as Claude Code has `~/.claude-ide`), signs in with a ChatGPT plan or an API key (`/login` in a Codex tab), and its commands, edits and tokens show in the panel as Claude's do. The tab's mode chooses its sandbox: ask and plan read only, accept edits and auto write in the project
+  - *Why:* Some people work with Codex, and the IDE should not choose for them
+- the IDE's chat takes a message while Claude works: it joins the same run, as in Claude Code's terminal (at once when Claude only waits for work in the background, else after the tool that runs); ■ Stop puts a message not yet taken back in the box (by Matheus Mônaco do Carmo)
+  - *Why:* Send was disabled for as long as a background command ran
+- go to definition in the IDE: ⌘-click (Ctrl-click), F12 or the right-click menu goes to where a name is declared (a method, a model's method, a model, a global, a local of the method), in the file and the files it includes; `std:` libraries open read only, from `share/nihil/std`, which the package now carries
+  - *Why:* Finding a method meant searching the files by hand
+- the IDE's server closes a run's input when the run ends, and never writes to an input once closed: a run stopped before its input was closed lost one descriptor
+- the queries over records on the Mac measure the same as in v4.5.0 (7.3 ms for `count` + `sum` + `where` over 1,000,000 records, 50 times); the "10–50% slower" of v4.6.0 came from timing only the first query, while the collector that marks in a child process was at work
+  - *Why:* v4.6.0's note said it was to be looked at
+
 ## v4.6.0
 
 - macOS runs the same runtime as Linux: `src/runtime.asm`, which every executable carries, is translated to ARM64 with the program, and `arm64/rt.c` only turns Linux's system calls into macOS's (1,389 → 356 lines). The Mac gets the collector that marks in a child process, the lock for writes by key, the compact records and the tables read in parts. Measured on the Mac against v4.5.0: making records 21% faster, reading a table 8% faster, 13% less memory; queries over records 10–50% slower (the records' new layout), to be looked at
