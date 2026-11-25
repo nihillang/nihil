@@ -84,19 +84,9 @@ unsupported(why = "") { ?! = why; }
 // it runs only on Linux (the Mac gives PLAT_DATA_END), so it becomes a trap
 code_header() { HEADER_READ = true; ?! = "the ELF header"; }
 
-// ---- the output: one line each, in an ARRAY that doubles ----
-LINES = ["" ; 65536];
-NLINES = 0;
-line(text = "") {
-    NLINES == #LINES {
-        bigger = ["" ; #LINES * 2];
-        j = 0;
-        * j < NLINES { bigger[j] = LINES[j]; j = j + 1; }
-        LINES = bigger;
-    }
-    LINES[NLINES] = text;
-    NLINES = NLINES + 1;
-}
+// ---- the output: one line each, in a LIST ----
+LINES = ["" ; *65536];
+line(text = "") { LINES[] = text; }
 emit(text = "") { line("    " + text); }
 
 // ---- text ----
@@ -1546,7 +1536,7 @@ translate_all(prog = "", out = "") {
     emit(".space " + $globals_size); line("_nh_globals_end:"); emit(".p2align 4"); line("Lconst:");
     bytes_lines(CONST_START, #DATA);
     line("");
-    @>> out, take(LINES, NLINES).join("\n");
+    @>> out, LINES.join("\n");
     !>> "translate: " + $P_N + " instructions\n";
 }
 
