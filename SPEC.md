@@ -337,9 +337,11 @@ names : name, i { >> $i + ": " + name; }      // and its index (0, 1, …)
 rows : r, i { r.qty > 0 { : i; } }            // an early return leaves the loop
 ```
 
-- Before the `:`, an ARRAY (of any element type) or a STRING; after it, the
-  element's name and, optionally after a comma, the index's name. Anything else
-  before the `:` is a compile error.
+- Before the `:`, an ARRAY (of any element type), a LIST (§28) or a STRING;
+  after it, the element's name and, optionally after a comma, the index's name.
+  Anything else before the `:` is a compile error.
+- Over a LIST, the loop visits the items it had on entry; items added inside the
+  block are not visited, and the list may grow safely while it runs.
 - The collection is evaluated **once**, on entry, and its size is taken then:
   assigning another array to the variable inside the block does not change the
   loop (the elements are read from the array it started with; an ARRAY's size
@@ -1581,6 +1583,48 @@ r? = ?call_tool("tool_", name, arguments);           // calls one by name with a
 **Implementation.** The compiler knows every method when it reaches the end of the source:
 `tools(prefix)` becomes a constant text, and `call_tool(prefix, …)` a generated method with one
 branch per tool, reading its parameters with the JSON library.
+
+## 28. LIST: an ARRAY that grows (v4.9)
+
+> `tests/stage1/list.nihil`, `tests/stage1/list_index_error.nihil` and the
+> `tests/stage1/errors/list_*` tests.
+
+A **LIST** is an ARRAY that grows: `v[] = x;` adds `x` at its end. Its type is
+written `LIST of T`, for the same element types an ARRAY takes.
+
+```text
+lines = ["" ; *];                      // an empty list of STRING: the value only gives the type
+codes = [0 ; *65536];                  // the same, with room for 65,536 items before it grows
+lines[] = "first";                     // adds at the end
+>> #lines;                             // how many items
+>> lines[0];                           // reads; out of bounds is a runtime error, as with an ARRAY
+lines[0] = "First";                    // changes an item
+lines : l, i { >> $i + " " + l; }      // each item (§7.6)
+>> lines.join("\n");                   // any ARRAY method, on a copy of the items
+all = lines.array();                   // the items as a new ARRAY
+```
+
+- A list is a **reference**, like a MAP: `w = v;` makes both names point to the
+  same list, and a method that receives a list can add to it. What one name adds,
+  every other name sees, however much the list has grown.
+- A parameter's default is `[literal ; *]`, `f(v = [0 ; *])`, and gives a new
+  empty list on every call; a global list starts empty. A method can return a list.
+- `v.array()` copies the items to a new ARRAY. Every other method is the ARRAY's
+  (§21), called on such a copy: `v.join(", ")`, `v.sort()`, `v.contains(x)`,
+  `v.to_json()`, the queries of an ARRAY of records. Each call copies, so inside a
+  loop over many items take `v.array()` once, before it.
+- Lists cannot be compared, joined with `+`, printed whole or turned into text
+  with `$`; they can be the values of a MAP, but not the elements of an ARRAY or
+  of another list. `name[] = value;` on an ARRAY is a compile error: its size is
+  fixed.
+
+**Implementation.** The value is the address of a header `[count, capacity,
+items]`, prelude code (`__nihil_list_*`), the way a MAP is. Adding to a full list
+doubles its room (8 at least), so adding n items costs O(n) copies in all; the
+room past the count stays zeroed, so the collector keeps nothing alive there.
+`v[i]` and `v[i] = x` check the index against the count, not the room. `#v`
+reads the count in place, and `xs : x { }` reads the items' address again on
+every turn, so the list can grow inside the loop.
 
 ## Appendix A — What changed since v1.0, and why
 

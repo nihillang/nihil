@@ -168,8 +168,17 @@ register_method(ns = 0, nl = 0) {
             next_token();
             read_literal();
             next_token();
-            tok_type != ']' { error("the default of an ARRAY parameter is a one-element literal: [0], [\"\"] or [false]"); }
-            lit_type = lit_type | TYPE_ARR;
+            tok_type == ';' {
+                // [literal ; *]: a LIST parameter (SPEC §28), a new empty list on every call
+                next_token();
+                tok_type != '*' { error("the default of a LIST parameter is [literal ; *]: [0 ; *] or [\"\" ; *]"); }
+                next_token();
+                tok_type != ']' { error("the default of a LIST parameter is [literal ; *]: [0 ; *] or [\"\" ; *]"); }
+                lit_type = list_type(lit_type);
+            } || {
+                tok_type != ']' { error("the default of an ARRAY parameter is a one-element literal: [0], [\"\"] or [false]"); }
+                lit_type = lit_type | TYPE_ARR;
+            }
         } || {
             read_literal();
         }

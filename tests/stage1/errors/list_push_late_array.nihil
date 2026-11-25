@@ -1,0 +1,4 @@
+// v is an ARRAY, found only after the method that adds to it
+f() { v[] = 1; }
+v = [0];
+f();
