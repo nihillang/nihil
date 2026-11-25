@@ -1,0 +1,29 @@
+// ?! = text; (SPEC §25): a runtime error with that text, which ?f() catches and ?! holds
+check(n = 0) {
+    n < 0 { ?! = "negative: " + $n; }
+    : n * 2;
+}
+a? = ?check(4);
+>> a; >> " [" + ?! + "]\n";                 // it worked: ?! is empty
+b? = ?check(-3);
+>> b; >> " | " + ?! + "\n";
+
+// from deep inside: the innermost protection catches it
+deep(n = 0) { n == 0 { ?!= "at the bottom"; : 0; } : deep(n - 1) + 1; }
+c? = ?deep(20);
+>> c; >> " | " + ?! + "\n";
+
+// a protection around one that already caught: the outer call ends normally
+outer() { x? = ?check(-1); >> "inner: " + ?! + "\n"; : 7; }
+d? = ?outer();
+>> d; >> " [" + ?! + "]\n";
+
+// a method without a value, used as a command
+stop(why = "") { ?! = "stopped: " + why; }
+?stop("by hand");
+>> ?! + "\n";
+
+// in a loop the stack does not grow
+failed = 0; i = 0;
+* i < 100000 { r? = ?check(i % 3 - 1); r == _ { failed = failed + 1; } i = i + 1; }
+>> $failed + " failed\n";

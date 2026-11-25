@@ -1,0 +1,5 @@
+// ?! = text; outside any protection: the program ends as for any runtime error
+>> "before\n";
+fail(n = 0) { ?! = "it went wrong: " + $n; }
+fail(42);
+>> "never\n";
