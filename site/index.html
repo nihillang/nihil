@@ -51,7 +51,7 @@
 nihil run hello.nihil        # compile and run: Hello, Nihil!
 nihil hello.nihil            # or compile into ./hello, a native executable
 nihil ide                    # the IDE, in an app window</pre>
-      <p>Next: <a href="learn.html">Learn Nihil</a> in thirteen short chapters, and the
+      <p>Next: <a href="learn.html">Learn Nihil</a> in fourteen short chapters, and the
         <a href="library.html">library reference</a>.</p>
     </div>
   </section>
@@ -61,10 +61,10 @@ nihil ide                    # the IDE, in an app window</pre>
       <h2>Why Nihil</h2>
       <p class="sub">The name is Latin for <em>nothing</em>, and <code>_</code> is the value that is not there.</p>
       <div class="features">
-        <div class="card"><h3>Self-hosted</h3><p>A first compiler in assembly bootstraps a second one written in Nihil, which compiles itself to a fixed point.</p></div>
+        <div class="card"><h3>Self-hosted</h3><p>A first compiler in assembly bootstraps a second one written in Nihil, which compiles itself to a fixed point. Its runtime is assembled by Nihil's own assembler, with the same bytes as nasm.</p></div>
         <div class="card"><h3>Typed, without annotations</h3><p>Types come from values and defaults, settled across several passes. Missing values are explicit optionals.</p></div>
         <div class="card"><h3>Batteries for data</h3><p>Files of fixed-width records with an on-disk key index, and queries like <code>rows.where(price &gt; 10.0).sort(name)</code>.</p></div>
-        <div class="card"><h3>Tiny native binaries</h3><p>A small runtime with a garbage collector is embedded in each executable. A "hello world" is 6 KB.</p></div>
+        <div class="card"><h3>Tiny native binaries</h3><p>A small runtime with a garbage collector is embedded in each executable. A "hello world" is 12 KB on Linux.</p></div>
       </div>
     </div>
   </section>
@@ -72,17 +72,15 @@ nihil ide                    # the IDE, in an app window</pre>
   <section id="taste">
     <div class="wrap">
       <h2>A taste</h2>
-      <p class="sub">A <code>BOOL</code> before <code>{</code> is an if, <code>*</code> is a while loop, <code>:</code> returns.</p>
+      <p class="sub">A <code>BOOL</code> before <code>{</code> is an if, <code>v : y, i { }</code> goes over each element, <code>:</code> returns.</p>
 <pre class="nihil">fib(n = 0) {
     n &lt; 2 { : n; }                 // a BOOL before "{" is an if; ":" returns
     : fib(n - 1) + fib(n - 2);
 }
 
 find(v = [0], x = 0) {
-    i = 0;
-    * i &lt; #v {                     // "*" is a while loop
-        v[i] == x { : i; }
-        i = i + 1;
+    v : y, i {                     // each element of v, and its index
+        y == x { : i; }
     }
     : _;                           // "_" is "no value": find returns INT?
 }
@@ -127,12 +125,15 @@ PRODUCT @{3} FILE = _;                      // delete by key</pre>
             <tr><td><code>cond { … } || { … }</code></td><td>if / else (<code>cond</code> is a BOOL)</td></tr>
             <tr><td><code>* cond { … }</code></td><td>while</td></tr>
             <tr><td><code>n { … }</code></td><td>repeat <code>n</code> times</td></tr>
+            <tr><td><code>xs : x, i { … }</code></td><td>each element of an array (or byte of a text), and its index</td></tr>
             <tr><td><code>f(a = 0, s = "") { … }</code></td><td>a method; every parameter has a default, which gives its type</td></tr>
             <tr><td><code>: value;</code></td><td>return</td></tr>
             <tr><td><code>&gt;&gt; x;</code> / <code>&lt;&lt; x;</code></td><td>write to standard output / read a line</td></tr>
             <tr><td><code>x? = 5;</code>, <code>x || 0</code>, <code>x == _</code></td><td>optionals: a value that may be missing</td></tr>
             <tr><td><code>@ path</code>, <code>@&gt;&gt; path, text;</code></td><td>read a file, replace it atomically</td></tr>
             <tr><td><code>m = {"ana": 30}</code></td><td>a map: values by key, in memory</td></tr>
+            <tr><td><code>r? = ?f(x);</code>, <code>?!</code></td><td>a protected call: a runtime error inside gives <code>_</code>, and <code>?!</code> its text</td></tr>
+            <tr><td><code>?! = "why";</code></td><td>raise an error, which a protected call catches</td></tr>
             <tr><td><code>@ "std:json.nihil";</code></td><td>include a library that ships with the compiler</td></tr>
           </tbody>
         </table>
@@ -146,8 +147,8 @@ PRODUCT @{3} FILE = _;                      // delete by key</pre>
       <p class="sub">The compiler writes the executable by itself, one pass at a time, until the types settle.</p>
       <div class="platforms">
         <div class="card"><h3>Linux x86_64</h3><p>Native ELF executables, no libc and no linker. The reference platform, with the full test suite and a fixed-point check on every change.</p></div>
-        <div class="card"><h3>macOS on Apple silicon</h3><p>Native executables through an instruction-by-instruction translator to ARM64. The compiler itself runs natively on the Mac.</p></div>
-        <div class="card"><h3>A web IDE, in Nihil</h3><p>An editor with a color terminal, the generated machine code one click away, and a table view for record files of any size.</p></div>
+        <div class="card"><h3>macOS on Apple silicon</h3><p>Native executables: each program and the same runtime as on Linux are translated, instruction by instruction, to ARM64 by a translator written in Nihil. The compiler itself runs natively on the Mac, with no Python.</p></div>
+        <div class="card"><h3>A web IDE, in Nihil</h3><p>An editor with a color terminal, go to definition, the generated machine code one click away, a table view for record files of any size, and an agent at your side: Claude or Codex, which read the language's specification and run your programs.</p></div>
       </div>
     </div>
   </section>
