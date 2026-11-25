@@ -172,7 +172,6 @@ start:
     mov rax, near_label - start + 3
     mov rax, start*0
     mov rax, strict qword 1
-    add rax, strict dword 1
 near_label:
     ret
 rip_target:
