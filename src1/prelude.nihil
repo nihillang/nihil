@@ -65,6 +65,7 @@ __nihil_read_int() {
     __i == #__s { __nihil_input_invalid("INT", __s); }
     __v = 0;
     * __i < #__s {
+        __v < 0 { __nihil_input_invalid("INT", __s); }      // a digit after -9223372036854775808
         __d = __s[__i] - '0';
         __d < 0 || __d > 9 { __nihil_input_invalid("INT", __s); }
         // up to 9223372036854775807 (or 9223372036854775808 with a minus sign)
@@ -356,6 +357,12 @@ __nihil_rec_parse(text = "", at = 0, schema = [0], names = "", path = "", line =
 // size is not whole lines, a line is wrong, the file changes size while it is read — goes the old
 // way (__nihil_table_read on the whole text): the same records, the same errors and messages.
 __nihil_table_load(path = "", opt = false, schema = [0], names = "", model = "") {
+    // a path with a NUL byte: the old way, which refuses it (openat would stop at the NUL and
+    // open another file)
+    !__nihil_path_ok(path) {
+        opt { : __nihil_table_read(path, "", schema, names, model); }
+        : __nihil_table_read(path, @ path, schema, names, model);
+    }
     __p = path + "\0";
     __fd = __nihil_syscall([257, -100, __nihil_addr(__p), 0x80000]);   // openat(O_RDONLY | O_CLOEXEC)
     __fd < 0 {
@@ -1045,27 +1052,41 @@ __nihil_key_put_auto_now(path = "", r = 0, schema = [0], names = "", model = "",
     __seq = path + ".nihil-seq";
     __t? = @? __seq;
     __last = 0;
+    __trusted = false;                              // the table has not changed since the counter was written
     __t != _ {
-        __v? = __nihil_s_int(__t || "");
+        __line = __nihil_s_trim(__t || "");
+        __sp = 0;
+        * __sp < #__line && __line[__sp] != ' ' { __sp = __sp + 1; }
+        __v? = __nihil_s_int(__nihil_sub(__line, 0, __sp));
         __v != _ { __last = __v || 0; }
+        __v != _ && __sp < #__line && __nihil_sub(__line, __sp + 1, #__line) == __nihil_key_seq_stamp(path) { __trusted = true; }
     }
     __f[kf] == 0 {
         __next = __last + 1;
-        __size = __nihil_fsize(path);
-        __size > 0 {
-            __g = __nihil_key_find(__nihil_int_text(__next), path, __size, __nihil_fstamp(path), schema, names, model, kf);
-            __g >= 0 {
-                __next = __nihil_key_max(path, schema, names, model, kf) + 1;
-                __next <= __last { __next = __last + 1; }
-            }
+        // a counter that is missing, older than the table, or behind it: the largest key + 1
+        __nihil_fsize(path) > 0 && !__trusted {
+            __m = __nihil_key_max(path, schema, names, model, kf);
+            __next <= __m { __next = __m + 1; }
         }
         __f[kf] = __next;
         __nihil_key_put_now(path, r, schema, names, model, kf);
-        @>> __seq, __nihil_int_text(__next) + "\n";
+        @>> __seq, __nihil_int_text(__next) + " " + __nihil_key_seq_stamp(path) + "\n";
         :;
     }
     __nihil_key_put_now(path, r, schema, names, model, kf);
-    __f[kf] > __last { @>> __seq, __nihil_int_text(__f[kf]) + "\n"; }
+    // a key written by hand past the counter moves it; the table's stamp goes with it only when
+    // the counter was right before (else the next number still looks for the largest key)
+    __f[kf] > __last {
+        __mark = "";
+        __trusted { __mark = " " + __nihil_key_seq_stamp(path); }
+        @>> __seq, __nihil_int_text(__f[kf]) + __mark + "\n";
+    }
+}
+
+// what the counter keeps of the table when it is written (its size and stamp): when they still
+// match, nothing else wrote the table, and the counter is right without reading the table
+__nihil_key_seq_stamp(path = "") {
+    : __nihil_int_text(__nihil_fsize(path)) + " " + __nihil_int_text(__nihil_fstamp(path));
 }
 
 // the largest INT key of the table (0 if it has no records)
@@ -1209,8 +1230,35 @@ __nihil_s_match(s = "", at = 0, t = "") {
 __nihil_s_find(s = "", t = "", from = 0) {
     __i = from;
     __i < 0 { __i = 0; }
-    * __i + #t <= #s {
+    __i > #s - #t { : _; }                          // no room (and no from + #t past the largest INT)
+    #t > 8 { : __nihil_s_find_long(s, t, __i); }
+    __last = #s - #t;
+    * __i <= __last {
         __nihil_s_match(s, __i, t) { : __i; }
+        __i = __i + 1;
+    }
+    : _;
+}
+
+// a longer t: Knuth–Morris–Pratt, linear in #s + #t (comparing at each position could take
+// #s × #t: "a" × 200000 searched for "a" × 100000 + "b" took 10 s)
+__nihil_s_find_long(s = "", t = "", from = 0) {
+    __m = #t;
+    __back = [0 ; __m];
+    __k = 0;
+    __j = 1;
+    * __j < __m {
+        * __k > 0 && t[__j] != t[__k] { __k = __back[__k - 1]; }
+        t[__j] == t[__k] { __k = __k + 1; }
+        __back[__j] = __k;
+        __j = __j + 1;
+    }
+    __q = 0;
+    __i = from;
+    * __i < #s {
+        * __q > 0 && s[__i] != t[__q] { __q = __back[__q - 1]; }
+        s[__i] == t[__q] { __q = __q + 1; }
+        __q == __m { : __i - __m + 1; }
         __i = __i + 1;
     }
     : _;
@@ -1255,28 +1303,17 @@ __nihil_s_split(s = "", sep = "") {
         : __r;
     }
     __n = 1;
-    __i = 0;
-    * __i + #sep <= #s {
-        __nihil_s_match(s, __i, sep) {
-            __n = __n + 1;
-            __i = __i + #sep;
-        } || {
-            __i = __i + 1;
-        }
-    }
+    __at? = __nihil_s_find(s, sep, 0);
+    * __at != _ { __n = __n + 1; __at = __nihil_s_find(s, sep, (__at || 0) + #sep); }
     __r = ["" ; __n];
     __k = 0;
     __a = 0;
-    __i = 0;
-    * __i + #sep <= #s {
-        __nihil_s_match(s, __i, sep) {
-            __r[__k] = __nihil_sub(s, __a, __i);
-            __k = __k + 1;
-            __i = __i + #sep;
-            __a = __i;
-        } || {
-            __i = __i + 1;
-        }
+    __at = __nihil_s_find(s, sep, 0);
+    * __at != _ {
+        __r[__k] = __nihil_sub(s, __a, __at || 0);
+        __k = __k + 1;
+        __a = (__at || 0) + #sep;
+        __at = __nihil_s_find(s, sep, __a);
     }
     __r[__k] = __nihil_sub(s, __a, #s);
     : __r;
@@ -1308,26 +1345,22 @@ __nihil_as_join(v = [""], sep = "") {
 __nihil_s_replace(s = "", a = "", b = "") {
     #a == 0 { : s; }
     __n = 0;
-    __i = 0;
-    * __i + #a <= #s {
-        __nihil_s_match(s, __i, a) { __n = __n + 1; __i = __i + #a; } || { __i = __i + 1; }
-    }
+    __at? = __nihil_s_find(s, a, 0);
+    * __at != _ { __n = __n + 1; __at = __nihil_s_find(s, a, (__at || 0) + #a); }
     __n == 0 { : s; }
     __size = #s - __n * (#a - #b);                          // shorter, or as long
     #b > #a { __size = __nihil_size_add(#s, __nihil_size_mul(__n, #b - #a)); }
     __r = __nihil_bytes(__size);
     __p = 0;
-    __i = 0;
-    * __i < #s {
-        __i + #a <= #s && __nihil_s_match(s, __i, a) {
-            __p = __nihil_s_put(__r, __p, b);
-            __i = __i + #a;
-        } || {
-            __nihil_poke(__r, __p, s[__i]);
-            __p = __p + 1;
-            __i = __i + 1;
-        }
+    __from = 0;
+    __at = __nihil_s_find(s, a, 0);
+    * __at != _ {
+        __p = __nihil_s_put(__r, __p, __nihil_sub(s, __from, __at || 0));
+        __p = __nihil_s_put(__r, __p, b);
+        __from = (__at || 0) + #a;
+        __at = __nihil_s_find(s, a, __from);
     }
+    __p = __nihil_s_put(__r, __p, __nihil_sub(s, __from, #s));
     : __r;
 }
 
@@ -1705,6 +1738,7 @@ __nihil_sort_by(v = [0], keys = [0], kind = 0) {
     kind == 7 {
         __i = 0;                          // FLOAT bits → INTs in the same order
         __n {
+            keys[__i] == -9223372036854775807 - 1 { keys[__i] = 0; }      // -0.0 is 0.0 (equal keys stay in order)
             keys[__i] < 0 { keys[__i] = keys[__i] ^ 9223372036854775807; }
             __i = __i + 1;
         }
@@ -2049,10 +2083,17 @@ __nihil_json_check(s = "", i = 0, depth = 0) {
                 __i + 1 >= #s { : -1; }
                 __e = s[__i + 1];
                 __e == 'u' {
-                    __i + 5 >= #s { : -1; }
-                    __k = 2;
-                    * __k < 6 { __nihil_json_hex(s[__i + __k]) < 0 { : -1; } __k = __k + 1; }
+                    __u = __nihil_json_u4(s, __i + 2);
+                    __u < 0 { : -1; }
                     __i = __i + 6;
+                    // a surrogate must come in a pair (high, then low): alone it has no UTF-8
+                    __u >= 0xDC00 && __u < 0xE000 { : -1; }
+                    __u >= 0xD800 && __u < 0xDC00 {
+                        __i + 1 >= #s || s[__i] != 92 || s[__i + 1] != 'u' { : -1; }
+                        __lo = __nihil_json_u4(s, __i + 2);
+                        __lo < 0xDC00 || __lo >= 0xE000 { : -1; }
+                        __i = __i + 6;
+                    }
                 } || __e == '"' || __e == 92 || __e == '/' || __e == 'b' || __e == 'f' || __e == 'n' || __e == 'r' || __e == 't' {
                     __i = __i + 2;
                 } || { : -1; }
@@ -2083,6 +2124,15 @@ __nihil_json_check(s = "", i = 0, depth = 0) {
         * __i < #s && s[__i] >= '0' && s[__i] <= '9' { __i = __i + 1; }
     }
     : __i;
+}
+
+// the 4 hex digits of a \u escape at i, or -1
+__nihil_json_u4(s = "", i = 0) {
+    i + 4 > #s { : -1; }
+    __v = 0;
+    __k = 0;
+    * __k < 4 { __h = __nihil_json_hex(s[i + __k]); __h < 0 { : -1; } __v = __v * 16 + __h; __k = __k + 1; }
+    : __v;
 }
 
 // the length of the UTF-8 character at i (its first byte is 0x80 or more), or -1 if it is not
@@ -2289,9 +2339,9 @@ __nihil_s_json(s = "", key = "") {
 // its values, in the same order as the keys). One pass keeps where each part starts and
 // ends; then the texts are cut.
 __nihil_json_parts(s = "", mode = 0) {
-    keys = mode != 0;
+    __keys = mode != 0;
     __open = '[';
-    keys { __open = '{'; }
+    __keys { __open = '{'; }
     __i = __nihil_json_ws(s, 0);
     __i >= #s || s[__i] != __open { : ["" ; 0]; }
     __from = [0 ; 64];
@@ -2303,7 +2353,7 @@ __nihil_json_parts(s = "", mode = 0) {
         __a = __j;
         __e = __nihil_json_end(s, __a);
         __pa = __a; __pe = __e;                      // the part: the item, the key or the value
-        keys && __e >= 0 {
+        __keys && __e >= 0 {
             mode == 1 { __pa = __a + 1; __pe = __e - 1; }
             __e = __nihil_json_ws(s, __e);
             __e < #s && s[__e] == ':' {
@@ -2386,6 +2436,7 @@ __nihil_json_unescape(s = "") {
                         __i = __i + 6;
                     }
                 }
+                __u >= 0xD800 && __u < 0xE000 { __u = 0xFFFD; }    // a surrogate without its pair: U+FFFD, not invalid UTF-8
                 __u < 0x80 {
                     __nihil_poke(__r, __n, __u); __n = __n + 1;
                 } || __u < 0x800 {
@@ -2815,13 +2866,27 @@ __nihil_s_http_header(s = "", name = "") {
     : _;
 }
 
-// s.http_host_is_local() → BOOL: the request names this machine (localhost or 127.0.0.1, any
-// port). A server for one machine refuses the others: a site whose name is made to point at
+// s.http_host_is_local() → BOOL: the request names this machine (localhost, 127.0.0.1 or [::1],
+// any port). A server for one machine refuses the others: a site whose name is made to point at
 // 127.0.0.1 (DNS rebinding) sends its own name here
 __nihil_s_http_host_is_local(s = "") {
     __h = (__nihil_s_http_header(s, "host") || "").lower();
-    __c? = __h.find(":");
-    __n = __h.slice(0, __c || #__h);
+    __n = __h;
+    __h.starts_with("[") {                          // [IPv6]:port — the name goes to the "]"
+        __b? = __h.find("]");
+        __b == _ { : false; }
+        __e = (__b || 0) + 1;
+        __n = __h.slice(0, __e);
+        // after it, nothing or ":digits" ([::1].evil is not this machine)
+        __e < #__h {
+            __h[__e] != ':' || __e + 1 == #__h { : false; }
+            __k = __e + 1;
+            * __k < #__h { __h[__k] < '0' || __h[__k] > '9' { : false; } __k = __k + 1; }
+        }
+    } || {
+        __c? = __h.find(":");
+        __n = __h.slice(0, __c || #__h);
+    }
     : __n == "localhost" || __n == "127.0.0.1" || __n == "[::1]";
 }
 
@@ -3047,6 +3112,18 @@ __nihil_as_start(cmd = [""], out = "", err = "", dir = "") {
     __nihil_syscall([293, __nihil_addr(__pb), 0x80000]) < 0 { : _; }     // pipe2(O_CLOEXEC)
     __rd = __nihil_u32_at(__pb, 0);
     __wr = __nihil_u32_at(__pb, 4);
+    // a second pipe tells whether the program started: execve closes it (O_CLOEXEC) when it
+    // works; when chdir or execve fails the child writes a byte to it first, and the parent
+    // gives _ (before, it gave a process that ended with 127: ["/"].run() was 127)
+    __eb = __nihil_bytes(8);
+    __nihil_syscall([293, __nihil_addr(__eb), 0x80000]) < 0 {
+        __nihil_syscall([3, __rd]); __nihil_syscall([3, __wr]);
+        __ofd >= 0 { __nihil_syscall([3, __ofd]); }
+        __efd >= 0 && __efd != __ofd { __nihil_syscall([3, __efd]); }
+        : _;
+    }
+    __er = __nihil_u32_at(__eb, 0);
+    __ew = __nihil_u32_at(__eb, 4);
     __dfl = [0, 0, 0, 0];                                                 // sigaction: SIG_DFL
     __ign = [1, 0, 0, 0];                                                 // SIG_IGN
     ... 0;                                                                // the output so far goes out first
@@ -3055,11 +3132,32 @@ __nihil_as_start(cmd = [""], out = "", err = "", dir = "") {
         __nihil_syscall([33, __rd, 0]);                                   // dup2: the pipe is its input
         __ofd >= 0 { __nihil_syscall([33, __ofd, 1]); }
         __efd >= 0 { __nihil_syscall([33, __efd, 2]); }
-        #dir > 0 && __nihil_syscall([80, __nihil_addr(__dirz)]) < 0 { __nihil_syscall([231, 127]); }   // chdir
+        #dir > 0 && __nihil_syscall([80, __nihil_addr(__dirz)]) < 0 {    // chdir
+            __nihil_start_failed(__ew);
+        }
         __nihil_syscall([13, 13, __nihil_addr(__dfl), 0, 8]);             // SIGPIPE back to the default
-        __nihil_syscall([436, 3, 4294967295, 0]);                         // close_range: nothing else leaks
+        __nihil_syscall([436, 3, __ew - 1, 0]);                           // close_range: nothing else leaks,
+        __nihil_syscall([436, __ew + 1, 4294967295, 0]);                  // but the pipe that says it started
         __nihil_syscall([59, __nihil_addr(__progz), __nihil_addr(__argv), __nihil_addr(__envp)]);    // execve
-        __nihil_syscall([231, 127]);                                      // exit_group(127): could not run it
+        __nihil_start_failed(__ew);                                       // it did not start
+    }
+    __nihil_syscall([3, __ew]);
+    __started = true;
+    __pid >= 0 {
+        __one = __nihil_bytes(8);
+        __got = -4;
+        * __got == -4 { __got = __nihil_syscall([0, __er, __nihil_addr(__one), 1]); }   // read (again after EINTR)
+        __got > 0 { __started = false; }
+    }
+    __nihil_syscall([3, __er]);
+    !__started {                                                          // the child ended: reaped here
+        __st2 = __nihil_bytes(8);
+        __w2 = -4;
+        * __w2 == -4 { __w2 = __nihil_syscall([61, __pid, __nihil_addr(__st2), 0, 0]); }   // wait4 (again after EINTR)
+        __nihil_syscall([3, __rd]); __nihil_syscall([3, __wr]);
+        __ofd >= 0 { __nihil_syscall([3, __ofd]); }
+        __efd >= 0 && __efd != __ofd { __nihil_syscall([3, __efd]); }
+        : _;
     }
     __nihil_syscall([3, __rd]);
     __ofd >= 0 { __nihil_syscall([3, __ofd]); }
@@ -3067,6 +3165,13 @@ __nihil_as_start(cmd = [""], out = "", err = "", dir = "") {
     __pid < 0 { __nihil_syscall([3, __wr]); : _; }
     __nihil_syscall([13, 13, __nihil_addr(__ign), 0, 8]);                 // a child that closes its input must not stop us
     : __pid * 65536 + __wr;
+}
+
+// in the child, when chdir or execve failed: one byte to the parent (again after EINTR), then exit 127
+__nihil_start_failed(fd = 0) {
+    __r = -4;
+    * __r == -4 { __r = __nihil_syscall([1, fd, __nihil_addr("!"), 1]); }
+    __nihil_syscall([231, 127]);
 }
 
 // cmd.run() → INT?: runs it with this program's output and waits; its exit code (_ if it

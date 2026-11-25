@@ -1,0 +1,4 @@
+// << into an INT: the smallest INT is read as it is
+n = 0;
+<< n;
+>> n; >> "\n";

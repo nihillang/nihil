@@ -30,7 +30,9 @@ m? = ?items("[{\"qty\": 1}, {\"qty\": 2}"); >> m; >> " | " + ?! + "\n";
 probe(t = "") { q? = ?read(t); >> q; >> " "; }
 probe("{\"x\":-}"); probe("{\"x\":1.}"); probe("{\"x\":.5}"); probe("{\"x\":1e}"); probe("{\"x\":1e+}"); probe("{\"x\":truex}");
 probe("{\"name\":\"\\u123"); probe("{\"name\":\"\\u12G4\"}"); probe("{\"name\":\"\x1F\"}"); probe("\x0B{}"); probe("{}{}"); >> "\n";
-probe("{\"qty\":-0,\"x\":1E+2}"); probe("\t\r\n{}\t\r\n"); probe("{\"name\":\"é😀\"}"); probe("{\"x\":1,\"x\":2}"); probe("{\"x\":\"\\uDEAD\"}"); >> "\n";
+probe("{\"qty\":-0,\"x\":1E+2}"); probe("\t\r\n{}\t\r\n"); probe("{\"name\":\"é😀\"}"); probe("{\"x\":1,\"x\":2}"); >> "\n";
+// a surrogate without its pair has no UTF-8: refused (v4.7.1)
+probe("{\"x\":\"\\uDEAD\"}"); probe("{\"x\":\"\\uD800\"}"); probe("{\"x\":\"\\uD800\\u0041\"}"); probe("{\"x\":\"\\uD83D\\uDE00\"}"); >> "\n";
 // UTF-8: invalid bytes, a lone continuation, an overlong "/", a cut sequence, a surrogate, past U+10FFFF
 probe("{\"name\":\"\xFF\"}"); probe("{\"name\":\"\x80\"}"); probe("{\"name\":\"\xC0\xAF\"}"); probe("{\"name\":\"\xC3\"}");
 probe("{\"name\":\"\xED\xA0\x80\"}"); probe("{\"name\":\"\xF4\x90\x80\x80\"}"); probe("{\"name\":\"\xF4\x8F\xBF\xBF\"}"); >> "\n";

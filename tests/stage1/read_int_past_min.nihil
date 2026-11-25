@@ -1,0 +1,4 @@
+// << into an INT: a digit after -9223372036854775808 is not a valid INT (it gave 0)
+n = 0;
+<< n;
+>> n;
