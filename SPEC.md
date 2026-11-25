@@ -1072,13 +1072,16 @@ o = ORDER(0, "Ana", 99.9);
 @{}>> "orders.dat", o;            // o has its number: replaced in place, not numbered again
 ```
 
-- The last number given is kept in `path.nihil-seq` (its decimal text), so a
-  number is **not given again** after its record is deleted.
+- The last number given is kept in `path.nihil-seq` (its decimal text, then the
+  table's size and stamp right after that write), so a number is **not given
+  again** after its record is deleted.
 - A record written with a number by hand (not 0) keeps it; a number past the
   counter moves the counter there.
-- If `path.nihil-seq` is missing, or behind because the table was written in
-  some other way (`@>>`, `@+>>`, an editor), the next number is the largest key
-  of the table + 1 (found by reading the table once).
+- If `path.nihil-seq` is missing, or the table changed after it was written (in
+  some other way: `@>>`, `@+>>`, an editor, or the counter is behind), the next
+  number is the largest key of the table + 1, past the counter (found by reading
+  the table once); while the size and stamp kept with the counter still match
+  the table, the counter is used as it is, without reading the table.
 - Only `@{}>>` numbers records; `@[i]>>` and `@+>>` write the key as it is.
 - The key must be INT: `an automatic key (#+) must be INT`. The counter is
   read and written by each numbered write under the table's lock (see
@@ -1495,7 +1498,7 @@ ps = PLANOGRAM.from_json_items(text);    // an ARRAY of records from a JSON arra
     `field 'fronts' of ITEM is not an INT in the JSON: "many"`;
   - the whole text must be one valid JSON object by JSON's grammar (RFC 8259), with only
     spaces after it: a cut or broken document (`{"qty": 5`, a comma too many, unpaired
-    brackets, a bad escape, text after the object) is a runtime error,
+    brackets, a bad escape, a `\u` surrogate without its pair, text after the object) is a runtime error,
     `ITEM.from_json: the text is not a valid JSON object`, and is never read as a record.
     The `s.json(…)` calls of §21.2 stay lenient: they look for one part of the text.
 - `MODEL.from_json_items(text)` does the same for each object of a JSON array, after checking

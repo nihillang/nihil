@@ -1,0 +1,87 @@
+// fixes in the prelude (v4.7.1), each found in a review by Codex and confirmed by running it
+
+// a table path with a NUL byte is not opened (openat stopped at the NUL: "VERSION\0x" read VERSION)
+V = @[text: STRING(5)];
+>> #(V @? "VERSION\0.other"); >> "\n";
+
+// an automatic key whose counter is behind the table: the largest key + 1 (it gave 1)
+R = @[#+id: INT(4)];
+p = "build/prelude_fixes_auto.dat";
+@>> p, R(7);
+@>> p + ".nihil-seq", "0\n";
+r = R();
+@{}>> p, r;
+r2 = R();
+@{}>> p, r2;
+>> $r.id + " " + $r2.id + "\n";
+
+// json_keys() leaves a global called keys alone (its local had no __)
+keys = false;
+items = "{\"a\": 1}".json_keys();
+>> keys; >> " " + items[0] + "\n";
+
+// find from a position past the end: _ (from + #t went round)
+>> "a".find("a", 9223372036854775807); >> " "; >> "abc".find("c", 2); >> " "; >> "abc".find("", 3); >> "\n";
+
+// sort by a FLOAT key: 0.0 and -0.0 are equal, so they keep their order
+F = @[id: INT(1); value: FLOAT(4)];
+rows = [F(1, 0.0), F(2, -0.0), F(3, -1.0)];
+o = rows.sort(value);
+>> $o[0].id + $o[1].id + $o[2].id + "\n";
+
+// .float() with many zeros before the digits (768 zeros and a 1 read as 0.0)
+>> ("0".repeat(768) + "1").float(); >> " "; >> ("0." + "0".repeat(30) + "5e31").float(); >> " ";
+>> ("0".repeat(900)).float(); >> " "; >> "0.000".float(); >> " "; >> ("0.0" + "0".repeat(40)).float(); >> "\n";
+
+// a lone surrogate: from_json refuses it, the lenient reading gives U+FFFD
+S = @[s: STRING(8)];
+str(t = "") { : S.from_json(t).s; }
+a? = ?str("{\"s\": \"\\uD800\"}"); >> a; >> " | " + ?! + "\n";
+b? = ?str("{\"s\": \"\\uDC00x\"}"); >> b; >> "\n";
+c? = ?str("{\"s\": \"\\uD83D\\uDE00\"}"); >> c; >> "\n";
+>> ("{\"s\": \"a\\uD800b\"}".json("s") || "").json_text(); >> "\n";
+
+// [::1] is this machine, as SPEC §23 says
+>> "GET / HTTP/1.1\r\nHost: [::1]:8730\r\n\r\n".http_host_is_local(); >> " ";
+>> "GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n".http_host_is_local(); >> " ";
+>> "GET / HTTP/1.1\r\nHost: [::2]:80\r\n\r\n".http_host_is_local(); >> " ";
+>> "GET / HTTP/1.1\r\nHost: localhost:1\r\n\r\n".http_host_is_local(); >> "\n";
+
+// a program that cannot start is _ (a directory gave 127); one that starts gives its code
+d? = ["/"].run(); >> d; >> " ";
+e? = ["true"].run(); >> e; >> " ";
+f? = ["false"].run(); >> f; >> "\n";
+
+// find, split and replace with the linear search (a long needle: Knuth–Morris–Pratt)
+long = "a".repeat(200000);
+>> long.find("a".repeat(100000) + "b"); >> " "; >> (long + "b").find("a".repeat(100000) + "b"); >> "\n";
+>> "xyzxyzxyzxyzxyzxya".find("xyzxyzxyzxya"); >> " "; >> "abababababababc".find("abababababc"); >> " "; >> "aaaaaaaaaaab".find("aaaaaaaaab", 3); >> "\n";
+>> "a,,b,".split(",").join("|") + " " + "a--b----c".split("--").join("|") + " " + "abc".split("x").join("|") + "\n";
+>> "aaa".replace("aa", "b") + " " + "x-y-z".replace("-", "+++") + " " + "aaaa".replace("a", "") + " " + "abc".replace("abc", "") + "\n";
+>> ("12345678901234567890" + "x" + "12345678901234567890").replace("12345678901234567890", "N") + "\n";
+
+// the edges (from the review of these fixes)
+>> "abc".find("a", -1); >> " "; >> "abc".find("", 4); >> " "; >> "".find("", 0); >> "\n";
+>> "abc".split("").join("|") + " " + "abc".replace("", "X") + " " + "aaa".split("aa").join("|") + "\n";
+>> "a".repeat(19).replace("a".repeat(9), "X") + " " + "a".repeat(19).split("a".repeat(9)).join("|") + "\n";
+>> ("0." + "0".repeat(800) + "5e801").float(); >> " "; >> F(1, 0.0).value; >> "\n";
+>> ("\"\\uDC00\"".json_text() || "") + " " + ("\"\\uD800\\u0041\"".json_text() || "") + " " + ("\"\\uD800\\uD83D\\uDE00\"".json_text() || "") + "\n";
+rows2 = [F(1, -0.0), F(2, 0.0)];
+o2 = rows2.sort(value);
+>> $o2[0].id + $o2[1].id + "\n";
+// a key by hand while the counter is behind: the next number still looks for the largest key
+@>> p, R(7);
+@>> p + ".nihil-seq", "0\n";
+@{}>> p, R(2);
+manual = R();
+@{}>> p, manual;
+>> manual.id; >> " ";
+@>> p + ".nihil-seq", "x 1 2\n";
+bad = R();
+@{}>> p, bad;
+>> bad.id; >> "\n";
+>> "GET / HTTP/1.1\r\nHost: [::1].evil\r\n\r\n".http_host_is_local(); >> " ";
+>> "GET / HTTP/1.1\r\nHost: [::1]:\r\n\r\n".http_host_is_local(); >> " ";
+>> "GET / HTTP/1.1\r\nHost: [::1]:80x\r\n\r\n".http_host_is_local(); >> "\n";
+g? = ["/bin/sh", "-c", "exit 127"].run(); >> g; >> " ";
+h? = ["true"].start("", "", "/dev/null/child"); >> h; >> "\n";
