@@ -174,6 +174,7 @@ cmd_expr_block() {
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
     c = tok_type;
+    c == ':' { each_loop(pi, pl, pn, pli, t); :; }
     c == '{' {
         t == TYPE_BOOL { conditional(); :; }
         t == TYPE_INT || t == TYPE_UNKNOWN { counted_loop(true); :; }
@@ -191,6 +192,114 @@ cmd_expr_block() {
         type_bad(pi, pl, pn, pli, t);
     }
     error_expected("'{' after the expression (an expression alone is not a command)");
+}
+
+// xs : x { … }  |  xs : x, i { … }  — each element of an ARRAY (each byte of a STRING), and its
+// index (SPEC §7.6). The collection is evaluated once and its size taken on entry; x and i are
+// new locals of the block, as a method's parameters are new names (one that exists is an error).
+//   mov [rbp+a], rax ; mov rcx, [rax-8] ; mov [rbp+n], rcx ; mov qword [rbp+i], 0
+// top: mov rcx, [rbp+i] ; cmp rcx, [rbp+n] ; jge end
+//   mov rax, [rbp+a] ; mov rax, [rax+rcx*8] (movzx eax, byte [rax+rcx]) → x ; mov rax, [rbp+i] → i
+//   … the block … ; inc qword [rbp+i] ; jmp top
+// end:
+each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
+    t != TYPE_STR && (t & TYPE_ARR == 0 || is_opt(t)) {
+        restore_pos(pi, pl, pn, pli);
+        error_start();
+        put_str("before ':' there must be an ARRAY or a STRING (each of its elements), but the expression is ");
+        put_type(t);
+        error_end();
+    }
+    et = TYPE_INT;
+    t != TYPE_STR { et = t & ~TYPE_ARR; }
+    next_token();                            // ":" → the element's name
+    tok_type != T_IDENT { error_expected("the name of each element after ':'"); }
+    xi = tok_start; xl = tok_len; xn = tok_line; xli = tok_lstart;
+    next_token();
+    has_i = false;
+    ii = 0; il = 0; iln = 0; ili = 0;
+    tok_type == ',' {
+        next_token();
+        tok_type != T_IDENT { error_expected("the name of the index after ','"); }
+        has_i = true;
+        ii = tok_start; il = tok_len; iln = tok_line; ili = tok_lstart;
+        next_token();
+    }
+    tok_type != '{' { error_expected("'{' after the names (xs : x, i { … })"); }
+    a = new_slot();
+    n = new_slot();
+    ix = new_slot();
+    emit_store_local(a);
+    eb(0x48, 0x8B, 0x48, 0xF8);              // mov rcx, [rax - 8]: the size
+    eb(0x48, 0x89, 0x8D); emit_d(n);         // mov [rbp + n], rcx
+    eb(0x48, 0xC7, 0x85); emit_d(ix); emit_d(0);    // mov qword [rbp + i], 0
+    align_loop();
+    top = size_code;
+    last_target = size_code;
+    eb(0x48, 0x8B, 0x8D); emit_d(ix);        // mov rcx, [rbp + i]
+    eb(0x48, 0x3B, 0x8D); emit_d(n);         // cmp rcx, [rbp + n]
+    eb(0x0F, 0x8D);                          // jge end
+    leave = size_code;
+    emit_d(0);
+    // the block, with x (and i) as its first locals
+    line = tok_line;
+    next_token();
+    ns = n_sym;
+    sl = slots;
+    nr = n_regs;
+    nc = candidates;
+    level = level + 1;
+    kx = each_name(xi, xl, xn, xli, et);
+    ki = -1;
+    has_i {
+        il == xl && same_text(ii, xi, il) { restore_pos(ii, il, iln, ili); error("the element and the index need two names"); }
+        ki = each_name(ii, il, iln, ili, TYPE_INT);
+    }
+    eb(0x48, 0x8B, 0x85); emit_d(a);         // mov rax, [rbp + a]
+    t == TYPE_STR { eb(0x0F, 0xB6, 0x04, 0x08); } || { eb(0x48, 0x8B, 0x04, 0xC8); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
+    emit_store_var(kx);
+    has_i { eb(0x48, 0x8B, 0x85); emit_d(ix); emit_store_var(ki); }   // mov rax, [rbp + i]
+    loop_depth = loop_depth + 1;
+    * tok_type != '}' {
+        tok_type == T_END {
+            error_start();
+            put_str("missing '}' to close the block opened on line ");
+            put_line(line);
+            error_end();
+        }
+        command();
+    }
+    next_token();
+    loop_depth = loop_depth - 1;
+    n_sym = ns;
+    slots = sl;
+    n_regs = nr;
+    candidates = nc;
+    level = level - 1;
+    eb(0x48, 0xFF, 0x85); emit_d(ix);        // inc qword [rbp + i]
+    emit_jmp_to(top);
+    patch_here(leave);
+    slots = slots - 3;
+}
+
+// a name after ':' — new, as a parameter is: a local of the loop's block
+each_name(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
+    lookup(pi, pl) >= 0 {
+        restore_pos(pi, pl, pn, pli);
+        error_start();
+        put_str("'");
+        put_source(pi, pl);
+        put_str("' already exists: the names after ':' are new, as a method's parameters are");
+        error_end();
+    }
+    : create_local(pi, pl, t);
+}
+
+// the same text at a and b, n bytes
+same_text(a = 0, b = 0, n = 0) {
+    k = 0;
+    * k < n { lx_buf[a + k] != lx_buf[b + k] { : false; } k = k + 1; }
+    : true;
 }
 
 type_bad(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {

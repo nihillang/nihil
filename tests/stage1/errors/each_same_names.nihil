@@ -1,0 +1,2 @@
+// the element and the index need two names
+[1, 2] : v, v { }
