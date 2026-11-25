@@ -1,0 +1,2 @@
+// a parameter is a name that exists
+f(x = 0) { [1] : x { } }
