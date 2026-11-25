@@ -75,15 +75,14 @@ TRANSPARENT = ["mov", "movabs", "movzx", "movsx", "movsxd", "lea", "push", "pop"
                "cqo", "bswap", "not", "xchg", "movq", "cvtsi2sd", "divsd"];
 HEXITS = "0123456789abcdef";
 
-// ---- failures: a translation that cannot be made stops the instruction (a protected call) ----
-BOOM = [0];
-ERR = "";
+// ---- failures: a translation that cannot be made stops the instruction (a protected call: ?!
+// holds why, SPEC §25) ----
 HEADER_READ = false;
 // the instruction cannot be translated faithfully
-unsupported(why = "") { ERR = why; boom = BOOM[1]; }
+unsupported(why = "") { ?! = why; }
 // a read of the executable's ELF header, which the Mac's translation does not have: the code that does
 // it runs only on Linux (the Mac gives PLAT_DATA_END), so it becomes a trap
-code_header() { HEADER_READ = true; ERR = "the ELF header"; boom = BOOM[1]; }
+code_header() { HEADER_READ = true; ?! = "the ELF header"; }
 
 // ---- the output: one line each, in an ARRAY that doubles ----
 LINES = ["" ; 65536];
@@ -387,10 +386,8 @@ p_address(operand = "") {
             left = t.slice(0, p);
             right = t.slice(p + 1);
             ok = #right > 0;
-            j = 0;
-            * j < #left { !is_alnum_lower(left[j]) { ok = false; } j = j + 1; }
-            j = 0;
-            * j < #right { !is_alnum_lower(right[j]) { ok = false; } j = j + 1; }
+            left : lc { !is_alnum_lower(lc) { ok = false; } }
+            right : rc { !is_alnum_lower(rc) { ok = false; } }
             ok {                                              // [rax+rcx]
                 PA_BASE = preg(left); PA_OFF = 0; PA_INDEX = preg(right); PA_SCALE = 1;
                 :;
@@ -894,13 +891,10 @@ r_value(operand = "", size = 8, scratch = "", signed = false) {
     : scratch;
 }
 op_size(ops = [""]) {
-    k = 0;
-    * k < #ops {
-        o = ops[k];
+    ops : o {
         n = 0;
         o.contains("[") { n = size_of(o); } || { n = reg_size(o.trim()); }
         n != 0 { : n; }
-        k = k + 1;
     }
     : 8;
 }
@@ -955,13 +949,7 @@ div_setter(i = 0) {
         w0 = 0;
         * w0 < #p && is_word(p[w0]) { w0 = w0 + 1; }
         w0 > 0 && w0 < #p && is_space(p[w0]) {
-            regs = ["rdx", "edx", "dx", "dl"];
-            j = 0;
-            * j < #regs {
-                rg = regs[j];
-                r.starts_with(rg) && (#r == #rg || !is_word(r[#rg])) { writes = true; }
-                j = j + 1;
-            }
+            ["rdx", "edx", "dx", "dl"] : rg { r.starts_with(rg) && (#r == #rg || !is_word(r[#rg])) { writes = true; } }
         }
         writes || w == "call" || w == "syscall" || w == "mul" || w == "div" || w == "idiv" || w == "pop" { : ""; }
         w == "jmp" || w == "ret" || flag_reader(w) && p.starts_with("j") { : ""; }
@@ -1209,15 +1197,12 @@ r_lea(addr = 0, raw = "", ops = [""]) {
     other = 0;
     disp = 0;
     idx = "";
-    k = 0;
-    * k < #terms {
-        term = terms[k];
+    terms : term {
         bare = term;
         bare.starts_with("-") { bare = bare.slice(1); }
         #bare >= 3 && is_digit(bare[0]) && bare[1] == '*' { scaled = scaled + 1; #idx == 0 { idx = bare; } }
         || is_imm(bare) { disp = disp + parse_int(term); }
         || #bare > 0 { other = other + 1; }
-        k = k + 1;
     }
     scaled > 0 && other == 0 {
         emit("lsl x16, " + rx(idx.slice(2)) + ", #" + $lg(parse_int(idx.slice(0, 1))));
@@ -1432,9 +1417,7 @@ glue_sys() {
 ERRORS = [""];
 NERRORS = 0;
 failed_at(addr = 0, text = "") {
-    why = ERR;
-    why == "" { why = ?!; }
-    NERRORS < #ERRORS { ERRORS[NERRORS] = "0x" + hex(addr) + ": " + text + "   (" + why + ")"; }
+    NERRORS < #ERRORS { ERRORS[NERRORS] = "0x" + hex(addr) + ": " + text + "   (" + ?! + ")"; }
     NERRORS = NERRORS + 1;
 }
 report(what = "", most = 30) {
@@ -1517,7 +1500,6 @@ translate_all(prog = "", out = "") {
             line("L_" + hex(addr) + ":");
             entries.contains(addr) { emit("str x30, [x28, #-8]!"); }     // a method: its return address on the x86 stack
         }
-        ERR = "";
         ?p_translate(k);
         ?! != "" { failed_at(addr, P_TEXT[k]); }
         k = k + 1;
@@ -1531,7 +1513,6 @@ translate_all(prog = "", out = "") {
     k = 0;
     * k < R_N {
         line("L_" + hex(R_ADDR[k]) + ":");
-        ERR = "";
         HEADER_READ = false;
         ?r_translate(k);
         ?! != "" {
@@ -1544,17 +1525,12 @@ translate_all(prog = "", out = "") {
 
     // L_x_c for each routine called: the return address on the x86 stack, then the routine
     called = RT_CALL_TARGETS;
-    calls = RT_CALLS.keys();
-    k = 0;
-    * k < #calls { called[calls[k]] = true; k = k + 1; }
+    RT_CALLS.keys() : at { called[at] = true; }
     called[0] = _;
-    stubs = called.keys().sort();
-    k = 0;
-    * k < #stubs {
-        line("L_" + hex(stubs[k]) + "_c:");
+    called.keys().sort() : stub {
+        line("L_" + hex(stub) + "_c:");
         emit("str x30, [x28, #-8]!");
-        emit("b L_" + hex(stubs[k]));
-        k = k + 1;
+        emit("b L_" + hex(stub));
     }
     USES_SYS { glue_sys(); }
 
