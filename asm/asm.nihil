@@ -136,8 +136,7 @@ expand(s = "") {
 
 dir_of(p = "") {
     k = -1;
-    i = 0;
-    * i < #p { p[i] == '/' { k = i; } i = i + 1; }
+    p : c, i { c == '/' { k = i; } }
     : p.slice(0, k + 1);
 }
 
@@ -215,9 +214,7 @@ call_macro(name = "", args = "", path = "", n = 0) {
     b = (MACRO_BODY[name] || "").replace("%%", "..@" + $UNIQ + ".");
     k = #a;
     * k > 0 { b = b.replace("%" + $k, a[k - 1]); k = k - 1; }
-    lines = b.split("\n");
-    i = 0;
-    * i < #lines { #lines[i] > 0 { add_line(expand(lines[i]), path, n); } i = i + 1; }
+    b.split("\n") : ln { #ln > 0 { add_line(expand(ln), path, n); } }
 }
 
 // ---- symbols ----
@@ -392,8 +389,7 @@ number(w = "") {
         * k < #t - 1 { v = (v << 4) | hex_digit(t[k], w); k = k + 1; }
         : v;
     }
-    k = 0;
-    * k < #t { !is_digit(t[k]) { fail("not a number: " + w); } v = v * 10 + (t[k] - '0'); k = k + 1; }
+    t : c { !is_digit(c) { fail("not a number: " + w); } v = v * 10 + (c - '0'); }
     : v;
 }
 hex_digit(c = 0, w = "") {
@@ -407,9 +403,7 @@ hex_digit(c = 0, w = "") {
 // each: number (0–15) + size × 16; 8-bit ah ch dh bh get +1024, spl bpl sil dil +2048 (they need REX)
 REGS = {"": 0 ; 128};
 reg_names(names = "", size = 0, extra = 0) {
-    v = names.split(" ");
-    i = 0;
-    * i < #v { #v[i] > 0 { REGS[v[i]] = i + size * 16 + extra; } i = i + 1; }
+    names.split(" ") : name, i { #name > 0 { REGS[name] = i + size * 16 + extra; } }
 }
 setup_regs() {
     reg_names("rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15", 8, 0);
@@ -589,8 +583,7 @@ op_rm(pfx = 0, w = false, op = [0], reg = 0, k = 0) {
         * j < NOPS { OK[j] == 1 && OHI[j] { fail("ah, bh, ch or dh cannot go with r8–r15, sil, dil, spl, bpl or a 64-bit operation"); } j = j + 1; }
         put(rex);
     }
-    j = 0;
-    * j < #op { put(op[j]); j = j + 1; }
+    op : ob { put(ob); }
     modrm(reg & 7, k);
 }
 
@@ -974,10 +967,7 @@ out_byte(x = 0) {
 
 // db / dw / dd / dq: numbers, expressions and (db) texts
 data(size = 0, args = "") {
-    items = split_commas(args);
-    i = 0;
-    * i < #items {
-        it = items[i];
+    split_commas(args) : it {
         q = 0;
         #it > 0 { q = it[0]; }
         (q == '\'' || q == '"' || q == '`') && it.ends_with(it.slice(0, 1)) && #it >= 2 && is_text(it) {
@@ -1000,7 +990,6 @@ data(size = 0, args = "") {
             k = 0;
             * k < size { out_byte(v >> (8 * k)); k = k + 1; }
         }
-        i = i + 1;
     }
 }
 // dq 1.0e22: the bits of the double, for a decimal that a double holds exactly (the digits as
@@ -1147,18 +1136,13 @@ main() {
     << listing;
     setup_regs();
     setup_cc();
-    dl = dirs.split(" ");
-    k = 0;
-    * k < #dl { d = dl[k].trim(); #d > 0 { !d.ends_with("/") { d = d + "/"; } INCDIRS = INCDIRS + [d]; } k = k + 1; }
-    df = defs.split(" ");
-    k = 0;
-    * k < #df {
-        d = df[k].trim();
+    dirs.split(" ") : part { d = part.trim(); #d > 0 { !d.ends_with("/") { d = d + "/"; } INCDIRS = INCDIRS + [d]; } }
+    defs.split(" ") : part {
+        d = part.trim();
         d.starts_with("-D") {
             eq? = d.find("=");
             eq == _ { DEFS[d.slice(2)] = ""; } || { DEFS[d.slice(2, eq || 0)] = d.slice((eq || 0) + 1); }
         } || #d > 0 { fail("a name to define is -DNAME or -DNAME=VALUE: " + d); }
-        k = k + 1;
     }
     preprocess(src);
     assemble();
