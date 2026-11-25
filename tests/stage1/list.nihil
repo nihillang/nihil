@@ -1,0 +1,132 @@
+// LIST (SPEC §28): an ARRAY that grows. [x ; *] is an empty list of x's type, v[] = x; adds
+// to its end, and every name of a list sees the same items, as with a MAP.
+P = @[name: STRING(8); age: INT(3)];
+
+// a global that grows inside a method, as macos/translate.nihil's lines do
+LINES = ["" ; *];
+line(text = "") { LINES[] = text; }
+line("a"); line("b"); line("c");
+>> $#LINES + " " + LINES[1] + " " + LINES.join("-") + "\n";
+
+// two names, the same list: what one adds, the other sees, after any growth
+w = LINES;
+n = 0;
+20 { w[] = "x"; n = n + 1; }
+LINES[0] = "A";
+>> $#LINES + " " + w[0] + " " + $#w + "\n";
+
+// a method that adds to the list it receives, and one that returns a new list
+add_all(v = [0 ; *], n = 0) { i = 0; n { v[] = i; i = i + 1; } }
+squares(n = 0) {
+    out = [0 ; *];
+    i = 1;
+    n { out[] = i * i; i = i + 1; }
+    : out;
+}
+s = squares(5);
+>> $s.sum() + " " + $s.array().reverse()[0] + " " + s.to_json() + "\n";
+big = [0 ; *100];
+add_all(big, 100000);
+>> $#big + " " + $big[99999] + "\n";
+
+// each element and its index; the loop sees the items there were on entry
+s : x, i { >> $i + ":" + $x + " "; }
+>> "\n";
+grow = [1 ; *];
+grow[] = 1;
+grow : g { grow[] = g + 1; }
+>> $#grow + " " + $(grow.max() || 0) + "\n";
+
+// FLOAT, BOOL, records; the sample only gives the type
+fs = [0.5 ; *];
+fs[] = 1.5; fs[] = 2.25;
+fs : f { >> f; >> " "; }
+>> $#fs + "\n";
+bs = [false ; *];
+bs[] = true;
+>> bs[0]; >> "\n";
+ps = [P() ; *];
+ps[] = P("ana", 30);
+ps[] = P("bia", 25);
+ps[1].age = 26;
+>> ps[1].name + " " + $ps[1].age + " " + $ps.count(age > 26) + "\n";
+
+// empty, and an index out of bounds caught by ?f()
+empty = ["" ; *];
+>> $#empty + " " + $#empty.array() + "\n";
+at(v = [0 ; *], i = 0) { : v[i]; }
+r? = ?at(s, 5);
+>> ?! + "\n";
+r = ?at(s, -1);
+>> ?! + "\n";
+
+// a MAP of lists: grouping by key
+by = {"": [0 ; *]};
+add(k = "", v = 0) {
+    cur = by[k] || [0 ; *];
+    by[k] = cur;
+    cur[] = v;
+}
+add("a", 1); add("a", 2); add("b", 3);
+>> $#(by["a"] || [0 ; *]) + " " + $#(by["b"] || [0 ; *]) + "\n";
+
+// the loop past the first growth (8 → 16): items are read again after the list moved
+g8 = [0 ; *];
+8 { g8[] = 1; }
+seen = 0;
+g8 : x, i { seen = seen + x; g8[] = 2; i == 0 { g8[1] = 5; } }
+>> $#g8 + " " + $seen + "\n";
+
+// assigning the variable inside the loop does not change it
+re = [1 ; *];
+re[] = 1; re[] = 2;
+t = 0;
+re : x { t = t + x; re = [0 ; *]; }
+>> $t + " " + $#re + "\n";
+
+// a parameter's default is a new list on every call
+count_in(v = [0 ; *]) { v[] = 1; v[] = 2; : #v; }
+>> $count_in() + " " + $count_in() + "\n";
+
+// a global list used by a method before its line: it starts empty
+early();
+LATE = [0 ; *];
+early() { LATE[] = 9; >> $#LATE + " "; }
+early();
+>> $#LATE + "\n";
+
+// .array() is a copy
+c = [0 ; *];
+c[] = 1;
+a = c.array();
+a[0] = 7;
+>> $c[0] + " " + $a[0] + "\n";
+
+// writing out of bounds and a negative room are runtime errors
+put(v = [0 ; *], i = 0) { v[i] = 1; }
+?put(c, 1);
+>> ?! + "\n";
+room(n = 0) { v = [0 ; *n]; : #v; }
+r = ?room(-1);
+>> ?! + "\n";
+
+// JSON: an optional list, a list in a MAP, a LIST of records
+ol? = [0 ; *];
+>> ol.to_json() + "\n";
+ol = _;
+>> ol.to_json() + "\n";
+ml = {"a": [0 ; *]};
+cur = ml["a"] || [0 ; *];
+cur[] = 1; cur[] = 2;
+>> ml.to_json() + " " + ps.to_json() + "\n";
+
+// strings reachable only through a list survive the collector
+keep = ["" ; *];
+k = 0;
+200000 { keep[] = "s" + $k; k = k + 1; }
+junk = 0;
+k = 0;
+2000000 { junk = junk + #("j" + $k); k = k + 1; }
+ok = true;
+keep : ks, i { ks != "s" + $i { ok = false; } }
+>> $#keep + " " + $ok + "\n";

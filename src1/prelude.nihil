@@ -1954,6 +1954,71 @@ __nihil_map_values(m = 0) {
     : __nihil_map_list(m, 3);
 }
 
+// ---- LIST (SPEC §28): an ARRAY that grows ---------------------------------------
+// A list is an ARRAY of INT [count, capacity, items], items being the address of an
+// ARRAY of `capacity` elements, of which the first `count` are the list's. Every name
+// of a list goes through this header, so all of them see the same items when it grows.
+// The room past `count` stays zeroed: nothing ever shrinks a list.
+
+__nihil_list_new(n = 0) {
+    n < 0 { __nihil_fail("the room of a LIST cannot be negative: " + __nihil_int_text(n)); }
+    __c = 8;
+    __c < n { __c = n; }
+    __l = [0 ; 3];
+    __l[1] = __c;
+    __l[2] = __nihil_addr([0 ; __c]);
+    : __nihil_addr(__l);
+}
+
+// v[] = x;  (twice the room when it is full)
+__nihil_list_push(l = 0, v = 0) {
+    __ll = __nihil_arr_at(l);
+    __ll[0] == __ll[1] {
+        __old = __nihil_arr_at(__ll[2]);
+        __c = __ll[1] * 2;
+        __new = [0 ; __c];
+        __i = 0;
+        __ll[0] { __new[__i] = __old[__i]; __i = __i + 1; }
+        __ll[1] = __c;
+        __ll[2] = __nihil_addr(__new);
+    }
+    __is = __nihil_arr_at(__ll[2]);
+    __is[__ll[0]] = v;
+    __ll[0] = __ll[0] + 1;
+}
+
+__nihil_list_check(ll = [0], i = 0) {
+    i < 0 || i >= ll[0] {
+        __nihil_fail("index " + __nihil_int_text(i) + " out of bounds (size " + __nihil_int_text(ll[0]) + ")");
+    }
+}
+
+// v[i]
+__nihil_list_get(l = 0, i = 0) {
+    __ll = __nihil_arr_at(l);
+    __nihil_list_check(__ll, i);
+    __is = __nihil_arr_at(__ll[2]);
+    : __is[i];
+}
+
+// v[i] = x;
+__nihil_list_set(l = 0, i = 0, v = 0) {
+    __ll = __nihil_arr_at(l);
+    __nihil_list_check(__ll, i);
+    __is = __nihil_arr_at(__ll[2]);
+    __is[i] = v;
+}
+
+// v.array(): a new ARRAY with the list's items (the library's ARRAY methods work on it)
+__nihil_list_array(l = 0) {
+    __ll = __nihil_arr_at(l);
+    __is = __nihil_arr_at(__ll[2]);
+    __r = [0 ; __ll[0]];
+    __i = 0;
+    __ll[0] { __r[__i] = __is[__i]; __i = __i + 1; }
+    : __nihil_addr(__r);
+}
+
 // ---- JSON out and in (SPEC §26) -----------------------------------------------
 // A runtime error raised by the prelude: "nihil: " + what, and the program ends with 2
 // (a protected call, §25, catches it)
@@ -1987,7 +2052,7 @@ __nihil_json_record(r = 0, schema = [0], names = "") {
     : "{" + __nihil_as_join(__parts, ", ") + "}";
 }
 
-// x.to_json(): desc is x's type as a chain, outside in: 16 an ARRAY of; 8, k a MAP with keys
+// x.to_json(): desc is x's type as a chain, outside in: 16 an ARRAY of; 32 a LIST of; 8, k a MAP with keys
 // of kind k (1 INT, 3 STRING) to; then 1 INT, 2 BOOL, 3 STRING, 7 FLOAT or 64 a record of the
 // model whose schema and field names come along (a chain holds at most one model)
 __nihil_json_value(v = 0, desc = [0], at = 0, schema = [0], names = "") {
@@ -1997,8 +2062,9 @@ __nihil_json_value(v = 0, desc = [0], at = 0, schema = [0], names = "") {
     __k == 3 { : __nihil_s_json_quote(__nihil_str_at(v)); }
     __k == 7 { : __nihil_json_float(v); }
     __k == 64 { : __nihil_json_record(v, schema, names); }
-    __k == 16 {
-        __a = __nihil_arr_at(v);
+    __k == 16 || __k == 32 {
+        __a = [0];
+        __k == 32 { __a = __nihil_arr_at(__nihil_list_array(v)); } || { __a = __nihil_arr_at(v); }
         __parts = ["" ; #__a];
         __i = 0;
         #__a { __parts[__i] = __nihil_json_value(__a[__i], desc, at + 1, schema, names); __i = __i + 1; }

@@ -1,0 +1,24 @@
+3 b a-b-c
+23 A 23
+55 25 [1, 4, 9, 16, 25]
+100000 99999
+0:1 1:4 2:9 3:16 4:25 
+2 2
+1.5 2.25 2
+true
+bia 26 1
+0 0
+index 5 out of bounds (size 5)
+index -1 out of bounds (size 5)
+2 1
+16 12
+3 0
+2 2
+1 1 1
+1 7
+index 1 out of bounds (size 1)
+the room of a LIST cannot be negative: -1
+[]
+null
+{"a": [1, 2]} [{"name": "ana", "age": 30}, {"name": "bia", "age": 26}]
+200000 true

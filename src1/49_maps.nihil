@@ -2,6 +2,7 @@
 // 49_maps — MAP: a hash table in memory (SPEC §22). A map type is TYPE_MAP |
 // (n << 8), with the key and value types of map type n in mt_key / mt_val (the
 // same scheme as records). The table itself is prelude code (__nihil_map_*).
+// A LIST (SPEC §28, at the end) is a map type with key 0: mt_val is its element.
 // =============================================================================
 
 // the map type with keys of type k and values of type v (made once)
@@ -20,7 +21,7 @@ map_type(k = 0, v = 0) {
 }
 
 is_map(t = 0) {
-    : t & (TYPE_MAP | TYPE_ARR | TYPE_OPT) == TYPE_MAP;
+    : t & (TYPE_MAP | TYPE_ARR | TYPE_OPT) == TYPE_MAP && mt_key[t >> 8] != 0;
 }
 
 map_key(t = 0) { : mt_key[t >> 8]; }
@@ -211,6 +212,13 @@ map_method(t = 0, ns = 0, nl = 0) {
             call_prelude("__nihil_map_keys", 8);
             : map_key(t) | TYPE_ARR;
         }
+        is_list(map_val(t)) {
+            error_start();
+            put_str("m.values() would be an ARRAY of ");
+            put_type(map_val(t));
+            put_str(", and an ARRAY cannot hold lists: loop over m.keys() and read m[k]");
+            error_end();
+        }
         call_prelude("__nihil_map_values", 8);
         : map_val(t) | TYPE_ARR;
     }
@@ -238,4 +246,120 @@ read_map_literal() {
     kt != TYPE_INT && kt != TYPE_STR { error("a MAP key is INT or STRING"); }
     lit_type = map_type(kt, vt);
     lit_value = 0;
+}
+
+// ---- LIST (SPEC §28): an ARRAY that grows, [x ; *] ----------------------------------------
+// The value is the address of a header [count, capacity, items] (prelude __nihil_list_*),
+// so every name of a list sees the same items when it grows, as with a MAP.
+
+list_type(e = 0) {
+    e == TYPE_UNKNOWN { : TYPE_UNKNOWN; }
+    : map_type(0, e);
+}
+
+is_list(t = 0) {
+    : t & (TYPE_MAP | TYPE_ARR | TYPE_OPT) == TYPE_MAP && mt_key[t >> 8] == 0;
+}
+
+list_elem(t = 0) { : mt_val[t >> 8]; }
+
+// a new empty list in rax (globals, parameter defaults)
+emit_new_list() {
+    eb(0x31, 0xC0, 0x50);                   // xor eax, eax ; push rax (room: the least)
+    call_prelude("__nihil_list_new", 8);
+}
+
+// [x ; *] / [x ; *n]: tok = "*", the sample x (type t) pushed → an empty LIST of t
+list_literal(t = 0) {
+    next_token();                          // "*" → "]" or the room
+    tok_type == ']' {
+        eb(0x31, 0xC0);                     // xor eax, eax
+    } || {
+        pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+        u = expression();
+        u != TYPE_INT && u != TYPE_UNKNOWN {
+            restore_pos(pi, pl, pn, pli);
+            error_start();
+            put_str("the room in [value ; *room] must be INT, but it is ");
+            put_type(u);
+            error_end();
+        }
+    }
+    expect(']', "']' (in [value ; *])");
+    emit(0x50);
+    call_prelude("__nihil_list_new", 8);
+    eb(0x48, 0x83, 0xC4, 0x08);             // add rsp, 8 (the sample)
+    : list_type(t);
+}
+
+list_mismatch(k = 0, t = 0, u = 0, pi = 0, pl = 0, pn = 0, pli = 0) {
+    restore_pos(pi, pl, pn, pli);
+    error_start();
+    put_str("'");
+    put_source(s_ofs[k], s_len[k]);
+    put_str("' is ");
+    put_type(t);
+    put_str(" and cannot receive ");
+    put_type(u);
+    error_end();
+}
+
+index_int(u = 0) {
+    u != TYPE_INT && u != TYPE_UNKNOWN {
+        error_start();
+        put_str("the index must be INT, but it is ");
+        put_type(u);
+        error_end();
+    }
+}
+
+// tok = "[" after a list (type t, in rax): v[i]
+list_get(t = 0) {
+    emit(0x50);                            // push rax (list)
+    next_token();
+    index_int(expression());
+    expect(']', "']'");
+    emit(0x50);
+    call_prelude("__nihil_list_get", 16);
+    : list_elem(t);
+}
+
+// v[] = x;  /  v[i] = x;  (tok = "[", variable k: a list of type t, or of no type yet)
+list_assign(k = 0, t = 0) {
+    emit_load_var(k);
+    emit(0x50);                            // push rax (list)
+    next_token();                          // "[" → "]" or the index
+    tok_type == ']' {
+        next_token();
+        expect('=', "'=' (v[] = value;)");
+        pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+        u = expression();
+        t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && u != list_elem(t) { list_mismatch(k, t, u, pi, pl, pn, pli); }
+        emit(0x50);
+        list_call(t, "__nihil_list_push", 16);
+        expect(';', "';'");
+        :;
+    }
+    index_int(expression());
+    emit(0x50);
+    expect(']', "']'");
+    expect('=', "'='");
+    pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+    u = expression();
+    t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && u != list_elem(t) { list_mismatch(k, t, u, pi, pl, pn, pli); }
+    emit(0x50);
+    list_call(t, "__nihil_list_set", 24);
+    expect(';', "';'");
+}
+
+// a call into the prelude's lists; with no type yet (v[] = x before v's type is known, in an
+// early pass) only the arguments go away: the prelude may not be in the program at all
+list_call(t = 0, name = "", bytes_args = 0) {
+    t == TYPE_UNKNOWN {
+        eb(0x48, 0x81, 0xC4);               // add rsp, bytes_args
+        emit_d(bytes_args);
+        unknowns = unknowns + 1;
+        :;
+    }
+    call_prelude(name, bytes_args);
 }
