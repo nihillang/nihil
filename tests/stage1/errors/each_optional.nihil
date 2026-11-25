@@ -1,0 +1,3 @@
+// an optional is not an ARRAY
+xs? = [1];
+xs : x { }
