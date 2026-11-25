@@ -328,6 +328,29 @@ command is always the loop; multiplication never appears in that position.
 m > 20 add(5);       // calls if m > 20
 ```
 
+### 7.6 Each element (`ARRAY` or `STRING` prefix with `:`, v4.8)
+
+```text
+names : name { >> name + "\n"; }              // each element
+names : name, i { >> $i + ": " + name; }      // and its index (0, 1, …)
+"AB" : b { sum = sum + b; }                   // a STRING: each byte, an INT
+rows : r, i { r.qty > 0 { : i; } }            // an early return leaves the loop
+```
+
+- Before the `:`, an ARRAY (of any element type) or a STRING; after it, the
+  element's name and, optionally after a comma, the index's name. Anything else
+  before the `:` is a compile error.
+- The collection is evaluated **once**, on entry, and its size is taken then:
+  assigning another array to the variable inside the block does not change the
+  loop (the elements are read from the array it started with; an ARRAY's size
+  never changes).
+- The names are **new locals of the block**, as a method's parameters are new
+  names: one that already exists (a local, a parameter or a global) is a compile
+  error, and they disappear at the `}`, so the next loop may use them again.
+  Each turn the element is in the first name and its position in the second.
+- Like `N { … }`, the loop keeps its state in hidden stack slots; calls and
+  nested loops do not affect it.
+
 ---
 
 ## 8. Input and output
@@ -498,6 +521,7 @@ command         ::= method                      (* top level only *)
                   | "<<<" IDENT ";"
                   | ":" [ expression ] ";"
                   | "*" expression block
+                  | expression ":" IDENT [ "," IDENT ] block   (* each element, §7.6 *)
                   | assignment ";"
                   | [ expression ] block ( "||" [ expression ] block )*
                   | [ expression ] call ";"

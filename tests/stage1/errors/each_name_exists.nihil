@@ -1,0 +1,3 @@
+// the names after : are new
+x = 1;
+[1, 2] : x { }
