@@ -113,6 +113,20 @@ tags = (item.json("tags") || "[]").json_items();
 <tr><td><code>x.to_json()</code>, <code>NAME.from_json(text)</code></td><td>any value (records included) to JSON, and a record from a JSON object; <code>from_json</code> checks the whole text first, and a cut or broken document is a runtime error</td></tr>
 </tbody></table></div>
 
+<h2 id="lists">Lists</h2>
+<p>A LIST is an ARRAY that grows. Like a MAP, it is shared: every name and every method that receives it sees the same items.</p>
+<pre class="nihil">lines = ["" ; *];                      // empty; "" only gives the type
+lines = ["" ; *65536];                 // empty, with room for 65,536 items at first
+lines[] = text;                        // adds at the end
+lines[0] = "first";                    // changes an item</pre>
+<div class="table-wrap"><table>
+<thead><tr><th>Call</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>v[i]</code>, <code>#v</code>, <code>v : x, i { … }</code></td><td>as on an ARRAY (the each loop goes over the items there when it starts)</td></tr>
+<tr><td><code>v.array()</code></td><td>a new ARRAY with a copy of the items</td></tr>
+<tr><td><code>v.sort()</code>, <code>v.find(x)</code>, <code>v.join(sep)</code>, …</td><td>the methods of <a href="#arrays">Arrays</a>, on a copy of the items</td></tr>
+</tbody></table></div>
+
 <h2 id="maps">Maps</h2>
 <pre class="nihil">age = {"ana": 30, "bob": 25};          // the types come from the first pair
 sales = {0: 0.0 ; 100000};             // empty, with room for 100,000 keys
