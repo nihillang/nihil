@@ -1,0 +1,22 @@
+{"qty": 5}  →  5
+  {"qty": 7, "name": "a\"b\u00e9", "ok": true, "more": [1, {"x": null}, -2.5e3]}    →  7
+{}  →  0
+{  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 5  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 5,}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 5} x  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 5}}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty" 5}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": [1, 2}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 01}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 5, "name": "bad \x"}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{"qty": 5, "ok": tru}  →  _ | ITEM.from_json: the text is not a valid JSON object
+{qty: 5}  →  _ | ITEM.from_json: the text is not a valid JSON object
+[{"qty": 5}]  →  _ | ITEM.from_json: the text is not a valid JSON object
+2
+_ | ITEM.from_json_items: the text is not a valid JSON array
+5
+_ _ _ _ _ _ _ _ _ _ _ 
+0 0 0 0 0 
+_ _ _ _ _ _ 0 
+0 _ 0 _ _
