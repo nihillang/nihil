@@ -4,6 +4,13 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.8.0
+
+- `xs : x, i { … }`: each element of an ARRAY (each byte of a STRING) and, if wanted, its index (SPEC §7.6). The collection is evaluated once and its size taken on entry; the names after the `:` are new locals of the block, as a method's parameters are new names (one that exists is a compile error), so a loop never changes a global by accident
+  - *Why:* Every big program repeated the same loop by hand: `i = 0; * i < #xs { x = xs[i]; … i = i + 1; }`
+- `?! = text;` raises a runtime error with that text (SPEC §25): a protected call `?f()` catches it like any other and `?!` holds the text; outside any protection the program ends with `nihil: text` and exit code 2
+  - *Why:* A program that had to give up on a step made an error on purpose (an index past an array) and kept the reason somewhere else
+
 ## v4.7.1
 
 Eleven fixes in the prelude, found in a review by Codex, each confirmed by running it and its fix reviewed again:
