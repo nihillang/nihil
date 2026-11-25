@@ -1,0 +1,24 @@
+// [x ; *] makes an empty LIST; x only gives the type of its items
+names = ["" ; *];
+names[] = "carla";                      // adds at the end
+names[] = "ana";
+names[] = "bob";
+>> $#names + " names, the second is " + names[1] + "\n";
+names[0] = "Carla";                     // changes an item, as in an ARRAY
+
+// keep the numbers above 10
+nums = [5, 12, 7, 20, 3, 18];
+big = [0 ; *];
+nums : n { n > 10 { big[] = n; } }
+big : b, i { >> $i + ": " + $b + "\n"; }
+
+// a LIST is shared: a method that receives it adds to the same items
+shout(into = ["" ; *], word = "") { into[] = word.upper() + "!"; }
+shout(names, "dora");
+>> $#names + " names\n";
+
+// the methods of ARRAY work on a copy of the items; array() gives the copy itself
+>> names.sort().join(" < ") + "\n";
+>> $names.contains("bob") + "\n";
+plain = names.array();                  // an ARRAY of STRING, with a fixed size
+>> $#plain + "\n";
