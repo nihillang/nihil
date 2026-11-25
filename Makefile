@@ -65,11 +65,12 @@ asm-check: build/asm
 	@"$(NASM)" -f bin -o build/asm_nasm.bin asm/test.asm && $(call ASSEMBLE,build/asm_mine.bin,asm/test.asm,) 2>/dev/null && \
 	  cmp build/asm_nasm.bin build/asm_mine.bin && echo "asm: asm/test.asm: the same bytes as nasm"
 	@rm -rf build/refuse && mkdir -p build/refuse && \
-	  awk 'BEGIN { n = 0; f = sprintf("build/refuse/%02d.asm", n); print "bits 64" > f } \
-	       /^; ---/ { n++; f = sprintf("build/refuse/%02d.asm", n); print "bits 64" > f; next } /^;/ { next } { print > f }' asm/refuse.asm && \
+	  awk '/^; --- expect: / { n++; f = sprintf("build/refuse/%02d.asm", n); print "bits 64" > f; \
+	                           print substr($$0, 15) > (f ".expect"); next } /^;/ { next } n > 0 { print > f }' asm/refuse.asm && \
 	  for f in build/refuse/*.asm; do \
-	    if $(call ASSEMBLE,build/refuse/out.bin,$$f,) 2>/dev/null; then echo "asm: $$f was not refused" >&2; exit 1; fi; done && \
-	  echo "asm: the $$(ls build/refuse/*.asm | wc -l | tr -d ' ') cases of asm/refuse.asm are refused"
+	    if $(call ASSEMBLE,build/refuse/out.bin,$$f,) 2> build/refuse/err.txt; then echo "asm: $$f was not refused" >&2; exit 1; fi; \
+	    grep -qF "$$(cat $$f.expect)" build/refuse/err.txt || { echo "asm: $$f: expected \"$$(cat $$f.expect)\", got: $$(cat build/refuse/err.txt)" >&2; exit 1; }; done && \
+	  echo "asm: the $$(ls build/refuse/*.asm | wc -l | tr -d ' ') cases of asm/refuse.asm are refused, each with its message"
 
 # the prelude (bigint + float_text + prelude) becomes a STRING inside nihilc1
 PRELUDE := src1/bigint.nihil src1/float_text.nihil src1/prelude.nihil
