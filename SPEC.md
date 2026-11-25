@@ -1667,6 +1667,7 @@ every turn, so the list can grow inside the loop.
 | **v1.9:** saved registers learned between passes | The prologue comes before the body; using the count from the previous pass avoids saving registers for nothing |
 | **v2.1:** `... ms;` waits | Animations need a fixed speed; a busy loop depends on the machine. The ellipsis reads as a pause and cannot start any valid expression |
 | **v2.2:** renamed from Ket to Nihil | Latin for *nothing*: no keywords, and `_` for the missing value |
+| **v4.9:** LIST, an ARRAY that grows: `[x ; *]` and `v[] = x;` (§28) | Collecting items meant copying the whole array for each one, or doubling it by hand with a counter beside it |
 | **v4.8:** `xs : x, i { … }`, each element and its index (§7.6); `?! = text;` raises a runtime error that `?f()` catches (§25) | The big programs repeated a loop with a counter by hand, and made an error on purpose to give up on a step |
 | **v4.7:** Nihil's own assembler for the runtime (`asm/asm.nihil`, the same bytes as nasm); `from_json` checks the whole document (§26); `repeat` and `.int()` stop at the limits of INT | A change to the runtime needed nasm; a review found a size that went round in 64 bits, a number past the smallest INT and broken JSON read as a record |
 | **v4.6:** macOS runs Linux's runtime, translated to ARM64 with each program; the translator is a Nihil program | Two runtimes (assembly and C) had to be kept doing the same; every program on the Mac went through Python |

@@ -4,6 +4,11 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.9.0
+
+- LIST, an ARRAY that grows (SPEC §28): `[x ; *]` is an empty list of x's type (`[x ; *n]` with room for n), `v[] = x;` adds at the end, and `v[i]`, `v[i] = x`, `#v` and `xs : x, i { … }` work as on an ARRAY. A list is a reference with a shared header, as a MAP is: every name of a list sees the same items however much it grows. `v.array()` copies the items to an ARRAY, every other ARRAY method works on such a copy, and `to_json` writes lists anywhere. Adding n items costs O(n) copies in all: 1,000,000 appends take 0.01 s
+  - *Why:* Programs that collected items either copied the whole array for each one (`x = x + [y]`, 37 times in the IDE's server and the assembler) or grew it by hand with a counter beside it
+
 ## v4.8.0
 
 - `xs : x, i { … }`: each element of an ARRAY (each byte of a STRING) and, if wanted, its index (SPEC §7.6). The collection is evaluated once and its size taken on entry; the names after the `:` are new locals of the block, as a method's parameters are new names (one that exists is a compile error), so a loop never changes a global by accident
