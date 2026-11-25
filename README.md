@@ -112,8 +112,7 @@ push are also kept with its run in Actions (Artifacts), for 90 days.
 
 ## Building from source
 
-You need Linux on x86_64, `make` and `curl`. `python3` is only used by `make floatcheck`
-and the IDE.
+You need Linux on x86_64, `make` and `curl`. `python3` is only used by `make floatcheck`.
 
 With `nasm` and `ld` (binutils) installed, `make` builds stage 0 (the compiler in assembly)
 and compiles stage 1 with it. Without them, it downloads the latest release's compiler
@@ -178,7 +177,7 @@ it in the terminal instead (Ctrl+C stops it). From the repository:
 make ide && ./build/ide-server             # then open http://127.0.0.1:8730
 ```
 
-<p align="center"><img src="assets/ide.png" width="800" alt="The Nihil IDE: the editor with a program that queries a table, and the Table tab showing a file of records in columns"></p>
+<p align="center"><img src="assets/ide.png" width="800" alt="The Nihil IDE: the editor with a program that queries a table, the Table tab showing a file of records in columns, and the agent panel where Codex explains the selected line"></p>
 
 It has an editor with Nihil highlighting and a color terminal for the
 program's output and input. Compile errors are marked in the code, and the
@@ -189,6 +188,21 @@ server reads only the lines shown, so tables of hundreds of MB open at once).
 programs and tables are listed, and programs run inside it. The language
 repository itself is the first project (files in `ide/workspace/` and
 `examples/`). Saving a file that changed on disk since it was opened asks first.
+**Go to definition:** ⌘-click (Ctrl-click), F12 or the right-click menu goes to where a
+name is declared — a method, a model's method, a model, a global or a local — in the file
+and the files it includes, the standard library's (`std:`) too.
+
+**An agent at your side:** the panel on the right talks to **Claude** (Claude Code) or
+**Codex** (OpenAI's Codex CLI); each tab of the panel chooses its agent, its model and its
+mode — *ask* only reads, *accept edits* changes files in the project and runs commands,
+*plan* writes a plan first, *auto* lets the agent decide its steps. With each message go
+the selection, the active file, the open tabs and the last compile errors, and the agent
+reads the language's SPEC and examples. Every command it runs shows with its output, and
+the files it changes reload in the editor. A message sent while Claude works joins the
+same run, as in Claude Code's terminal. Each agent has its own folder in the IDE
+(`~/.claude-ide`, `~/.codex-ide`): sign in once with `/login` in a tab (a Claude or a
+ChatGPT plan, or an API key), apart from the terminal's.
+
 **The server runs any code it receives:** it listens only on `127.0.0.1`; reach
 it from another machine through an SSH tunnel.
 
@@ -200,6 +214,8 @@ it from another machine through an SSH tunnel.
 | `src/runtime.asm`, `src/layout.inc` | the runtime copied into every executable: I/O, files, the heap and its garbage collector |
 | `src1/` | stage 1: the compiler written in Nihil (`nihilc1.nihil` lists its parts) |
 | `src1/bigint.nihil`, `float_text.nihil`, `prelude.nihil` | the prelude, in Nihil: exact FLOAT ⇄ text, records, the key index and the library; a program gets only the methods it reaches |
+| `asm/` | Nihil's own assembler: `src/runtime.asm` into the same bytes as nasm (`make runtime`) |
+| `macos/`, `arm64/` | macOS on Apple silicon: the translator of the x86-64 code to ARM64, in Nihil, and the system calls in C |
 | `tests/` | the test suite (`tests/stage1/` for the newer features) |
 | `examples/`, `ide/workspace/` | example programs, including the PSX Doom fire on a 24-bit color terminal |
 | `ide/` | the web IDE |
@@ -222,6 +238,16 @@ make gcstress        # the suite and the fixed point with a collection every 256
 ```
 
 GitHub Actions runs all of them on every push, on a clean Ubuntu.
+
+## Contributors
+
+- **Matheus Mônaco do Carmo** ([@matcarmo3](https://github.com/matcarmo3)) — the IDE's
+  interface (a panel and a side bar that give way to the code, a minimizable bottom panel,
+  the chat's history without tokens), messages that join Claude's run while it works,
+  the benchmark's typical time of one record, and a safer `install.sh` with build
+  provenance for the releases.
+
+Thank you. To join them, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributing and security
 
