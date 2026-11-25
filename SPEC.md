@@ -1450,7 +1450,8 @@ r == _ { >> "failed: " + ?! + "\n"; } // ?! : the text of that error
   been written after `nihil: `), or `""` when that call ended normally. Nested protections
   work: the innermost one catches, and an outer call that then ends normally leaves `?!` empty.
 - `?! = text;` raises a runtime error whose message is `text` (a STRING; v4.8): a protected
-  call around it catches it like any other, and `?!` then holds `text`; outside any protection
+  call around it catches it like any other, and `?!` then holds `text` (as every error's text,
+  up to 4,000 bytes: a longer one is cut there); outside any protection
   the program ends as for any runtime error, writing `nihil: text` and exiting with 2. It is a
   command (`?!= text;` also reads as one); an optional is refused (`(x || "…")`).
 

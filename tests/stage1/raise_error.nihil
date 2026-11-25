@@ -27,3 +27,16 @@ stop(why = "") { ?! = "stopped: " + why; }
 failed = 0; i = 0;
 * i < 100000 { r? = ?check(i % 3 - 1); r == _ { failed = failed + 1; } i = i + 1; }
 >> $failed + " failed\n";
+
+// an optional with a fallback is a STRING; ?! in a condition is still a condition
+why? = "";
+why = _;
+opt() { ?! = (why || "no reason given"); }
+?opt();
+>> ?! + "\n";
+?! == "" { >> "empty\n"; } || { >> "not empty\n"; }
+?! != "" { >> "still not empty\n"; }
+// as every error's text, ?! keeps up to 4000 bytes
+long() { ?! = "x".repeat(5000); }
+?long();
+>> $#?! + "\n";
