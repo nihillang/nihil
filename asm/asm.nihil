@@ -313,7 +313,11 @@ ex_mul() {
     a = ex_unary();
     ra = RL;
     * true {
-        peek2("*") { EP = EP + 1; a = a * ex_unary(); ra = mixed(ra, RL); }
+        peek2("*") {                            // label × n: n labels (nasm folds L*0 to 0)
+            EP = EP + 1; e = ex_unary();
+            ra != 0 && RL != 0 { ra = -1000; } || ra != 0 { ra = ra * e; } || RL != 0 { ra = RL * a; }
+            a = a * e;
+        }
         || peek2("/") { EP = EP + 1; d = ex_unary(); ra = mixed(ra, RL); d == 0 { d = 1; FINAL && !UNRES { fail("division by zero"); } } a = a / d; }
         || peek2("%") { EP = EP + 1; d = ex_unary(); ra = mixed(ra, RL); d == 0 { d = 1; FINAL && !UNRES { fail("division by zero"); } } a = a % d; }
         || { RL = ra; : a; }
@@ -425,6 +429,8 @@ OS = [0 ; 3];                   // size in bytes (a register's, or a memory oper
 OREX = [false ; 3];             // spl bpl sil dil: REX needed
 OHI = [false ; 3];              // ah ch dh bh: no REX may be used with them
 OREL = [false ; 3];             // the immediate depends on a label (nasm keeps it relocatable)
+OSTRICT = [false ; 3];          // "strict": no shorter form for this immediate
+MREL = [false ; 3];             // the displacement depends on a label: 32 bits, as nasm
 OV = [0 ; 3];                   // immediate value
 OUN = [false ; 3];              // the immediate used a label not known yet
 MB = [0 ; 3];                   // memory: base (-1 none)
@@ -446,7 +452,8 @@ operand(k = 0, text = "") {
     t = text.trim();
     size = 0;
     w = first_word(t).lower();
-    w == "strict" { STRICT = true; t = after_word(t); w = first_word(t).lower(); }
+    st = false;
+    w == "strict" { STRICT = true; st = true; t = after_word(t); w = first_word(t).lower(); }
     size_word(w) > 0 { size = size_word(w); t = after_word(t); w = first_word(t).lower(); }
     w == "near" { NEARJ = true; t = after_word(t); } || w == "short" { SHORTJ = true; t = after_word(t); }
     OS[k] = size; OREX[k] = false; OHI[k] = false; OUN[k] = false; OREL[k] = false; MRIP[k] = false;
@@ -469,7 +476,11 @@ operand(k = 0, text = "") {
     OV[k] = eval(t);
     OUN[k] = UNRES;
     OREL[k] = RL != 0;
+    OSTRICT[k] = st;
+    one_label(t);
 }
+// a value from labels must hold one of them, added or subtracted (nasm refuses L*2 and L & 15)
+one_label(t = "") { FINAL && (RL < -1 || RL > 1) { fail("labels can only be added or subtracted here: " + t); } }
 
 // [base + index*scale + disp], [abs], [rel label]
 MBN = ["" ; 3];                  // the base's and the index's names (nasm's order, below)
@@ -498,8 +509,10 @@ mem(k = 0, s = "") {
     }
     MRIP[k] && (MB[k] >= 0 || MI[k] >= 0) { fail("[rel …] with a register: " + s); }
     UNRES = false;
-    #disp > 0 { MD[k] = eval(disp.join(" ")); }
+    RL = 0;
+    #disp > 0 { MD[k] = eval(disp.join(" ")); one_label(s); }
     OUN[k] = UNRES;
+    MREL[k] = RL != 0;
     // two registers, each once: the first is the base, as nasm reads [a + b] — but with two or
     // more other terms nasm adds them up in its expression evaluator, which orders the registers
     // by name (checked with nasm: [rsi + 8 + rcx - 1] has the base rcx, [rsi + 8 + rcx] rsi)
@@ -552,6 +565,8 @@ imm(v = 0, n = 0) {
 // a 32-bit immediate that the CPU extends to 64 bits must fit as a signed 32-bit number
 se32(v = 0, s = 0) { FINAL && s == 8 && !fits32(v) { fail("the value " + $v + " does not fit in a 32-bit immediate (64-bit operation)"); } }
 fits8(v = 0) { : v >= -128 && v <= 127; }
+// operand k's immediate v in 8 bits: a plain number (not a label, as nasm) that fits, not strict
+short8(k = 0, v = 0) { : fits8(v) && !OUN[k] && !OREL[k] && !OSTRICT[k]; }
 fits32(v = 0) { : v >= -2147483648 && v <= 2147483647; }
 
 // prefix (0: none), REX.W, the opcode's bytes, the ModRM reg field, the r/m operand k
@@ -601,7 +616,7 @@ modrm(reg = 0, k = 0) {
     }
     mode = 0;
     d != 0 || (base & 7) == 5 { mode = 1; }
-    !fits8(d) || OUN[k] { mode = 2; }
+    !fits8(d) || OUN[k] || MREL[k] { mode = 2; }
     index < 0 && (base & 7) != 4 {
         put((mode << 6) | (reg << 3) | (base & 7));
     } || {
@@ -750,7 +765,7 @@ encode(mn = "", ops = [""]) {
             op_rm(0, false, [0x80], n, 0); imm(v, 1);
             :;
         }
-        fits8(v) && !OUN[1] { op_rm(p66(s), s == 8, [0x83], n, 0); imm(v, 1); :; }
+        short8(1, v) { op_rm(p66(s), s == 8, [0x83], n, 0); imm(v, 1); :; }
         se32(v, s);
         isz = 4;
         s == 2 { isz = 2; }
@@ -801,7 +816,7 @@ encode(mn = "", ops = [""]) {
                 put(0xB0 + (r & 7)); imm(v, 1);
                 :;
             }
-            s == 8 && OREL[1] {                 // a label: 64 bits, as nasm (checked: mov rax, label)
+            s == 8 && (OREL[1] || OSTRICT[1] && OS[1] == 8) {    // a label (or strict qword): 64 bits, as nasm
                 rx = 0x48; r >= 8 { rx = 0x49; }
                 put(rx); put(0xB8 + (r & 7)); imm(v, 8);
                 :;
@@ -829,6 +844,7 @@ encode(mn = "", ops = [""]) {
     }
     mn == "lea" { op_rm(0, OS[0] == 8, [0x8D], OR[0], 1); :; }
     mn == "movzx" || mn == "movsx" {
+        OS[0] != 4 && OS[0] != 8 || OS[1] != 1 && OS[1] != 2 { fail(mn + " goes from 8 or 16 bits into 32 or 64"); }
         op = 0xB6;
         mn == "movsx" { op = 0xBE; }
         op_size(1) == 2 { op = op + 1; }
@@ -837,6 +853,7 @@ encode(mn = "", ops = [""]) {
     }
     mn == "push" || mn == "pop" {
         a == 1 {
+            OS[0] != 8 { fail(mn + " takes a 64-bit register"); }
             OR[0] >= 8 { put(0x41); }
             mn == "push" { put(0x50 + (OR[0] & 7)); } || { put(0x58 + (OR[0] & 7)); }
             :;
@@ -844,7 +861,7 @@ encode(mn = "", ops = [""]) {
         a == 3 {
             mn == "pop" { fail("pop takes a register or memory"); }
             se32(OV[0], 8);
-            fits8(OV[0]) && !OUN[0] { put(0x6A); imm(OV[0], 1); } || { put(0x68); imm(OV[0], 4); }
+            short8(0, OV[0]) { put(0x6A); imm(OV[0], 1); } || { put(0x68); imm(OV[0], 4); }
             :;
         }
         mn == "push" { op_rm(0, false, [0xFF], 6, 0); } || { op_rm(0, false, [0x8F], 0, 0); }
@@ -865,7 +882,7 @@ encode(mn = "", ops = [""]) {
     mn == "imul" {
         NOPS == 2 { op_rm(0, OS[0] == 8, [0x0F, 0xAF], OR[0], 1); :; }
         v = OV[2];
-        fits8(v) && !OUN[2] { op_rm(0, OS[0] == 8, [0x6B], OR[0], 1); imm(v, 1); :; }
+        short8(2, v) { op_rm(0, OS[0] == 8, [0x6B], OR[0], 1); imm(v, 1); :; }
         se32(v, OS[0]);
         op_rm(0, OS[0] == 8, [0x69], OR[0], 1); imm(v, 4);
         :;
@@ -925,6 +942,7 @@ encode(mn = "", ops = [""]) {
         :;
     }
     mn == "movq" {
+        (OS[0] == 16) == (OS[1] == 16) || OK[0] == 3 || OK[1] == 3 { fail("movq here: an xmm register and a 64-bit register or memory"); }
         OS[1] == 16 { op_rm(0x66, true, [0x0F, 0x7E], OR[1], 0); :; }       // movq r/m64, xmm
         op_rm(0x66, true, [0x0F, 0x6E], OR[0], 1);                         // movq xmm, r/m64
         :;
@@ -971,6 +989,11 @@ data(size = 0, args = "") {
         } || {
             UNRES = false;
             v = eval(it);
+            one_label(it);
+            FINAL && size < 8 {
+                lim = 1 << (8 * size);
+                v < -(lim / 2) || v >= lim { fail("the value " + $v + " does not fit in " + $size + " byte(s)"); }
+            }
             k = 0;
             * k < size { out_byte(v >> (8 * k)); k = k + 1; }
         }

@@ -159,6 +159,16 @@ start:
     jmp qword [rbx]
     call r9
     jmp strict near near_label
+    ; values from labels: never the 8-bit forms, mov r64 takes 64 bits (as nasm)
+    add rax, start
+    cmp rax, start
+    push start
+    mov rax, [rbx + start]
+    mov rax, -start
+    mov rax, near_label - start + 3
+    mov rax, start*0
+    mov rax, strict qword 1
+    add rax, strict dword 1
 near_label:
     ret
 rip_target:
@@ -170,6 +180,6 @@ rip_target:
     align 16
     times 200 db 0
 far_label:
-    db far_label - near_label
+    dw far_label - near_label
 s_len equ $ - rip_target
     dq s_len
