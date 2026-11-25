@@ -1,0 +1,32 @@
+// limits that must not go round in 64 bits: s.repeat(n) past the largest INT is a runtime error
+// (the size went round to a small number and the copies ran past the text), and s.int() past
+// the smallest INT is _ (a digit after -9223372036854775808 gave 0)
+rep(s = "", n = 0) { : #s.repeat(n); }
+
+a? = ?rep("AB", 9223372036854775807);
+>> a; >> " | " + ?! + "\n";
+b? = ?rep("x", 4611686018427387904);
+>> b; >> " | " + ?! + "\n";
+>> #"".repeat(9223372036854775807); >> " " + "ab".repeat(3) + " " + $#"ab".repeat(0) + " " + $#"ab".repeat(-5) + "\n";
+
+>> "-92233720368547758080".int(); >> "\n";
+>> "-922337203685477580800".int(); >> "\n";
+>> "-9223372036854775808".int(); >> "\n";
+>> "-9223372036854775809".int(); >> "\n";
+>> "9223372036854775807".int(); >> "\n";
+>> "9223372036854775808".int(); >> "\n";
+>> "92233720368547758070".int(); >> "\n";
+>> " -42 ".int(); >> "\n";
+
+// the edges (from the review): sizes just under and over the largest INT, n at the smallest INT
+c? = ?rep("AB", 4611686018427387903);
+>> c; >> " | " + ?! + "\n";
+d? = ?rep("AB", 4611686018427387904);
+>> d; >> " | " + ?! + "\n";
+>> #"ab".repeat(-9223372036854775807 - 1); >> " " + "ab".repeat(1) + "\n";
+>> " \t+42\r\n".int(); >> " "; >> "+".int(); >> " "; >> "-".int(); >> " "; >> "-0".int(); >> " "; >> "--5".int(); >> " ";
+>> "- 5".int(); >> " "; >> "   ".int(); >> "\n";
+>> " -09223372036854775808 ".int(); >> " "; >> "-92233720368547758081".int(); >> "\n";
+// join and replace still give the same texts (their sizes are now checked)
+>> ["a", "bb", "ccc"].join(", ") + "|" + [""].join("-") + "|" + ["x", "y"].join("") + "\n";
+>> "a-b-c".replace("-", "+++") + " " + "a+++b".replace("+++", "-") + " " + "aaa".replace("a", "") + " " + "abc".replace("x", "yy") + "\n";

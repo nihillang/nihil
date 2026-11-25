@@ -1,0 +1,18 @@
+_ | text too large: 2 bytes repeated 9223372036854775807 times
+_ | array too large
+0 ababab 0 0
+_
+_
+-9223372036854775808
+_
+9223372036854775807
+_
+_
+-42
+_ | array too large
+_ | text too large: 2 bytes repeated 4611686018427387904 times
+0 ab
+42 _ _ 0 _ _ _
+-9223372036854775808 _
+a, bb, ccc||xy
+a+++b+++c a-b  abc

@@ -1492,8 +1492,14 @@ ps = PLANOGRAM.from_json_items(text);    // an ARRAY of records from a JSON arra
   - a number is accepted for a FLOAT field (`18` → `18.0`), and a text holding a number for
     an INT or FLOAT field (`"4"` → `4`);
   - any other mismatch is a runtime error, which `?` catches:
-    `field 'fronts' of ITEM is not an INT in the JSON: "many"`.
-- `MODEL.from_json_items(text)` does the same for each object of a JSON array.
+    `field 'fronts' of ITEM is not an INT in the JSON: "many"`;
+  - the whole text must be one valid JSON object by JSON's grammar (RFC 8259), with only
+    spaces after it: a cut or broken document (`{"qty": 5`, a comma too many, unpaired
+    brackets, a bad escape, text after the object) is a runtime error,
+    `ITEM.from_json: the text is not a valid JSON object`, and is never read as a record.
+    The `s.json(…)` calls of §21.2 stay lenient: they look for one part of the text.
+- `MODEL.from_json_items(text)` does the same for each object of a JSON array, after checking
+  the whole array the same way.
 
 **Implementation.** Prelude code over the model's list of fields, which the compiler already
 passes to the table reader: `__nihil_r_to_json(schema, names, record)` and

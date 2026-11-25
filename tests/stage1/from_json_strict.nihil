@@ -1,0 +1,41 @@
+// MODEL.from_json checks the whole text by JSON's grammar first: a cut or broken document is an
+// error (it gave a record with the fields found so far), and a valid one reads as before
+ITEM = @[qty: INT(4); name: STRING(10); ok: BOOL];
+read(t = "") { : ITEM.from_json(t).qty; }
+show(t = "") { q? = ?read(t); >> t + "  →  "; >> q; q == _ { >> " | " + ?!; } >> "\n"; }
+
+show("{\"qty\": 5}");
+show("  {\"qty\": 7, \"name\": \"a\\\"b\\u00e9\", \"ok\": true, \"more\": [1, {\"x\": null}, -2.5e3]}  ");
+show("{}");
+show("{");
+show("{\"qty\": 5");
+show("{\"qty\": 5,}");
+show("{\"qty\": 5} x");
+show("{\"qty\": 5}}");
+show("{\"qty\" 5}");
+show("{\"qty\": [1, 2}");
+show("{\"qty\": 01}");
+show("{\"qty\": 5, \"name\": \"bad \\x\"}");
+show("{\"qty\": 5, \"ok\": tru}");
+show("{qty: 5}");
+show("[{\"qty\": 5}]");
+// from_json_items: the whole array is checked too
+items(t = "") { : #ITEM.from_json_items(t); }
+n? = ?items("[{\"qty\": 1}, {\"qty\": 2}]"); >> n; >> "\n";
+m? = ?items("[{\"qty\": 1}, {\"qty\": 2}"); >> m; >> " | " + ?! + "\n";
+// s.json(key) stays lenient: it finds a part and need not read the rest
+>> "{\"qty\": 5".json("qty") || "_"; >> "\n";
+
+// the edges (from the review): each line is _ (not valid) or 0 (valid, no qty)
+probe(t = "") { q? = ?read(t); >> q; >> " "; }
+probe("{\"x\":-}"); probe("{\"x\":1.}"); probe("{\"x\":.5}"); probe("{\"x\":1e}"); probe("{\"x\":1e+}"); probe("{\"x\":truex}");
+probe("{\"name\":\"\\u123"); probe("{\"name\":\"\\u12G4\"}"); probe("{\"name\":\"\x1F\"}"); probe("\x0B{}"); probe("{}{}"); >> "\n";
+probe("{\"qty\":-0,\"x\":1E+2}"); probe("\t\r\n{}\t\r\n"); probe("{\"name\":\"é😀\"}"); probe("{\"x\":1,\"x\":2}"); probe("{\"x\":\"\\uDEAD\"}"); >> "\n";
+// UTF-8: invalid bytes, a lone continuation, an overlong "/", a cut sequence, a surrogate, past U+10FFFF
+probe("{\"name\":\"\xFF\"}"); probe("{\"name\":\"\x80\"}"); probe("{\"name\":\"\xC0\xAF\"}"); probe("{\"name\":\"\xC3\"}");
+probe("{\"name\":\"\xED\xA0\x80\"}"); probe("{\"name\":\"\xF4\x90\x80\x80\"}"); probe("{\"name\":\"\xF4\x8F\xBF\xBF\"}"); >> "\n";
+// depth: up to 512 levels (the leaves count), and arrays of items
+probe("{\"x\":" + "[".repeat(510) + "0" + "]".repeat(510) + "}"); probe("{\"x\":" + "[".repeat(512) + "0" + "]".repeat(512) + "}");
+z? = ?items("[]"); >> z; >> " ";
+z = ?items("[{},]"); >> z; >> " ";
+z = ?items("[{}]x"); >> z; >> "\n";
