@@ -142,6 +142,10 @@ start:
     mulsd xmm0, [rel rip_target]
     movq rax, xmm0
     movq xmm3, r9
+    movq xmm0, [rax]
+    movq [rax], xmm0
+    movq xmm10, [r9 + 8]
+    movq [rbx + rcx*8], xmm12
     prefetcht0 [rax + 64]
     rep movsb
     rep movsq

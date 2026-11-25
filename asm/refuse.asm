@@ -79,3 +79,7 @@ L:
 mov rax, L*2
 ; --- expect: does not fit in 1 byte
 db 300
+; --- expect: takes a 64-bit register or qword memory
+push dword [rax]
+; --- expect: takes a 64-bit register or qword memory
+pop dword [rax]
