@@ -21,21 +21,11 @@
 // =============================================================================
 
 // ---- the lines, after the preprocessor ----
-LT = ["" ; 4096];               // text
-LF = ["" ; 4096];               // file, for the messages
-LN = [0 ; 4096];                // line in that file
-NL = 0;
+LT = ["" ; *4096];              // text
+LF = ["" ; *4096];              // file, for the messages
+LN = [0 ; *4096];               // line in that file
 
-add_line(t = "", f = "", n = 0) {
-    NL == #LT {
-        t2 = ["" ; NL * 2]; f2 = ["" ; NL * 2]; n2 = [0 ; NL * 2];
-        j = 0;
-        * j < NL { t2[j] = LT[j]; f2[j] = LF[j]; n2[j] = LN[j]; j = j + 1; }
-        LT = t2; LF = f2; LN = n2;
-    }
-    LT[NL] = t; LF[NL] = f; LN[NL] = n;
-    NL = NL + 1;
-}
+add_line(t = "", f = "", n = 0) { LT[] = t; LF[] = f; LN[] = n; }
 
 WHERE = "";
 fail(what = "") {
@@ -62,7 +52,7 @@ no_comment(s = "") {
 
 // parts separated by commas outside quotes and brackets
 split_commas(s = "") {
-    parts = ["" ; 0];
+    parts = ["" ; *];
     q = 0; depth = 0; from = 0;
     i = 0;
     * i < #s {
@@ -71,11 +61,11 @@ split_commas(s = "") {
         || c == '\'' || c == '"' || c == '`' { q = c; }
         || c == '[' || c == '(' { depth = depth + 1; }
         || c == ']' || c == ')' { depth = depth - 1; }
-        || c == ',' && depth == 0 { parts = parts + [s.slice(from, i).trim()]; from = i + 1; }
+        || c == ',' && depth == 0 { parts[] = s.slice(from, i).trim(); from = i + 1; }
         i = i + 1;
     }
-    #s.trim() > 0 { parts = parts + [s.slice(from).trim()]; }
-    : parts;
+    #s.trim() > 0 { parts[] = s.slice(from).trim(); }
+    : parts.array();
 }
 
 // a before b, byte by byte
@@ -99,7 +89,7 @@ after_word(s = "") {
 
 // ---- the preprocessor ----
 DEFS = {"": "" ; 256};
-INCDIRS = ["" ; 0];
+INCDIRS = ["" ; *];
 MACRO_BODY = {"": "" ; 16};
 MACRO_ARGS = {"": 0 ; 16};
 UNIQ = 0;
@@ -109,7 +99,7 @@ expand(s = "") {
     t = s;
     round = 0;
     * round < 32 {
-        out = ["" ; 0];
+        out = ["" ; *];
         changed = false;
         q = 0;
         i = 0; from = 0;
@@ -121,7 +111,7 @@ expand(s = "") {
                 j = i;
                 * j < #t && is_word(t[j]) { j = j + 1; }
                 w = t.slice(i, j);
-                DEFS.contains(w) { out = out + [t.slice(from, i), DEFS[w] || ""]; from = j; changed = true; }
+                DEFS.contains(w) { out[] = t.slice(from, i); out[] = DEFS[w] || ""; from = j; changed = true; }
                 i = j;
             }
             || { i = i + 1; }
@@ -149,7 +139,7 @@ preprocess(path = "") {
     taken = [false ; 64];
     depth = 0;
     macro = "";                 // the name of the %macro being read
-    body = ["" ; 0];
+    body = ["" ; *];
     i = 0;
     * i < #lines {
         WHERE = path + ":" + $(i + 1) + ": ";
@@ -158,7 +148,7 @@ preprocess(path = "") {
         on = act[depth];
         #macro > 0 {
             word == "%endmacro" { MACRO_BODY[macro] = body.join("\n"); macro = ""; }
-            || { body = body + [t]; }
+            || { body[] = t; }
         }
         || word == "%ifdef" || word == "%ifndef" {
             yes = DEFS.contains(after_word(t));
@@ -195,7 +185,7 @@ preprocess(path = "") {
             rest = after_word(t);
             macro = first_word(rest);
             MACRO_ARGS[macro] = after_word(rest).int() || 0;
-            body = ["" ; 0];
+            body = ["" ; *];
         }
         || word.starts_with("%") { fail("not known here: " + word); }
         || MACRO_BODY.contains(first_word(t)) { call_macro(first_word(t), after_word(t), path, i + 1); }
@@ -485,7 +475,7 @@ mem(k = 0, s = "") {
     first_word(t).lower() == "rel" { MRIP[k] = true; t = after_word(t); }
     first_word(t).lower() == "abs" { t = after_word(t); }
     // the terms between + and - at depth 0; registers are taken out, the rest is the displacement
-    disp = ["" ; 0];
+    disp = ["" ; *];
     sign = "+";
     from = 0; depth = 0;
     i = 0;
@@ -495,7 +485,7 @@ mem(k = 0, s = "") {
         c == '(' { depth = depth + 1; } || c == ')' { depth = depth - 1; }
         i == #t || depth == 0 && (c == '+' || c == '-') && i > from {
             term = t.slice(from, i).trim();
-            !reg_term(k, term, sign) { disp = disp + [sign + "(" + term + ")"]; }
+            !reg_term(k, term, sign) { disp[] = sign + "(" + term + ")"; }
             i < #t { sign = t.slice(i, i + 1); }
             from = i + 1;
         }
@@ -634,7 +624,7 @@ UNARY = {"not": 2, "neg": 3, "mul": 4, "imul": 5, "div": 6, "idiv": 7};
 SHIFT = {"rol": 0, "ror": 1, "rcl": 2, "rcr": 3, "shl": 4, "sal": 4, "shr": 5, "sar": 7};
 BITS = {"bt": 4, "bts": 5, "btr": 6, "btc": 7};
 
-LONGJ = [false ; 4096];         // this line's jump is near (rel32)
+LONGJ = [false ; 0];            // this line's jump is near (rel32); assemble() gives it one per line
 GROW_ONLY = false;
 CUR = 0;                        // the line being assembled
 
@@ -948,20 +938,12 @@ encode(mn = "", ops = [""]) {
 }
 
 // ---- the passes ----
-OUT = [0 ; 16384];
-NOUT = 0;
-LADDR = [0 ; 4096];
+OUT = [0 ; *16384];             // the bytes, written by the last pass only
+NOUT = 0;                       // the bytes so far in every pass (the address), written or not
+LADDR = [0 ; 0];                // each line's address (assemble() gives it one per line)
 
 out_byte(x = 0) {
-    FINAL {
-        NOUT == #OUT {
-            o2 = [0 ; NOUT * 2];
-            j = 0;
-            * j < NOUT { o2[j] = OUT[j]; j = j + 1; }
-            OUT = o2;
-        }
-        OUT[NOUT] = x & 255;
-    }
+    FINAL { OUT[] = x & 255; }
     NOUT = NOUT + 1;
 }
 
@@ -1111,6 +1093,8 @@ one(t = "") {
 }
 
 assemble() {
+    LADDR = [0 ; #LT];
+    LONGJ = [false ; #LT];
     pass = 0;
     * true {
         pass = pass + 1;
@@ -1120,8 +1104,8 @@ assemble() {
         CHANGED = false;
         NOUT = 0; ORG = 0; LAST = "";
         i = 0;
-        * i < NL { line(i); i = i + 1; }
-        !CHANGED { FINAL = true; PASS = pass + 1; NOUT = 0; ORG = 0; LAST = ""; i = 0; * i < NL { line(i); i = i + 1; } :; }
+        * i < #LT { line(i); i = i + 1; }
+        !CHANGED { FINAL = true; PASS = pass + 1; NOUT = 0; ORG = 0; LAST = ""; i = 0; * i < #LT { line(i); i = i + 1; } :; }
     }
 }
 
@@ -1136,7 +1120,7 @@ main() {
     << listing;
     setup_regs();
     setup_cc();
-    dirs.split(" ") : part { d = part.trim(); #d > 0 { !d.ends_with("/") { d = d + "/"; } INCDIRS = INCDIRS + [d]; } }
+    dirs.split(" ") : part { d = part.trim(); #d > 0 { !d.ends_with("/") { d = d + "/"; } INCDIRS[] = d; } }
     defs.split(" ") : part {
         d = part.trim();
         d.starts_with("-D") {
@@ -1159,14 +1143,14 @@ main() {
     * k < NOUT { nums[k] = $OUT[k]; k = k + 1; }
     @>> out, "// generated from src/runtime.asm by `make runtime` (asm/asm.nihil; nasm gives the same bytes) — do not edit; `make runtime-check` compares\nruntime_bin = ["
         + nums.join(", ") + "\n];\n";
-    !>> "asm: " + $NOUT + " bytes, " + $NL + " lines\n";
+    !>> "asm: " + $NOUT + " bytes, " + $#LT + " lines\n";
     // a listing (for finding a difference with nasm's): file:line address size text
     #listing > 0 {
-        ls = ["" ; NL];
+        ls = ["" ; #LT];
         k = 0;
-        * k < NL {
+        * k < #LT {
             size = NOUT - (LADDR[k] - ORG);
-            k + 1 < NL { size = LADDR[k + 1] - LADDR[k]; }
+            k + 1 < #LT { size = LADDR[k + 1] - LADDR[k]; }
             ls[k] = $LN[k] + " " + $(LADDR[k] - ORG) + " " + $size + " " + LT[k];
             k = k + 1;
         }
