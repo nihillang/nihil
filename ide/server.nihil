@@ -88,14 +88,13 @@ PROJECTS_FILE = "";
 projects() {
     t? = @? PROJECTS_FILE;
     lines = (t || "").split("\n");
-    out = [ROOT];
-    i = 0;
-    * i < #lines {
-        l = lines[i].trim();
-        #l > 0 && l != ROOT && !out.contains(l) { out = out + [l]; }
-        i = i + 1;
+    out = ["" ; *];
+    out[] = ROOT;
+    lines : line {
+        l = line.trim();
+        #l > 0 && l != ROOT && !out.contains(l) { out[] = l; }
     }
-    : out;
+    : out.array();
 }
 
 projects_json() {
@@ -113,8 +112,8 @@ projects_json() {
 }
 
 save_projects(ps = [""]) {
-    extra = ["" ; 0];
-    ps : one { one != ROOT { extra = extra + [one]; } }
+    extra = ["" ; *];
+    ps : one { one != ROOT { extra[] = one; } }
     @>> PROJECTS_FILE, extra.join("\n") + "\n";
 }
 
@@ -172,16 +171,16 @@ walk_db(dir = "", rel = "", depth = 0) {
         #rel > 0 { r = rel + "/" + ns[i]; }
         !ns[i].starts_with(".") {
             (dir + "/" + r).is_dir() { walk_db(dir, r, depth + 1); }
-            || ns[i].ends_with(".dat") { TABLES = TABLES + ["@db/" + r]; }
+            || ns[i].ends_with(".dat") { TABLES[] = "@db/" + r; }
         }
         i = i + 1;
     }
 }
 
 // ---- files of a project -------------------------------------------------------------------
-FILES = ["" ; 0];
-TABLES = ["" ; 0];
-DIRS = ["" ; 0];                // the folders walked (empty ones too), relative to the project
+FILES = ["" ; *];
+TABLES = ["" ; *];
+DIRS = ["" ; *];                // the folders walked (empty ones too), relative to the project
 
 // the folders that are listed and can be saved: the whole project, or for the language
 // repository only the workspace and the examples (its sources are not edited from here)
@@ -216,20 +215,20 @@ walk(project = "", rel = "", depth = 0) {
         r = n;
         #rel > 0 { r = rel + "/" + n; }
         !n.starts_with(".") && !SKIP.contains(n) {
-            (project + "/" + r).is_dir() { DIRS = DIRS + [r]; walk(project, r, depth + 1); }
-            || n.ends_with(".nihil") { FILES = FILES + [r]; }
-            || n.ends_with(".dat") { TABLES = TABLES + [r]; }
+            (project + "/" + r).is_dir() { DIRS[] = r; walk(project, r, depth + 1); }
+            || n.ends_with(".nihil") { FILES[] = r; }
+            || n.ends_with(".dat") { TABLES[] = r; }
         }
         i = i + 1;
     }
 }
 
 files_json(project = "") {
-    FILES = ["" ; 0];
-    TABLES = ["" ; 0];
-    DIRS = ["" ; 0];
+    FILES = ["" ; *];
+    TABLES = ["" ; *];
+    DIRS = ["" ; *];
     rs = roots_of(project);
-    rs : r { #r > 0 && (project + "/" + r).is_dir() { DIRS = DIRS + [r]; } walk(project, r, 0); }
+    rs : r { #r > 0 && (project + "/" + r).is_dir() { DIRS[] = r; } walk(project, r, 0); }
     db = outside_db(project);
     #db > 0 { walk_db(db, "", 0); }
     f = ["" ; #FILES];
@@ -258,11 +257,11 @@ files_json(project = "") {
 // ---- tables: the data model that fits a .dat file ---------------------------------------------
 // A model is "NAME = @[field: TYPE(width); …];" in a program of the project. The one chosen
 // has the width of the file's lines, preferring a program that names the file.
-M_NAME = ["" ; 0];          // every model found: name, file, fields (as JSON), width, the text
-M_FILE = ["" ; 0];
-M_FIELDS = ["" ; 0];        // "name|TYPE|width|key;…"
-M_WIDTH = [0 ; 0];
-M_TEXT = ["" ; 0];
+M_NAME = ["" ; *];          // every model found: name, file, fields (as JSON), width, the text
+M_FILE = ["" ; *];
+M_FIELDS = ["" ; *];        // "name|TYPE|width|key;…"
+M_WIDTH = [0 ; *];
+M_TEXT = ["" ; *];
 
 ident_char(c = 0) {
     : c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_';
@@ -302,9 +301,9 @@ field_spec(part = "") {
 }
 
 find_models(project = "") {
-    M_NAME = ["" ; 0]; M_FILE = ["" ; 0]; M_FIELDS = ["" ; 0]; M_WIDTH = [0 ; 0]; M_TEXT = ["" ; 0];
-    FILES = ["" ; 0];
-    TABLES = ["" ; 0];
+    M_NAME = ["" ; *]; M_FILE = ["" ; *]; M_FIELDS = ["" ; *]; M_WIDTH = [0 ; *]; M_TEXT = ["" ; *];
+    FILES = ["" ; *];
+    TABLES = ["" ; *];
     rs = roots_of(project);
     rs : r { walk(project, r, 0); }
     fi = 0;
@@ -337,7 +336,7 @@ find_models(project = "") {
                     * after < #clean && (clean[after] == ' ' || clean[after] == 9 || clean[after] == 10) { after = after + 1; }
                     after < #clean && clean[after] == ';' {
                         parts = clean.slice(mp + 2, cp).split(";");
-                        specs = ["" ; 0];
+                        specs = ["" ; *];
                         width = 0;
                         good = true;
                         pi = 0;
@@ -345,15 +344,15 @@ find_models(project = "") {
                             #parts[pi].trim() > 0 {
                                 sp = field_spec(parts[pi]);
                                 #sp == 0 { good = false; } || {
-                                    specs = specs + [sp];
+                                    specs[] = sp;
                                     width = width + (sp.split("|")[2].int() || 0);
                                 }
                             }
                             pi = pi + 1;
                         }
                         good && #specs > 0 {
-                            M_NAME = M_NAME + [name]; M_FILE = M_FILE + [FILES[fi]]; M_FIELDS = M_FIELDS + [specs.join(";")];
-                            M_WIDTH = M_WIDTH + [width]; M_TEXT = M_TEXT + [text || ""];
+                            M_NAME[] = name; M_FILE[] = FILES[fi]; M_FIELDS[] = specs.join(";");
+                            M_WIDTH[] = width; M_TEXT[] = text || "";
                         }
                     }
                 }
@@ -440,12 +439,12 @@ table_json(project = "", rel = "", from = 0, limit = 100) {
     width = -1;
     nl != _ { width = nl || 0; } || size > 0 && size <= 65536 { width = size; }
     chosen = pick_model(project, rel, width);
-    others = ["" ; 0];
+    others = ["" ; *];
     i = 0;
     * i < #M_NAME {
         i != chosen && (width < 0 || M_WIDTH[i] == width) && (chosen < 0 || M_FIELDS[i] != M_FIELDS[chosen] || M_NAME[i] != M_NAME[chosen]) {
             o = q(M_NAME[i] + " (" + M_FILE[i] + ")");
-            !others.contains(o) { others = others + [o]; }
+            !others.contains(o) { others[] = o; }
         }
         i = i + 1;
     }
@@ -464,8 +463,10 @@ table_json(project = "", rel = "", from = 0, limit = 100) {
         n > 0 && all[n - 1] == "" { n = n - 1; }
         total = n;
         from >= total && total > 0 { from = ((total - 1) / limit) * limit; }
+        taken = ["" ; *];
         k = from;
-        * k < n && k < from + limit { lines = lines + [all[k]]; k = k + 1; }
+        * k < n && k < from + limit { taken[] = all[k]; k = k + 1; }
+        lines = taken.array();
     }
     n = #lines;
     n > 0 && lines[n - 1] == "" { n = n - 1; }
@@ -803,10 +804,10 @@ compile(project = "", rel = "", bin = "", optimize = true, base = "") {
     COMPILE_MS = now_ms() - t0;
     errs? = @? (base + ".cerr");
     ls = (errs || "").split("\n");
-    parts = ["" ; 0];
+    parts = ["" ; *];
     // the native compiler of the Mac names files by their whole path: the page wants them relative to the project
-    ls : l { #l.trim() > 0 { parts = parts + [error_json(rel, l.replace(project + "/", ""))]; } }
-    p == _ { parts = parts + [error_json(rel, "could not start the compiler")]; }
+    ls : l { #l.trim() > 0 { parts[] = error_json(rel, l.replace(project + "/", "")); } }
+    p == _ { parts[] = error_json(rel, "could not start the compiler"); }
     COMPILE_ERRORS = "[" + parts.join(", ") + "]";
     (base + ".cout").remove();
     (base + ".cerr").remove();
@@ -879,7 +880,7 @@ run_json(project = "", body = "", asm = false) {
         p != _ { pr = p || 0; pr.close_input(); pr.wait(); }
         dump? = @? (base + ".asm");
         ls = (dump || "").split("\n");
-        keep = ["" ; 0];
+        keep = ["" ; *];
         i = 0;
         * i < #ls {
             l = ls[i];
@@ -887,7 +888,7 @@ run_json(project = "", body = "", asm = false) {
             * k < #l && l[k] == ' ' { k = k + 1; }
             j = k;
             * j < #l && (l[j] >= '0' && l[j] <= '9' || l[j] >= 'a' && l[j] <= 'f') { j = j + 1; }
-            (k > 0 || MAC) && j > k && j < #l && l[j] == ':' { keep = keep + [l]; }
+            (k > 0 || MAC) && j > k && j < #l && l[j] == ':' { keep[] = l; }
             i = i + 1;
         }
         (base + ".asm").remove();
@@ -1226,7 +1227,7 @@ claude_history_json(session = "") {
     size > 8 * HISTORY_MAX { from = size - 8 * HISTORY_MAX; }      // a very long one: only its end
     t = file.read_from(from) || "";
     ls = t.split("\n");
-    keep = ["" ; 0];
+    keep = ["" ; *];
     total = 0;
     more = from > 0;
     k = #ls - 1;
@@ -1236,7 +1237,7 @@ claude_history_json(session = "") {
         ok = (k > 0 || from == 0) && l.contains("\"isSidechain\":false") && !l.contains("\"isMeta\":true")
              && (l.contains("\"role\":\"assistant\"") || l.contains("\"role\":\"user\",\"content\":\""));
         ok && total + #l > HISTORY_MAX { more = true; ok = false; k = 0; }
-        ok { keep = keep + [l]; total = total + #l + 1; }
+        ok { keep[] = l; total = total + #l + 1; }
         k = k - 1;
     }
     : "{\"ok\": true, \"found\": true, \"more\": " + $more + ", \"lines\": " + q(keep.reverse().join("\n")) + "}";
@@ -1312,7 +1313,7 @@ claude_mcp_json(project = "") {
 // what is running: the programs and the Claude conversations of this server, every project
 activity_json() {
     ids = RUN_PROC.keys().sort();
-    parts = ["" ; 0];
+    parts = ["" ; *];
     i = 0;
     * i < #ids {
         id = ids[i];
@@ -1322,8 +1323,8 @@ activity_json() {
             d != _ { RUN_CODE[id] = d || 0; running = false; }
         }
         running {
-            parts = parts + ["{\"run\": " + $id + ", \"kind\": " + q(RUN_KIND[id] || "program") + ", \"label\": " + q(RUN_LABEL[id] || "")
-                             + ", \"project\": " + q(RUN_PROJECT[id] || "") + ", \"ms\": " + $(now_ms() - (RUN_T0[id] || 0)) + "}"];
+            parts[] = "{\"run\": " + $id + ", \"kind\": " + q(RUN_KIND[id] || "program") + ", \"label\": " + q(RUN_LABEL[id] || "")
+                             + ", \"project\": " + q(RUN_PROJECT[id] || "") + ", \"ms\": " + $(now_ms() - (RUN_T0[id] || 0)) + "}";
         }
         i = i + 1;
     }
@@ -1374,9 +1375,9 @@ handle(c = 0, req = "") {
     path == "/api/projects/remove" {
         p = (body.json("path") || "\"\"").json_text() || "";
         ps = projects();
-        keep = ["" ; 0];
-        ps : one { one != p { keep = keep + [one]; } }
-        save_projects(keep);
+        keep = ["" ; *];
+        ps : one { one != p { keep[] = one; } }
+        save_projects(keep.array());
         c.respond(200, "application/json", projects_json());
         :;
     }
