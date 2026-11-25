@@ -22,6 +22,9 @@ jobs:
       - name: The runtime's bytes in src1/ are src/runtime.asm's
         run: make runtime-check
 
+      - name: Nihil's assembler against nasm (the runtime's builds, asm/test.asm, asm/refuse.asm)
+        run: make asm-check
+
       - name: Stage 1 from the latest release's compiler is the same as from stage 0
         run: make seedcheck
 

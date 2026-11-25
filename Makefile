@@ -30,9 +30,9 @@ build/runtime.bin: src/runtime.asm src/layout.inc
 # no nasm), and `make runtime-check` (CI) checks they are up to date; where nasm is installed it
 # also checks that nasm gives the same bytes. -D names in NASMFLAGS (make gcstress) go to both.
 RUNTIME_DEFS = $(filter -D%,$(NASMFLAGS))
-RUNTIME_TEXT = { printf '%s\nruntime_bin = [' '// generated from src/runtime.asm by `make runtime` (asm/asm.nihil; nasm gives the same bytes) — do not edit; `make runtime-check` compares'; \
-	  od -An -v -tu1 build/runtime.bin | tr -s ' \n' '  ' | sed 's/^ //; s/ $$//; s/ /, /g'; printf '\n];\n'; }
-ASSEMBLE = printf '%s\n%s\n%s\n%s\n\n' src/runtime.asm "src/ build/" $(1) "$(RUNTIME_DEFS)" | build/asm
+HAVE_NASM = command -v "$(NASM)" >/dev/null 2>&1
+# $(1): the file to write (.bin: the bytes; else runtime_bin.nihil's text), $(2): the source, $(3): -D names
+ASSEMBLE = printf '%s\n%s\n%s\n%s\n\n' $(2) "src/ build/" $(1) "$(3)" | build/asm
 
 # on macOS nihilc1.sh compiles with the native compiler (build/macos), not build/nihilc1
 ifeq ($(shell uname -s),Darwin)
@@ -44,14 +44,32 @@ build/asm: $(ASM_NEEDS) asm/asm.nihil
 	./nihilc1.sh asm/asm.nihil $@
 
 runtime: build/asm
-	$(call ASSEMBLE,src1/runtime_bin.nihil)
+	$(call ASSEMBLE,src1/runtime_bin.nihil,src/runtime.asm,$(RUNTIME_DEFS))
 
 runtime-check: build/asm
-	$(call ASSEMBLE,build/runtime_bin.nihil)
+	$(call ASSEMBLE,build/runtime_bin.nihil,src/runtime.asm,$(RUNTIME_DEFS))
 	@cmp build/runtime_bin.nihil src1/runtime_bin.nihil || { echo "src1/runtime_bin.nihil is not src/runtime.asm's: make runtime" >&2; exit 1; }
-	@if [ -x "$(NASM)" ]; then $(MAKE) -s build/runtime.bin && $(RUNTIME_TEXT) > build/runtime_bin_nasm.nihil && \
-	  { cmp build/runtime_bin_nasm.nihil build/runtime_bin.nihil || { echo "asm/asm.nihil and nasm give different bytes" >&2; exit 1; }; } && \
+	@if $(HAVE_NASM); then "$(NASM)" -f bin $(NASMFLAGS) -o build/runtime_check_nasm.bin src/runtime.asm && \
+	  $(call ASSEMBLE,build/runtime_check_asm.bin,src/runtime.asm,$(RUNTIME_DEFS)) 2>/dev/null && \
+	  { cmp build/runtime_check_nasm.bin build/runtime_check_asm.bin || { echo "asm/asm.nihil and nasm give different bytes" >&2; exit 1; }; } && \
 	  echo "runtime: asm/asm.nihil and nasm give the same bytes"; fi
+
+# asm/asm.nihil against nasm (CI): the runtime and its debug builds, the forms of asm/test.asm, and
+# each case of asm/refuse.asm, which it must refuse (they are not checked with nasm)
+asm-check: build/asm
+	@$(HAVE_NASM) || { echo "make asm-check needs nasm" >&2; exit 1; }
+	@for d in "" "-DGC_STRESS" "-DGC_STATS" "-DGC_STRESS -DGC_STATS"; do \
+	  "$(NASM)" -f bin $(NASMFLAGS) $$d -o build/asm_nasm.bin src/runtime.asm && \
+	  $(call ASSEMBLE,build/asm_mine.bin,src/runtime.asm,$$d) 2>/dev/null && cmp build/asm_nasm.bin build/asm_mine.bin && \
+	  echo "asm: runtime $${d:-(as it is)}: the same bytes as nasm" || { echo "asm: runtime $$d differs from nasm" >&2; exit 1; }; done
+	@"$(NASM)" -f bin -o build/asm_nasm.bin asm/test.asm && $(call ASSEMBLE,build/asm_mine.bin,asm/test.asm,) 2>/dev/null && \
+	  cmp build/asm_nasm.bin build/asm_mine.bin && echo "asm: asm/test.asm: the same bytes as nasm"
+	@rm -rf build/refuse && mkdir -p build/refuse && \
+	  awk 'BEGIN { n = 0; f = sprintf("build/refuse/%02d.asm", n); print "bits 64" > f } \
+	       /^; ---/ { n++; f = sprintf("build/refuse/%02d.asm", n); print "bits 64" > f; next } /^;/ { next } { print > f }' asm/refuse.asm && \
+	  for f in build/refuse/*.asm; do \
+	    if $(call ASSEMBLE,build/refuse/out.bin,$$f,) 2>/dev/null; then echo "asm: $$f was not refused" >&2; exit 1; fi; done && \
+	  echo "asm: the $$(ls build/refuse/*.asm | wc -l | tr -d ' ') cases of asm/refuse.asm are refused"
 
 # the prelude (bigint + float_text + prelude) becomes a STRING inside nihilc1
 PRELUDE := src1/bigint.nihil src1/float_text.nihil src1/prelude.nihil
@@ -152,4 +170,4 @@ build/ide-server: build/nihilc1 ide/server.nihil
 clean:
 	rm -rf build
 
-.PHONY: all runtime runtime-check seedcheck test test1 test1-O0 compare fixedpoint floatcheck gcstress ide clean
+.PHONY: all runtime runtime-check asm-check seedcheck test test1 test1-O0 compare fixedpoint floatcheck gcstress ide clean
