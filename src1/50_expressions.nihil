@@ -329,8 +329,8 @@ unary() {
         u = unary();
         ok = u == TYPE_UNKNOWN;
         t == '#' && u & TYPE_ARR != 0 && !is_opt(u) { ok = true; }
-        t == '#' && is_map(u) {
-            eb(0x48, 0x8B, 0x00);           // mov rax, [rax]: the count, first word of the map
+        t == '#' && (is_map(u) || is_list(u)) {
+            eb(0x48, 0x8B, 0x00);           // mov rax, [rax]: the count, first word of the map (or list)
             : TYPE_INT;
         }
         t == T_AT_OPT {
@@ -478,6 +478,7 @@ postfix_rest(t = 0, stop = false) {
 // tok = "[" after a value of type t (in rax) → the element; returns its type
 index_step(t = 0) {
     is_map(t) { : map_get(t); }
+    is_list(t) { : list_get(t); }
     target_ok = t == TYPE_STR || t == TYPE_UNKNOWN || t & TYPE_ARR != 0 && !is_opt(t);
     !target_ok {
         error_start();
@@ -684,6 +685,7 @@ primary_array() {
         // [value ; n]
         emit(0x50);
         next_token();
+        tok_type == '*' { : list_literal(t); }   // [value ; *]: an empty LIST (SPEC §28)
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
         u != TYPE_INT && u != TYPE_UNKNOWN {
@@ -864,6 +866,10 @@ emit_default(e = 0) {
     }
     is_map(b) {
         emit_new_map(b);                  // {k: v}: a new empty map on every call
+        :;
+    }
+    is_list(b) {
+        emit_new_list();                  // [x ; *]: a new empty list on every call
         :;
     }
     b == TYPE_STR {

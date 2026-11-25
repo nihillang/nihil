@@ -1,0 +1,5 @@
+// an index out of a LIST's bounds ends the program as with an ARRAY
+v = [0 ; *];
+v[] = 7;
+>> $v[0] + "\n";
+>> $v[1] + "\n";

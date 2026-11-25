@@ -1,0 +1,1 @@
+'name[] = value;' adds to a LIST ([value ; *]), but 'v' is ARRAY of INT, whose size is fixed

@@ -182,6 +182,9 @@ emit_to_json(t = 0) {
         } || is_map(b) {
             const_put_q(8); const_put_q(map_kind(b)); n = n + 2;
             b = map_val(b);
+        } || is_list(b) {
+            const_put_q(32); n = n + 1;
+            b = list_elem(b);
         } || is_rec(b) {
             const_put_q(64); n = n + 1;
             m = b >> 8;
@@ -510,6 +513,29 @@ library_call(t = 0) {
         size_const = sc;
         unknowns = unknowns + 1;
         : TYPE_UNKNOWN;
+    }
+    is_list(t) && !name_is(ns, nl, "to_json") {
+        // a LIST: v.array() copies its items to an ARRAY; every other method is the ARRAY's, on that copy
+        emit(0x50);
+        call_prelude("__nihil_list_array", 8);
+        name_is(ns, nl, "array") {
+            next_token();                // name → "("
+            next_token();
+            expect(')', "')': .array() takes nothing");
+            : list_elem(t) | TYPE_ARR;
+        }
+        a = list_elem(t) | TYPE_ARR;
+        !is_rec_array(a) && #lib_target(a, ns, nl) == 0 {
+            error_start();
+            put_type(t);
+            put_str(" has no method '");
+            put_source(ns, nl);
+            put_str("': it has array(), and the methods of ");
+            put_type(a);
+            put_str(", on a copy of its items");
+            error_end();
+        }
+        t = a;
     }
     name_is(ns, nl, "to_json") { : to_json_call(t); }
     is_rec_array(t) { : query_call(t); }

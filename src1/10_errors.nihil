@@ -40,7 +40,11 @@ put_type(t = 0) {
     o = t & TYPE_OPT != 0;
     t = t & ~TYPE_OPT;
     t & TYPE_ARR != 0 { put_str("ARRAY of "); t = t & ~TYPE_ARR; }
-    t & TYPE_MAP != 0 {
+    t & TYPE_MAP != 0 && mt_key[t >> 8] == 0 {
+        put_str("LIST of ");
+        put_type(mt_val[t >> 8]);
+    }
+    || t & TYPE_MAP != 0 {
         put_str("MAP of ");
         put_type(mt_key[t >> 8]);
         put_str(" to ");

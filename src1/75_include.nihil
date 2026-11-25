@@ -205,6 +205,7 @@ expand(k = 0, depth = 0) {
     new_segment(k, 1);
     next_token();
     braces = 0;
+    brackets = 0;
     prev = T_END;
     * tok_type != T_END {
         t = tok_type;
@@ -214,6 +215,9 @@ expand(k = 0, depth = 0) {
         }
         t == '@' && peek_type() == '[' { uses_prelude = true; }    // a data model: records use the prelude
         t == '{' && (prev == '=' || prev == '(' || prev == ',' || prev == ':' || prev == '[') { uses_prelude = true; }   // a MAP literal
+        t == '[' { brackets = brackets + 1; }
+        t == ']' && brackets > 0 { brackets = brackets - 1; }
+        t == '*' && prev == ';' && brackets > 0 { uses_prelude = true; }   // [x ; *]: a LIST
         t == '@' && peek_type() != '[' && peek_type() != '{' && braces == 0 && (prev == T_END || prev == ';' || prev == '}') {
             pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
             i = tok_lstart;                   // before the "@" on the line: only spaces
