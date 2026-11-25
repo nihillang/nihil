@@ -1449,6 +1449,15 @@ r == _ { >> "failed: " + ?! + "\n"; } // ?! : the text of that error
 - `?!` is a STRING: the message of the error the last protected call caught (as it would have
   been written after `nihil: `), or `""` when that call ended normally. Nested protections
   work: the innermost one catches, and an outer call that then ends normally leaves `?!` empty.
+- `?! = text;` raises a runtime error whose message is `text` (a STRING; v4.8): a protected
+  call around it catches it like any other, and `?!` then holds `text`; outside any protection
+  the program ends as for any runtime error, writing `nihil: text` and exiting with 2. It is a
+  command (`?!= text;` also reads as one); an optional is refused (`(x || "…")`).
+
+  ```text
+  check(n = 0) { n < 0 { ?! = "negative: " + $n; } : n * 2; }
+  r? = ?check(-3);                      // _, and ?! is "negative: -3"
+  ```
 - What was written before the error stays written: the output buffer is not touched.
 - A protected call costs a few instructions when nothing fails, and the stack does not grow
   when it is used in a loop.

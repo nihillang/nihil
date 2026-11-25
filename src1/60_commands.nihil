@@ -27,8 +27,35 @@ command() {
     t == '@' && peek_type() == '[' { cmd_write_record(); :; }
     t == '@' && peek_type() == '{' { cmd_put_key(); :; }
     t == '@' { error("the inclusion @ \"file\"; can only appear at the top level, alone on its line"); }
+    t == '?' && raise_ahead() { cmd_raise(); :; }
     init_expression(t) { cmd_expr_block(); :; }
     error_expected("a command");
+}
+
+// tok = "?": "?! = text;" (or "?!= text;") follows? Consumes nothing
+raise_ahead() {
+    save_lexer();
+    next_token();                // "?" → "!" (or "!=")
+    r = tok_type == T_NE;
+    tok_type == '!' { next_token(); r = tok_type == '='; }
+    back_lexer();
+    drop_lexer();
+    : r;
+}
+
+// ?! = text; — a runtime error with that text (SPEC §25): ?f() catches it, and ?! holds the
+// text; not caught, the program ends as for any runtime error ("nihil: text", exit code 2)
+cmd_raise() {
+    next_token();                // "?" → "!" or "!="
+    tok_type == '!' { next_token(); }
+    next_token();                // "=" → the text
+    t = expression();
+    t != TYPE_STR {
+        is_opt(t) { error("?! = takes a STRING, not an optional: use (x || \"…\")"); }
+        error("?! = takes a STRING: the text of the error");
+    }
+    emit_call_rt(RT_FAIL);
+    expect(';', "';'");
 }
 
 command_name() {
