@@ -78,6 +78,13 @@ split_commas(s = "") {
     : parts;
 }
 
+// a before b, byte by byte
+text_less(a = "", b = "") {
+    i = 0;
+    * i < #a && i < #b { a[i] != b[i] { : a[i] < b[i]; } i = i + 1; }
+    : #a < #b;
+}
+
 // the first word and the rest
 first_word(s = "") {
     i = 0;
@@ -172,6 +179,7 @@ preprocess(path = "") {
         || !on { }
         || word == "%define" {
             rest = after_word(t);
+            first_word(rest).contains("(") { fail("%define with parameters is not known here"); }
             DEFS[first_word(rest)] = after_word(rest);
         }
         || word == "%include" {
@@ -196,6 +204,7 @@ preprocess(path = "") {
         i = i + 1;
     }
     depth != 0 { fail("%if without %endif"); }
+    #macro > 0 { fail("%macro " + macro + " without %endmacro"); }
 }
 
 // a macro's lines, its %1 … %9 replaced by the arguments and its %%labels made unique
@@ -213,6 +222,9 @@ call_macro(name = "", args = "", path = "", n = 0) {
 
 // ---- symbols ----
 SYM = {"": 0 ; 2048};
+SYMRL = {"": 0 ; 2048};          // its RL (see the expressions): 1 for a label
+DEFINED = {"": 0 ; 2048};        // the pass that defined it (a second definition in a pass is an error)
+PASS = 0;
 CHANGED = false;                // a label moved in this pass
 UNRES = false;                  // the expression used a label not known yet
 FINAL = false;                  // the last pass: everything must be known
@@ -225,7 +237,10 @@ full_name(w = "") {
     : w;
 }
 
-set_sym(name = "", v = 0) {
+set_sym(name = "", v = 0, rl = 0) {
+    (DEFINED[name] || 0) == PASS { fail(name + " is defined twice"); }
+    DEFINED[name] = PASS;
+    SYMRL[name] = rl;
     old? = SYM[name];
     old == _ || (old || 0) != v { CHANGED = true; }
     SYM[name] = v;
@@ -246,61 +261,76 @@ eval(s = "") {
     : v;
 }
 
+// RL: how the value depends on labels, which nasm keeps relocatable (a label counts 1, $ too;
+// label - label is 0, a plain number): set by each ex_ for the value it gives. -1000: mixed in
+// a way that is neither (a label times 2, a label & 15…)
+RL = 0;
+mixed(a = 0, b = 0) { a == 0 && b == 0 { : 0; } : -1000; }
+
 ex_cmp() {
     a = ex_or();
+    ra = RL;
     * true {
-        peek2("==") { EP = EP + 2; e = ex_or(); a = bool_int(a == e); }
-        || peek2("!=") || peek2("<>") { EP = EP + 2; e = ex_or(); a = bool_int(a != e); }
-        || peek2("<=") { EP = EP + 2; e = ex_or(); a = bool_int(a <= e); }
-        || peek2(">=") { EP = EP + 2; e = ex_or(); a = bool_int(a >= e); }
-        || peek2("<") && !peek2("<<") { EP = EP + 1; e = ex_or(); a = bool_int(a < e); }
-        || peek2(">") && !peek2(">>") { EP = EP + 1; e = ex_or(); a = bool_int(a > e); }
-        || peek2("=") { EP = EP + 1; e = ex_or(); a = bool_int(a == e); }
-        || { : a; }
+        peek2("==") { EP = EP + 2; e = ex_or(); a = bool_int(a == e); ra = 0; }
+        || peek2("!=") || peek2("<>") { EP = EP + 2; e = ex_or(); a = bool_int(a != e); ra = 0; }
+        || peek2("<=") { EP = EP + 2; e = ex_or(); a = bool_int(a <= e); ra = 0; }
+        || peek2(">=") { EP = EP + 2; e = ex_or(); a = bool_int(a >= e); ra = 0; }
+        || peek2("<") && !peek2("<<") { EP = EP + 1; e = ex_or(); a = bool_int(a < e); ra = 0; }
+        || peek2(">") && !peek2(">>") { EP = EP + 1; e = ex_or(); a = bool_int(a > e); ra = 0; }
+        || peek2("=") { EP = EP + 1; e = ex_or(); a = bool_int(a == e); ra = 0; }
+        || { RL = ra; : a; }
     }
+    RL = ra;
     : a;
 }
 bool_int(b = false) { b { : 1; } : 0; }
-ex_or() { a = ex_xor(); * peek2("|") && !peek2("||") { EP = EP + 1; a = a | ex_xor(); } : a; }
-ex_xor() { a = ex_and(); * peek2("^") && !peek2("^^") { EP = EP + 1; a = a ^ ex_and(); } : a; }
-ex_and() { a = ex_shift(); * peek2("&") && !peek2("&&") { EP = EP + 1; a = a & ex_shift(); } : a; }
+ex_or() { a = ex_xor(); ra = RL; * peek2("|") && !peek2("||") { EP = EP + 1; a = a | ex_xor(); ra = mixed(ra, RL); } RL = ra; : a; }
+ex_xor() { a = ex_and(); ra = RL; * peek2("^") && !peek2("^^") { EP = EP + 1; a = a ^ ex_and(); ra = mixed(ra, RL); } RL = ra; : a; }
+ex_and() { a = ex_shift(); ra = RL; * peek2("&") && !peek2("&&") { EP = EP + 1; a = a & ex_shift(); ra = mixed(ra, RL); } RL = ra; : a; }
 ex_shift() {
     a = ex_add();
+    ra = RL;
     * true {
-        peek2("<<") { EP = EP + 2; a = a << ex_add(); }
-        || peek2(">>") { EP = EP + 2; a = a >> ex_add(); }
-        || { : a; }
+        peek2("<<") { EP = EP + 2; a = a << ex_add(); ra = mixed(ra, RL); }
+        || peek2(">>") { EP = EP + 2; a = a >> ex_add(); ra = mixed(ra, RL); }
+        || { RL = ra; : a; }
     }
+    RL = ra;
     : a;
 }
 ex_add() {
     a = ex_mul();
+    ra = RL;
     * true {
-        peek2("+") { EP = EP + 1; a = a + ex_mul(); }
-        || peek2("-") { EP = EP + 1; a = a - ex_mul(); }
-        || { : a; }
+        peek2("+") { EP = EP + 1; a = a + ex_mul(); ra = ra + RL; }
+        || peek2("-") { EP = EP + 1; a = a - ex_mul(); ra = ra - RL; }
+        || { RL = ra; : a; }
     }
+    RL = ra;
     : a;
 }
 ex_mul() {
     a = ex_unary();
+    ra = RL;
     * true {
-        peek2("*") { EP = EP + 1; a = a * ex_unary(); }
-        || peek2("/") { EP = EP + 1; d = ex_unary(); d == 0 { d = 1; FINAL && !UNRES { fail("division by zero"); } } a = a / d; }
-        || peek2("%") { EP = EP + 1; d = ex_unary(); d == 0 { d = 1; FINAL && !UNRES { fail("division by zero"); } } a = a % d; }
-        || { : a; }
+        peek2("*") { EP = EP + 1; a = a * ex_unary(); ra = mixed(ra, RL); }
+        || peek2("/") { EP = EP + 1; d = ex_unary(); ra = mixed(ra, RL); d == 0 { d = 1; FINAL && !UNRES { fail("division by zero"); } } a = a / d; }
+        || peek2("%") { EP = EP + 1; d = ex_unary(); ra = mixed(ra, RL); d == 0 { d = 1; FINAL && !UNRES { fail("division by zero"); } } a = a % d; }
+        || { RL = ra; : a; }
     }
+    RL = ra;
     : a;
 }
 ex_unary() {
-    peek2("-") { EP = EP + 1; : -ex_unary(); }
+    peek2("-") { EP = EP + 1; v = -ex_unary(); RL = -RL; : v; }
     peek2("+") { EP = EP + 1; : ex_unary(); }
-    peek2("~") { EP = EP + 1; : ~ex_unary(); }
-    peek2("!") { EP = EP + 1; : bool_int(ex_unary() == 0); }
+    peek2("~") { EP = EP + 1; v = ~ex_unary(); RL = mixed(RL, 0); : v; }
+    peek2("!") { EP = EP + 1; v = bool_int(ex_unary() == 0); RL = 0; : v; }
     : ex_atom();
 }
 ex_atom() {
     skip_sp();
+    RL = 0;
     EP >= #EX { fail("an expression ends too soon: '" + EX + "'"); }
     c = EX[EP];
     c == '(' {
@@ -325,14 +355,16 @@ ex_atom() {
     j == EP { fail("cannot read '" + EX.slice(EP) + "'"); }
     w = EX.slice(EP, j);
     EP = j;
-    w == "$" { : HERE; }
-    w == "$$" { : ORG; }
+    w == "$" { RL = 1; : HERE; }
+    w == "$$" { RL = 1; : ORG; }
     is_digit(w[0]) { : number(w); }
     name = full_name(w);
     v? = SYM[name];
+    RL = SYMRL[name] || 0;
     v == _ {
         FINAL { fail("not defined: " + name); }
         UNRES = true;
+        RL = 1;                                 // not known yet: as a label (nasm cannot tell either)
         : 0;
     }
     : v || 0;
@@ -391,6 +423,8 @@ OK = [0 ; 3];
 OR = [0 ; 3];                   // register number
 OS = [0 ; 3];                   // size in bytes (a register's, or a memory operand's keyword; 0: none)
 OREX = [false ; 3];             // spl bpl sil dil: REX needed
+OHI = [false ; 3];              // ah ch dh bh: no REX may be used with them
+OREL = [false ; 3];             // the immediate depends on a label (nasm keeps it relocatable)
 OV = [0 ; 3];                   // immediate value
 OUN = [false ; 3];              // the immediate used a label not known yet
 MB = [0 ; 3];                   // memory: base (-1 none)
@@ -400,6 +434,8 @@ MD = [0 ; 3];                   // displacement
 MRIP = [false ; 3];             // [rel x]
 NOPS = 0;
 STRICT = false;                 // "strict near": the long form
+NEARJ = false;                  // "near" / "short" before a jump's target
+SHORTJ = false;
 
 size_word(w = "") {
     w == "byte" { : 1; } w == "word" { : 2; } w == "dword" { : 4; } w == "qword" { : 8; }
@@ -412,14 +448,14 @@ operand(k = 0, text = "") {
     w = first_word(t).lower();
     w == "strict" { STRICT = true; t = after_word(t); w = first_word(t).lower(); }
     size_word(w) > 0 { size = size_word(w); t = after_word(t); w = first_word(t).lower(); }
-    w == "near" || w == "short" { t = after_word(t); }
-    OS[k] = size; OREX[k] = false; OUN[k] = false; MRIP[k] = false;
+    w == "near" { NEARJ = true; t = after_word(t); } || w == "short" { SHORTJ = true; t = after_word(t); }
+    OS[k] = size; OREX[k] = false; OHI[k] = false; OUN[k] = false; OREL[k] = false; MRIP[k] = false;
     r? = REGS[t.lower()];
     r != _ {
+        size != 0 { fail("a size before a register: " + text); }
         OK[k] = 1;
         rv = r || 0;
-        OR[k] = rv & 15; OS[k] = (rv >> 4) & 31; OREX[k] = (rv & 2048) != 0;
-        (rv & 1024) != 0 { OR[k] = rv & 15; }
+        OR[k] = rv & 15; OS[k] = (rv >> 4) & 31; OREX[k] = (rv & 2048) != 0; OHI[k] = (rv & 1024) != 0;
         :;
     }
     t.starts_with("[") {
@@ -432,13 +468,17 @@ operand(k = 0, text = "") {
     UNRES = false;
     OV[k] = eval(t);
     OUN[k] = UNRES;
+    OREL[k] = RL != 0;
 }
 
 // [base + index*scale + disp], [abs], [rel label]
+MBN = ["" ; 3];                  // the base's and the index's names (nasm's order, below)
+MIN = ["" ; 3];
 mem(k = 0, s = "") {
-    MB[k] = -1; MI[k] = -1; MSC[k] = 1; MD[k] = 0;
+    MB[k] = -1; MI[k] = -1; MSC[k] = 1; MD[k] = 0; MBN[k] = ""; MIN[k] = "";
     t = s;
     first_word(t).lower() == "rel" { MRIP[k] = true; t = after_word(t); }
+    first_word(t).lower() == "abs" { t = after_word(t); }
     // the terms between + and - at depth 0; registers are taken out, the rest is the displacement
     disp = ["" ; 0];
     sign = "+";
@@ -450,19 +490,26 @@ mem(k = 0, s = "") {
         c == '(' { depth = depth + 1; } || c == ')' { depth = depth - 1; }
         i == #t || depth == 0 && (c == '+' || c == '-') && i > from {
             term = t.slice(from, i).trim();
-            !reg_term(k, term, sign) { disp = disp + [sign + "(" + term + ")"]; } || MI[k] >= 0 && #disp > 0 && MSC[k] == 1 && MB[k] > MI[k] {
-                // [a + n + b]: a number between the registers sends nasm through its expression
-                // evaluator, which puts them in its own order (here: the lower number is the base)
-                x = MB[k]; MB[k] = MI[k]; MI[k] = x;
-            }
+            !reg_term(k, term, sign) { disp = disp + [sign + "(" + term + ")"]; }
             i < #t { sign = t.slice(i, i + 1); }
             from = i + 1;
         }
         i = i + 1;
     }
+    MRIP[k] && (MB[k] >= 0 || MI[k] >= 0) { fail("[rel …] with a register: " + s); }
     UNRES = false;
     #disp > 0 { MD[k] = eval(disp.join(" ")); }
     OUN[k] = UNRES;
+    // two registers, each once: the first is the base, as nasm reads [a + b] — but with two or
+    // more other terms nasm adds them up in its expression evaluator, which orders the registers
+    // by name (checked with nasm: [rsi + 8 + rcx - 1] has the base rcx, [rsi + 8 + rcx] rsi)
+    MI[k] >= 0 && MB[k] >= 0 && MSC[k] == 1 && #disp >= 2 && text_less(MIN[k], MBN[k]) {
+        x = MB[k]; MB[k] = MI[k]; MI[k] = x;
+        xn = MBN[k]; MBN[k] = MIN[k]; MIN[k] = xn;
+    }
+    // rsp cannot be an index: with scale 1 it is the base instead
+    MI[k] == 4 && MSC[k] == 1 && MB[k] >= 0 { x = MB[k]; MB[k] = MI[k]; MI[k] = x; }
+    MI[k] == 4 { fail("rsp cannot be an index: " + s); }
     // [r*2] as nasm writes it: [r + r*1], which has a base and so a short displacement
     MB[k] < 0 && MI[k] >= 0 && MSC[k] == 2 { MB[k] = MI[k]; MSC[k] = 1; }
 }
@@ -470,18 +517,20 @@ mem(k = 0, s = "") {
 // a term that is a register (base or index) or register*scale: true, and kept
 reg_term(k = 0, term = "", sign = "") {
     parts = term.replace(" ", "").split("*");
+    #parts > 2 { fail("one factor only with a register: " + term); }
     r? = REGS[parts[0].lower()];
     r2? = 0;
     r2 = _;
     #parts == 2 { r2 = REGS[parts[1].lower()]; }
     r == _ && r2 == _ { : false; }
+    r != _ && r2 != _ { fail("two registers multiplied: " + term); }
     sign == "-" { fail("a register cannot be subtracted: " + term); }
-    reg = 0; scale = 1;
-    r != _ { reg = r || 0; #parts == 2 { scale = eval(parts[1]); } } || { reg = r2 || 0; scale = eval(parts[0]); }
+    reg = 0; scale = 1; name = "";
+    r != _ { reg = r || 0; name = parts[0].lower(); #parts == 2 { scale = eval(parts[1]); } } || { reg = r2 || 0; name = parts[1].lower(); scale = eval(parts[0]); }
     ((reg >> 4) & 31) != 8 { fail("an address takes 64-bit registers: " + term); }
-    #parts == 1 && MB[k] < 0 { MB[k] = reg & 15; : true; }
+    #parts == 1 && MB[k] < 0 { MB[k] = reg & 15; MBN[k] = name; : true; }
     MI[k] >= 0 { fail("two index registers: " + term); }
-    MI[k] = reg & 15; MSC[k] = scale;
+    MI[k] = reg & 15; MSC[k] = scale; MIN[k] = name;
     : true;
 }
 
@@ -491,7 +540,17 @@ NI = 0;
 RIP_AT = -1;                    // where a rip-relative displacement goes, and its target
 RIP_TO = 0;
 put(x = 0) { INS[NI] = x & 255; NI = NI + 1; }
-imm(v = 0, n = 0) { k = 0; * k < n { put(v >> (8 * k)); k = k + 1; } }
+// an immediate or a displacement of n bytes; in the last pass it must fit (signed or not)
+imm(v = 0, n = 0) {
+    FINAL && n < 8 {
+        lim = 1 << (8 * n);
+        v < -(lim / 2) || v >= lim { fail("the value " + $v + " does not fit in " + $n + " byte(s)"); }
+    }
+    k = 0;
+    * k < n { put(v >> (8 * k)); k = k + 1; }
+}
+// a 32-bit immediate that the CPU extends to 64 bits must fit as a signed 32-bit number
+se32(v = 0, s = 0) { FINAL && s == 8 && !fits32(v) { fail("the value " + $v + " does not fit in a 32-bit immediate (64-bit operation)"); } }
 fits8(v = 0) { : v >= -128 && v <= 127; }
 fits32(v = 0) { : v >= -2147483648 && v <= 2147483647; }
 
@@ -510,7 +569,11 @@ op_rm(pfx = 0, w = false, op = [0], reg = 0, k = 0) {
     force = false;
     j = 0;
     * j < NOPS { OK[j] == 1 && OREX[j] { force = true; } j = j + 1; }
-    rex != 0x40 || force { put(rex); }
+    rex != 0x40 || force {
+        j = 0;
+        * j < NOPS { OK[j] == 1 && OHI[j] { fail("ah, bh, ch or dh cannot go with r8–r15, sil, dil, spl, bpl or a 64-bit operation"); } j = j + 1; }
+        put(rex);
+    }
     j = 0;
     * j < #op { put(op[j]); j = j + 1; }
     modrm(reg & 7, k);
@@ -525,6 +588,7 @@ modrm(reg = 0, k = 0) {
         :;
     }
     base = MB[k]; index = MI[k]; d = MD[k];
+    FINAL && !fits32(d) { fail("a displacement past 32 bits: " + $d); }
     base < 0 && index < 0 {                     // [abs]: SIB without base or index
         put(0x04 | (reg << 3)); put(0x25); imm(d, 4);
         :;
@@ -572,6 +636,40 @@ op_size(k = 0) {
     : OS[k];
 }
 p66(s = 0) { s == 2 { : 0x66; } : 0; }
+
+// what every instruction must have before it is encoded (what is not checked here is not
+// emitted wrong: each form below refuses what it does not know)
+ARITY = {"ret": 0, "syscall": 0, "cqo": 0, "nop": 0, "push": 1, "pop": 1, "inc": 1, "dec": 1, "not": 1, "neg": 1,
+         "mul": 1, "div": 1, "idiv": 1, "bswap": 1, "prefetcht0": 1, "call": 1, "jmp": 1, "test": 2, "mov": 2,
+         "lea": 2, "movzx": 2, "movsx": 2, "xchg": 2, "bsr": 2, "bsf": 2, "cvtsi2sd": 2, "divsd": 2, "mulsd": 2,
+         "addsd": 2, "subsd": 2, "movq": 2};
+check(mn = "") {
+    want? = ARITY[mn];
+    mn.starts_with("j") && CC.contains(mn.slice(1)) || mn.starts_with("set") && CC.contains(mn.slice(3)) { want = 1; }
+    ALU.contains(mn) || SHIFT.contains(mn) || BITS.contains(mn) { want = 2; }
+    mn == "imul" { NOPS < 1 || NOPS > 3 { fail("imul takes 1, 2 or 3 operands"); } want = _; }
+    want != _ && NOPS != (want || 0) { fail(mn + " takes " + $(want || 0) + " operand(s), not " + $NOPS); }
+    // 16 bits: only mov and the arithmetic (add … cmp) are made with 0x66 here
+    k = 0;
+    * k < NOPS {
+        OK[k] != 3 && OS[k] == 2 && mn != "mov" && !ALU.contains(mn) && !(k == 1 && (mn == "movzx" || mn == "movsx")) {
+            fail("16-bit operands: only mov, add … cmp and the source of movzx/movsx here");
+        }
+        k = k + 1;
+    }
+    // the two operands of the same size (a memory operand without a keyword takes the register's)
+    same = mn == "mov" || ALU.contains(mn) || mn == "test" || mn == "xchg";
+    same && NOPS == 2 && OK[0] != 3 && OK[1] != 3 && OS[0] != 0 && OS[1] != 0 && OS[0] != OS[1] {
+        fail(mn + ": operands of different sizes (" + $OS[0] + " and " + $OS[1] + " bytes)");
+    }
+    same && NOPS == 2 && OK[0] == 2 && OK[1] == 1 { OS[0] = OS[1]; }
+    same && NOPS == 2 && OK[1] == 2 && OK[0] == 1 { OS[1] = OS[0]; }
+    (mn == "lea" || mn == "divsd" || mn == "mulsd" || mn == "addsd" || mn == "subsd") && OK[1] != 2 && OK[1] != 1 { fail(mn + " takes a register and memory"); }
+    mn == "lea" && OK[1] != 2 { fail("lea takes memory"); }
+    (mn == "lea" || mn == "movzx" || mn == "movsx" || mn == "bsr" || mn == "bsf" || mn == "imul" && NOPS > 1) && OK[0] != 1 { fail(mn + ": the first operand is a register"); }
+    k = 0;
+    * k < NOPS { OK[k] == 1 && OS[k] == 16 && !mn.ends_with("sd") && mn != "movq" && mn != "cvtsi2sd" { fail(mn + " does not take an xmm register"); } k = k + 1; }
+}
 // an immediate as the operation's size reads it: 0xFFFFFFF0 for a 32-bit operation is -16
 sx(v = 0, s = 0) {
     s == 4 && v >= 2147483648 && v <= 4294967295 { : v - 4294967296; }
@@ -580,7 +678,7 @@ sx(v = 0, s = 0) {
 }
 
 encode(mn = "", ops = [""]) {
-    NI = 0; RIP_AT = -1; STRICT = false;
+    NI = 0; RIP_AT = -1; STRICT = false; NEARJ = false; SHORTJ = false;
     NOPS = #ops;
     NOPS > 3 { fail("too many operands"); }
     mn == "rep" || mn == "repe" || mn == "repne" {
@@ -594,6 +692,7 @@ encode(mn = "", ops = [""]) {
     k = 0;
     * k < NOPS { operand(k, ops[k]); k = k + 1; }
     a = OK[0]; c = OK[1];
+    check(mn);
 
     mn == "ret" { put(0xC3); :; }
     mn == "syscall" { put(0x0F); put(0x05); :; }
@@ -612,11 +711,13 @@ encode(mn = "", ops = [""]) {
         short_rel = target - (HERE + 2);
         // short when the target is near, from this pass's addresses (as nasm, each pass decides
         // again; after many passes a jump only grows, so the passes end)
-        !STRICT && !OUN[0] {
+        !STRICT && !NEARJ && !SHORTJ && !OUN[0] {
             want = !fits8(short_rel);
             GROW_ONLY && LONGJ[CUR] { want = true; }
             want != LONGJ[CUR] { LONGJ[CUR] = want; CHANGED = true; }
         }
+        SHORTJ { FINAL && !fits8(short_rel) { fail("a short jump whose target is too far"); } LONGJ[CUR] = false; }
+        NEARJ { LONGJ[CUR] = true; }
         near = LONGJ[CUR] || STRICT;
         mn == "jmp" {
             near { put(0xE9); imm(target - (HERE + 5), 4); } || { put(0xEB); put(short_rel); }
@@ -645,12 +746,12 @@ encode(mn = "", ops = [""]) {
         s = op_size(0);
         v = sx(OV[1], s);
         s == 1 {
-            a == 1 && OR[0] == 0 && !OREX[0] { put(n * 8 + 4); put(v); :; }
-            op_rm(0, false, [0x80], n, 0); put(v);
+            a == 1 && OR[0] == 0 && !OREX[0] { put(n * 8 + 4); imm(v, 1); :; }
+            op_rm(0, false, [0x80], n, 0); imm(v, 1);
             :;
         }
-        fits8(v) && !OUN[1] { op_rm(p66(s), s == 8, [0x83], n, 0); put(v); :; }
-        s == 8 && !fits32(v) { fail("an immediate of more than 32 bits"); }
+        fits8(v) && !OUN[1] { op_rm(p66(s), s == 8, [0x83], n, 0); imm(v, 1); :; }
+        se32(v, s);
         isz = 4;
         s == 2 { isz = 2; }
         a == 1 && OR[0] == 0 {
@@ -671,10 +772,11 @@ encode(mn = "", ops = [""]) {
         s = op_size(0);
         v = OV[1];
         s == 1 {
-            a == 1 && OR[0] == 0 && !OREX[0] { put(0xA8); put(v); :; }
-            op_rm(0, false, [0xF6], 0, 0); put(v);
+            a == 1 && OR[0] == 0 && !OREX[0] { put(0xA8); imm(v, 1); :; }
+            op_rm(0, false, [0xF6], 0, 0); imm(v, 1);
             :;
         }
+        se32(v, s);
         a == 1 && OR[0] == 0 { s == 8 { put(0x48); } put(0xA9); imm(v, 4); :; }
         op_rm(p66(s), s == 8, [0xF7], 0, 0); imm(v, 4);
         :;
@@ -696,7 +798,12 @@ encode(mn = "", ops = [""]) {
             r = OR[0];
             s == 1 {
                 r >= 8 || OREX[0] { rx = 0x40; r >= 8 { rx = 0x41; } put(rx); }
-                put(0xB0 + (r & 7)); put(v);
+                put(0xB0 + (r & 7)); imm(v, 1);
+                :;
+            }
+            s == 8 && OREL[1] {                 // a label: 64 bits, as nasm (checked: mov rax, label)
+                rx = 0x48; r >= 8 { rx = 0x49; }
+                put(rx); put(0xB8 + (r & 7)); imm(v, 8);
                 :;
             }
             s == 8 && !(v >= 0 && v <= 4294967295 && !OUN[1]) && fits32(v) {
@@ -714,7 +821,8 @@ encode(mn = "", ops = [""]) {
             s == 2 { imm(v, 2); } || { imm(v, 4); }
             :;
         }
-        s == 1 { op_rm(0, false, [0xC6], 0, 0); put(v); :; }      // mem, imm
+        s == 1 { op_rm(0, false, [0xC6], 0, 0); imm(v, 1); :; }      // mem, imm
+        se32(v, s);
         op_rm(p66(s), s == 8, [0xC7], 0, 0);
         s == 2 { imm(v, 2); } || { imm(v, 4); }
         :;
@@ -733,7 +841,12 @@ encode(mn = "", ops = [""]) {
             mn == "push" { put(0x50 + (OR[0] & 7)); } || { put(0x58 + (OR[0] & 7)); }
             :;
         }
-        a == 3 { fits8(OV[0]) && !OUN[0] { put(0x6A); put(OV[0]); } || { put(0x68); imm(OV[0], 4); } :; }
+        a == 3 {
+            mn == "pop" { fail("pop takes a register or memory"); }
+            se32(OV[0], 8);
+            fits8(OV[0]) && !OUN[0] { put(0x6A); imm(OV[0], 1); } || { put(0x68); imm(OV[0], 4); }
+            :;
+        }
         mn == "push" { op_rm(0, false, [0xFF], 6, 0); } || { op_rm(0, false, [0x8F], 0, 0); }
         :;
     }
@@ -752,7 +865,8 @@ encode(mn = "", ops = [""]) {
     mn == "imul" {
         NOPS == 2 { op_rm(0, OS[0] == 8, [0x0F, 0xAF], OR[0], 1); :; }
         v = OV[2];
-        fits8(v) && !OUN[2] { op_rm(0, OS[0] == 8, [0x6B], OR[0], 1); put(v); :; }
+        fits8(v) && !OUN[2] { op_rm(0, OS[0] == 8, [0x6B], OR[0], 1); imm(v, 1); :; }
+        se32(v, OS[0]);
         op_rm(0, OS[0] == 8, [0x69], OR[0], 1); imm(v, 4);
         :;
     }
@@ -769,11 +883,11 @@ encode(mn = "", ops = [""]) {
         v = OV[1];
         v == 1 && !OUN[1] { s == 1 { op_rm(0, false, [0xD0], ext, 0); } || { op_rm(p66(s), w, [0xD1], ext, 0); } :; }
         s == 1 { op_rm(0, false, [0xC0], ext, 0); } || { op_rm(p66(s), w, [0xC1], ext, 0); }
-        put(v);
+        imm(v, 1);
         :;
     }
     BITS.contains(mn) {
-        c == 3 { op_rm(p66(OS[0]), OS[0] == 8, [0x0F, 0xBA], BITS[mn] || 0, 0); put(OV[1]); :; }
+        c == 3 { op_rm(p66(OS[0]), OS[0] == 8, [0x0F, 0xBA], BITS[mn] || 0, 0); imm(OV[1], 1); :; }
         op = 0xA3;
         mn == "bts" { op = 0xAB; } || mn == "btr" { op = 0xB3; } || mn == "btc" { op = 0xBB; }
         op_rm(p66(OS[1]), OS[1] == 8, [0x0F, op], OR[1], 0);
@@ -792,6 +906,14 @@ encode(mn = "", ops = [""]) {
     }
     mn == "xchg" {
         s = OS[0];
+        c == 1 && a == 1 && s >= 4 && (OR[0] == 0 || OR[1] == 0) {        // with rax / eax: 90 + r (nasm)
+            other = OR[0] + OR[1];
+            other == 0 { fail("xchg of rax with itself"); }
+            rx = 0x40; s == 8 { rx = rx | 8; } other >= 8 { rx = rx | 1; }
+            rx != 0x40 { put(rx); }
+            put(0x90 + (other & 7));
+            :;
+        }
         c == 1 && a == 1 { s == 1 { op_rm(0, false, [0x86], OR[0], 1); } || { op_rm(p66(s), s == 8, [0x87], OR[0], 1); } :; }
         fail("xchg: only between registers here");
     }
@@ -905,7 +1027,7 @@ line(i = 0) {
     j > 0 && j < #t && t[j] == ':' {
         name = t.slice(0, j);
         !name.starts_with(".") && !name.starts_with("..@") { LAST = name; }
-        set_sym(full_name(name), HERE);
+        set_sym(full_name(name), HERE, 1);
         t = t.slice(j + 1).trim();
     }
     #t == 0 { :; }
@@ -915,11 +1037,11 @@ line(i = 0) {
     first_word(rest).lower() == "equ" {
         UNRES = false;
         v = eval(after_word(rest));
-        set_sym(full_name(first_word(t)), v);
+        set_sym(full_name(first_word(t)), v, RL);
         :;
     }
     w == "bits" { rest != "64" { fail("bits 64 only"); } :; }
-    w == "default" { rest.lower() != "abs" && rest.lower() != "rel" { fail("default abs or rel"); } :; }
+    w == "default" { rest.lower() != "abs" { fail("default abs only (the runtime's addresses are absolute)"); } :; }
     w == "org" { NOUT > 0 { fail("org after the first byte"); } UNRES = false; ORG = eval(rest); :; }
     w == "align" {
         UNRES = false;
@@ -977,15 +1099,18 @@ assemble() {
     pass = 0;
     * true {
         pass = pass + 1;
+        PASS = pass;
         pass > 60 { fail("the addresses do not settle"); }
         GROW_ONLY = pass > 30;
         CHANGED = false;
         NOUT = 0; ORG = 0; LAST = "";
         i = 0;
         * i < NL { line(i); i = i + 1; }
-        !CHANGED { FINAL = true; NOUT = 0; ORG = 0; LAST = ""; i = 0; * i < NL { line(i); i = i + 1; } :; }
+        !CHANGED { FINAL = true; PASS = pass + 1; NOUT = 0; ORG = 0; LAST = ""; i = 0; * i < NL { line(i); i = i + 1; } :; }
     }
 }
+
+ALL_BYTES = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2A\x2B\x2C\x2D\x2E\x2F\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3A\x3B\x3C\x3D\x3E\x3F\x40\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4A\x4B\x4C\x4D\x4E\x4F\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5A\x5B\x5C\x5D\x5E\x5F\x60\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6A\x6B\x6C\x6D\x6E\x6F\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7A\x7B\x7C\x7D\x7E\x7F\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8A\x8B\x8C\x8D\x8E\x8F\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9A\x9B\x9C\x9D\x9E\x9F\xA0\xA1\xA2\xA3\xA4\xA5\xA6\xA7\xA8\xA9\xAA\xAB\xAC\xAD\xAE\xAF\xB0\xB1\xB2\xB3\xB4\xB5\xB6\xB7\xB8\xB9\xBA\xBB\xBC\xBD\xBE\xBF\xC0\xC1\xC2\xC3\xC4\xC5\xC6\xC7\xC8\xC9\xCA\xCB\xCC\xCD\xCE\xCF\xD0\xD1\xD2\xD3\xD4\xD5\xD6\xD7\xD8\xD9\xDA\xDB\xDC\xDD\xDE\xDF\xE0\xE1\xE2\xE3\xE4\xE5\xE6\xE7\xE8\xE9\xEA\xEB\xEC\xED\xEE\xEF\xF0\xF1\xF2\xF3\xF4\xF5\xF6\xF7\xF8\xF9\xFA\xFB\xFC\xFD\xFE\xFF";           // each byte, to write them as they are
 
 main() {
     src = ""; dirs = ""; out = ""; defs = ""; listing = "";
@@ -1001,9 +1126,24 @@ main() {
     * k < #dl { d = dl[k].trim(); #d > 0 { !d.ends_with("/") { d = d + "/"; } INCDIRS = INCDIRS + [d]; } k = k + 1; }
     df = defs.split(" ");
     k = 0;
-    * k < #df { d = df[k].trim(); d.starts_with("-D") { DEFS[d.slice(2)] = ""; } k = k + 1; }
+    * k < #df {
+        d = df[k].trim();
+        d.starts_with("-D") {
+            eq? = d.find("=");
+            eq == _ { DEFS[d.slice(2)] = ""; } || { DEFS[d.slice(2, eq || 0)] = d.slice((eq || 0) + 1); }
+        } || #d > 0 { fail("a name to define is -DNAME or -DNAME=VALUE: " + d); }
+        k = k + 1;
+    }
     preprocess(src);
     assemble();
+    // out.bin: the bytes themselves (to compare with nasm -f bin); else src1/runtime_bin.nihil's text
+    out.ends_with(".bin") {
+        bytes = ["" ; NOUT];
+        k = 0;
+        * k < NOUT { bytes[k] = ALL_BYTES.slice(OUT[k], OUT[k] + 1); k = k + 1; }
+        @>> out, bytes.join("");
+        :;
+    }
     nums = ["" ; NOUT];
     k = 0;
     * k < NOUT { nums[k] = $OUT[k]; k = k + 1; }
