@@ -55,7 +55,8 @@ n = "42".int() || 0;                                // "4x".int() is _</pre>
 </tbody></table></div>
 
 <h2 id="arrays">Arrays</h2>
-<p>For ARRAYs of INT, FLOAT or STRING. <code>[0 ; n]</code> makes <code>n</code> copies of a value; <code>a + b</code> joins two arrays.</p>
+<p>For ARRAYs of INT, FLOAT or STRING. <code>[0 ; n]</code> makes <code>n</code> copies of a value; <code>a + b</code> joins two arrays.
+To go over each element, and its index: <code>v : x, i { … }</code>.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Call</th><th>Result</th></tr></thead>
 <tbody>
@@ -109,7 +110,7 @@ tags = (item.json("tags") || "[]").json_items();
 <tr><td><code>s.json_keys()</code>, <code>s.json_values()</code></td><td>the keys and the values of the object <code>s</code>, in order</td></tr>
 <tr><td><code>s.json_text()</code></td><td><code>STRING?</code>: the decoded text of the JSON string <code>s</code></td></tr>
 <tr><td><code>s.json_quote()</code></td><td><code>s</code> as a JSON string, with quotes and escapes</td></tr>
-<tr><td><code>x.to_json()</code>, <code>NAME.from_json(text)</code></td><td>any value (records included) to JSON, and a record from a JSON object</td></tr>
+<tr><td><code>x.to_json()</code>, <code>NAME.from_json(text)</code></td><td>any value (records included) to JSON, and a record from a JSON object; <code>from_json</code> checks the whole text first, and a cut or broken document is a runtime error</td></tr>
 </tbody></table></div>
 
 <h2 id="maps">Maps</h2>
@@ -141,7 +142,8 @@ age["bob"] = _;                        // deletes</pre>
 <tr><td><code>... ms;</code></td><td>waits <code>ms</code> milliseconds</td></tr>
 </tbody></table></div>
 <p>The library also has directories and processes, a TCP server and HTTP (server and client), and
-protected calls that turn a runtime error into <code>_</code>: see §23–§25 of the SPEC.</p>
+protected calls that turn a runtime error into <code>_</code> (<code>r? = ?f(x);</code>, its text in <code>?!</code>;
+<code>?! = "why";</code> raises one): see §23–§25 of the SPEC.</p>
 
 <h2 id="conversions">Conversions</h2>
 <div class="table-wrap"><table>
