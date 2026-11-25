@@ -10,6 +10,8 @@ before v2.0.
   - *Why:* With one shared name, one program renamed the other's half-written temporary, and the other then failed with "could not write: no such file or directory" (two programs writing one file 1,500 times each: one of them failed before, both finish now)
 - Writing to the standard output and errors, reading the standard input and reading a file try again when the kernel interrupts the call (`EINTR`), as the network and the table reads already did
   - *Why:* An interrupted write stopped silently and an interrupted read looked like the end of the input; a prerequisite for anything that delivers signals to the program
+- The heap no longer asks the kernel for huge pages (`MADV_HUGEPAGE`)
+  - *Why:* Where the kernel's defrag setting is `madvise`, a common default, a machine short of free memory compacted memory on the spot for each 2 MiB page: the planogram's `generate` took 14 to 68 s instead of 12 to 14 s, and its server started in 3 to 6 s instead of 1.5 s (2 CPUs, 2 GB free of 31 GB). Where the setting is `always`, the kernel still gives huge pages
 
 ## v4.9.0
 
