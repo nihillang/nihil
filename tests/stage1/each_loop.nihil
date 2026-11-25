@@ -1,0 +1,57 @@
+// xs : x { … } and xs : x, i { … } (SPEC §7.5): each element, and its index
+names = ["ana", "bia", "caio"];
+names : name, i { >> $i + "=" + name + " "; }
+>> "\n";
+
+total = 0;
+[3, 4, 5] : n { total = total + n * n; }
+>> $total + "\n";
+
+// a STRING: each byte (an INT)
+sum = 0;
+"AB" : b { sum = sum + b; }
+>> $sum + "\n";
+
+// FLOAT, BOOL and records
+fs = [1.5, 2.5];
+f_total = 0.0;
+fs : f { f_total = f_total + f; }
+>> f_total; >> "\n";
+flags = [true, false, true];
+on = 0;
+flags : fl { fl { on = on + 1; } }
+>> $on + "\n";
+P = @[name: STRING(8); qty: INT(4)];
+items = [P("pen", 3), P("ink", 7)];
+items : it, k { >> $k + ":" + it.name + "=" + $it.qty + " "; }
+>> "\n";
+
+// empty, and nested
+empty = [0 ; 0];
+empty : e { >> "never"; }
+[1, 2] : a { ["x", "y"] : b { >> $a + b + " "; } }
+>> "\n";
+
+// the collection is evaluated once and its size taken on entry: changing the variable inside
+// does not change the loop
+xs = [10, 20, 30];
+seen = 0;
+xs : x { seen = seen + 1; xs = [0]; }
+>> $seen + " " + $#xs + "\n";
+
+// in a method, with an early return
+first_over(v = [0], limit = 0) {
+    v : x, i { x > limit { : i; } }
+    : -1;
+}
+>> $first_over([4, 9, 16, 25], 10) + " " + $first_over([1, 2], 10) + "\n";
+
+// the names are locals of the block: free again after it
+[7] : y { >> $y + " "; }
+[8] : y { >> $y + "\n"; }
+
+// many times (the stack does not grow)
+big = [1 ; 100000];
+count = 0;
+big : one { count = count + one; }
+>> $count + "\n";
