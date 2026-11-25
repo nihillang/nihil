@@ -1,8 +1,7 @@
 // a method to show an ARRAY of INT ($ of an array of INT makes text from its bytes)
 show(v = [0]) {
     parts = ["" ; #v];
-    i = 0;
-    * i < #v { parts[i] = $v[i]; i = i + 1; }
+    v : x, i { parts[i] = $x; }         // each element, and its index
     : "[" + parts.join(", ") + "]";
 }
 

@@ -34,6 +34,7 @@ The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC
 <li><a href="#globals">Globals and locals: the one rule to remember</a></li>
 <li><a href="#auto_keys">Automatic keys</a></li>
 <li><a href="#modeling">Modeling data</a></li>
+<li><a href="#errors">Errors: protected calls</a></li>
 </ol>
 <h2 id="hello">1. Hello</h2>
 <p>Install Nihil (see the <a href="index.html#install">home page</a>), save this as <code>hello.nihil</code> and run <code>nihil run hello.nihil</code>. <code>&gt;&gt;</code> writes to the standard output and adds no line break of its own. <code>nihil hello.nihil</code> compiles it into a native executable, <code>./hello</code>, instead.</p>
@@ -60,7 +61,7 @@ letters: 3
 ready: true
 43</pre>
 <h2 id="control">3. Conditions and loops</h2>
-<p>There are no keywords: the expression before a <code>{</code> decides what the block does. A BOOL makes it an if, and <code>} || … {</code> continues as else if or else. An INT repeats the block that many times. A <code>*</code> before a BOOL makes it a while loop.</p>
+<p>There are no keywords: the expression before a <code>{</code> decides what the block does. A BOOL makes it an if, and <code>} || … {</code> continues as else if or else. An INT repeats the block that many times. A <code>*</code> before a BOOL makes it a while loop. And <code>xs : x, i { … }</code> goes over each element of an array (or each byte of a text), with its index; the names after the <code>:</code> are new, and belong to the block.</p>
 <pre class="nihil">x = 7;
 x &gt; 10 {
     &gt;&gt; &quot;large\n&quot;;
@@ -78,11 +79,17 @@ i = 1;
     &gt;&gt; $(i * i) + &quot; &quot;;
     i = i + 1;
 }
+&gt;&gt; &quot;\n&quot;;
+
+[&quot;ana&quot;, &quot;bia&quot;, &quot;caio&quot;] : name, n {    // each element of an array, and its index
+    &gt;&gt; $n + &quot;:&quot; + name + &quot; &quot;;
+}
 &gt;&gt; &quot;\n&quot;;</pre>
 <p class="out">Output:</p>
 <pre class="output">medium
 hip hip hip hooray
-1 4 9 16 25 </pre>
+1 4 9 16 25 
+0:ana 1:bia 2:caio </pre>
 <h2 id="methods">4. Methods</h2>
 <p>A method is a name, parameters and a block. Every parameter has a default, which gives its type, so calls may leave arguments out. <code>:</code> returns a value, and the type of the result is worked out from what is returned.</p>
 <pre class="nihil">// every parameter has a default, and the default gives its type
@@ -107,12 +114,11 @@ greet(&quot;Nihil&quot;, 2);
 Hello, Nihil! Hello, Nihil! 
 144 6765</pre>
 <h2 id="arrays">5. Arrays, text and the library</h2>
-<p>An ARRAY holds values of one type; <code>[0 ; n]</code> makes <code>n</code> copies. The library is called on a value after a <code>.</code>, so its names never take one from your program. <code>$</code> of an ARRAY of INT makes text from its bytes, which is why <code>show</code> builds the text itself.</p>
+<p>An ARRAY holds values of one type; <code>[0 ; n]</code> makes <code>n</code> copies. The library is called on a value after a <code>.</code>, so its names never take one from your program. <code>$</code> of an ARRAY of INT makes text from its bytes, which is why <code>show</code> builds the text itself, one element at a time.</p>
 <pre class="nihil">// a method to show an ARRAY of INT ($ of an array of INT makes text from its bytes)
 show(v = [0]) {
     parts = [&quot;&quot; ; #v];
-    i = 0;
-    * i &lt; #v { parts[i] = $v[i]; i = i + 1; }
+    v : x, i { parts[i] = $x; }         // each element, and its index
     : &quot;[&quot; + parts.join(&quot;, &quot;) + &quot;]&quot;;
 }
 
@@ -145,11 +151,7 @@ true</pre>
 <p><code>_</code> is the absence of a value. A variable created with a <code>?</code> may hold it; an ordinary one never does. The only way to take the value out is <code>||</code> with a fallback, so a missing value can never be used by accident.</p>
 <pre class="nihil">// &quot;_&quot; is the value that is not there; a &quot;?&quot; when a variable is created lets it hold _
 find(v = [0], x = 0) {
-    i = 0;
-    * i &lt; #v {
-        v[i] == x { : i; }
-        i = i + 1;
-    }
+    v : y, i { y == x { : i; } }
     : _;                                // so find returns INT?
 }
 
@@ -180,15 +182,8 @@ age[&quot;bob&quot;] = _;                         // deletes
 // counting words
 counts = {&quot;&quot;: 0 ; 16};                  // an empty map of STRING to INT
 words = &quot;the cat and the hat and the bat&quot;.split(&quot; &quot;);
-i = 0;
-* i &lt; #words {
-    w = words[i];
-    counts[w] = (counts[w] || 0) + 1;
-    i = i + 1;
-}
-keys = counts.keys().sort();
-i = 0;
-* i &lt; #keys { &gt;&gt; keys[i] + &quot;=&quot; + $(counts[keys[i]] || 0) + &quot; &quot;; i = i + 1; }
+words : w { counts[w] = (counts[w] || 0) + 1; }
+counts.keys().sort() : k { &gt;&gt; k + &quot;=&quot; + $(counts[k] || 0) + &quot; &quot;; }
 &gt;&gt; &quot;\n&quot;;</pre>
 <p class="out">Output:</p>
 <pre class="output">2 people
@@ -237,7 +232,7 @@ PRODUCT @{3} FILE = _;                      // delete by key
 total: 35.0
 2 records left</pre>
 <h2 id="std">10. The standard library</h2>
-<p>Libraries that ship with the compiler are included with <code>@ "std:name.nihil";</code>: <code>std:env.nihil</code> (configuration from <code>.env</code> and the environment), <code>std:json.nihil</code> (writing JSON) and <code>std:mcp.nihil</code> (an MCP server for AI agents). Reading JSON is built into the library: a JSON value stays text, and each call takes a part of it.</p>
+<p>Libraries that ship with the compiler are included with <code>@ "std:name.nihil";</code>: <code>std:env.nihil</code> (configuration from <code>.env</code> and the environment), <code>std:json.nihil</code> (writing JSON), <code>std:time.nihil</code> (clocks: <code>now_us()</code> and <code>now_ms()</code> to time something) and <code>std:mcp.nihil</code> (an MCP server for AI agents). Reading JSON is built into the library: a JSON value stays text, and each call takes a part of it.</p>
 <pre class="nihil">@ &quot;std:env.nihil&quot;;                          // libraries that ship with the compiler
 @ &quot;std:json.nihil&quot;;
 
@@ -314,9 +309,8 @@ NEW = @[#id: INT(4); name: STRING(12); city: STRING(14)];
 
 old = OLD @ &quot;customers.dat&quot;;
 new = [NEW() ; #old];
-i = 0;
-* i &lt; #old { new[i] = NEW(old[i].id, old[i].name, &quot;&quot;); i = i + 1; }
-@&gt;&gt; &quot;customers.dat&quot;, new;               // the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields than the key, and several programs writing one table at the same time (a table is meant for one writer). How fast all this is, from a thousand records to a million: <a href="performance.html">Performance</a>. The full rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
+old : o, i { new[i] = NEW(o.id, o.name, &quot;&quot;); }
+@&gt;&gt; &quot;customers.dat&quot;, new;               // the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields than the key. Several programs may write one table by key at the same time: each write takes the table's lock, so they wait for each other. How fast all this is, from a thousand records to a million: <a href="performance.html">Performance</a>. The full rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
 <pre class="nihil">// Two models, and the link between them: a sale names its customer by the customer&#x27;s key.
 CUSTOMER = @[#id: INT(4); name: STRING(12); city: STRING(14)];
 SALE = @[#+id: INT(6); customer: INT(4); total: FLOAT(8); paid: BOOL];
@@ -382,6 +376,32 @@ Ana: 2 sale(s), owes 80.0
 Bruno: 1 sale(s), owes 0.0
 Carla: 1 sale(s), owes 45.5
 sold in Lajeado: 245.5</pre>
+<h2 id="errors">14. Errors: protected calls</h2>
+<p>A runtime error (an index past the end, a division by zero, a file that cannot be read, a broken JSON document) ends the program with its message. A <code>?</code> before a call protects it: an error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when the call worked). <code>?! = text;</code> raises an error of your own, which a protected call catches like any other. A server keeps running when one request fails, and a program can skip a bad line of its input and go on.</p>
+<pre class="nihil">// a runtime error ends the program; a &quot;?&quot; before a call turns it into _, and ?! says why
+half(n = 0) { : 100 / n; }
+r? = ?half(4);
+&gt;&gt; r; &gt;&gt; &quot; [&quot; + ?! + &quot;]\n&quot;;             // it worked: ?! is empty
+r = ?half(0);
+&gt;&gt; r; &gt;&gt; &quot; | &quot; + ?! + &quot;\n&quot;;
+
+// ?! = &quot;why&quot;; raises an error of your own, which a protected call catches like any other
+price(text = &quot;&quot;) {
+    p? = text.float();
+    p == _ { ?! = &quot;not a price: &quot; + text; }
+    : p || 0.0;
+}
+total = 0.0;
+[&quot;12.5&quot;, &quot;abc&quot;, &quot;3&quot;] : t {
+    v? = ?price(t);
+    v != _ { total = total + (v || 0.0); } || { &gt;&gt; &quot;skipped, &quot; + ?! + &quot;\n&quot;; }
+}
+&gt;&gt; &quot;total &quot; + $total + &quot;\n&quot;;</pre>
+<p class="out">Output:</p>
+<pre class="output">25 []
+_ | division by zero
+skipped, not a price: abc
+total 15.5</pre>
 <h2 id="next">Next</h2>
 <p>The <a href="library.html">library reference</a> lists every call on texts, arrays, tables, JSON and maps.
 Questions: <a href="mailto:contact@nihil-lang.dev">contact@nihil-lang.dev</a>.</p>

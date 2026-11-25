@@ -7,7 +7,7 @@ LEARN = "examples/learn";
 SLUGS = [""];
 TITLES = [""];
 INTROS = [""];
-SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling"];
+SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling", "14_errors"];
 TITLES = [
     "Hello",
     "Values and types",
@@ -21,7 +21,8 @@ TITLES = [
     "The standard library",
     "Globals and locals: the one rule to remember",
     "Automatic keys",
-    "Modeling data"
+    "Modeling data",
+    "Errors: protected calls"
 ];
 INTROS = [
     "Install Nihil (see the <a href=\"index.html#install\">home page</a>), save this as " +
@@ -34,14 +35,16 @@ INTROS = [
       "FLOAT into an INT (and <code>#</code> of a STRING or an ARRAY is its length).",
     "There are no keywords: the expression before a <code>{</code> decides what the block does. A BOOL " +
       "makes it an if, and <code>} || … {</code> continues as else if or else. An INT repeats the block " +
-      "that many times. A <code>*</code> before a BOOL makes it a while loop.",
+      "that many times. A <code>*</code> before a BOOL makes it a while loop. And <code>xs : x, i { … }</code> " +
+      "goes over each element of an array (or each byte of a text), with its index; the names after the " +
+      "<code>:</code> are new, and belong to the block.",
     "A method is a name, parameters and a block. Every parameter has a default, which gives its type, so " +
       "calls may leave arguments out. <code>:</code> returns a value, and the type of the result is worked " +
       "out from what is returned.",
     "An ARRAY holds values of one type; <code>[0 ; n]</code> makes <code>n</code> copies. The library is " +
       "called on a value after a <code>.</code>, so its names never take one from your program. " +
       "<code>$</code> of an ARRAY of INT makes text from its bytes, which is why <code>show</code> builds " +
-      "the text itself.",
+      "the text itself, one element at a time.",
     "<code>_</code> is the absence of a value. A variable created with a <code>?</code> may hold it; an " +
       "ordinary one never does. The only way to take the value out is <code>||</code> with a fallback, so " +
       "a missing value can never be used by accident.",
@@ -57,8 +60,9 @@ INTROS = [
       "fields.",
     "Libraries that ship with the compiler are included with <code>@ \"std:name.nihil\";</code>: " +
       "<code>std:env.nihil</code> (configuration from <code>.env</code> and the environment), " +
-      "<code>std:json.nihil</code> (writing JSON) and <code>std:mcp.nihil</code> (an MCP server for AI " +
-      "agents). Reading JSON is built into the library: a JSON value stays text, and each call takes a " +
+      "<code>std:json.nihil</code> (writing JSON), <code>std:time.nihil</code> (clocks: " +
+      "<code>now_us()</code> and <code>now_ms()</code> to time something) and <code>std:mcp.nihil</code> " +
+      "(an MCP server for AI agents). Reading JSON is built into the library: a JSON value stays text, and each call takes a " +
       "part of it.",
     "Variables assigned at the top level are <b>globals</b>, and a name that belongs to a global always " +
       "means that global, even inside a method: there, <code>total = …</code> changes the global instead " +
@@ -85,15 +89,21 @@ INTROS = [
       "its lines, so the old table no longer reads with the new model. Convert it once, reading it with " +
       "the old model and writing it with the new one:</p><pre class=\"nihil\">OLD = @[#id: INT(4); name: " +
       "STRING(12)];\nNEW = @[#id: INT(4); name: STRING(12); city: STRING(14)];\n\nold = OLD @ " +
-      "&quot;customers.dat&quot;;\nnew = [NEW() ; #old];\ni = 0;\n* i &lt; #old { new[i] = NEW(old[i].id, " +
-      "old[i].name, &quot;&quot;); i = i + 1; }\n@&gt;&gt; &quot;customers.dat&quot;, new;               // " +
+      "&quot;customers.dat&quot;;\nnew = [NEW() ; #old];\nold : o, i { new[i] = NEW(o.id, o.name, &quot;&quot;); }\n" +
+      "@&gt;&gt; &quot;customers.dat&quot;, new;               // " +
       "the same table, with the new field (empty)</pre><p><b>Not there yet:</b> links checked by the " +
       "table, <code>group</code>/<code>min</code>/<code>max</code> over records, indexes on other fields " +
-      "than the key, and several programs writing one table at the same time (a table is meant for one " +
-      "writer). How fast all this is, from a thousand records to a million: <a " +
+      "than the key. Several programs may write one table by key at the same time: each write takes " +
+      "the table's lock, so they wait for each other. How fast all this is, from a thousand records to a million: <a " +
       "href=\"performance.html\">Performance</a>. The full rules are in <a " +
       "href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1\">SPEC " +
-      "§20</a>."
+      "§20</a>.",
+    "A runtime error (an index past the end, a division by zero, a file that cannot be read, a broken " +
+      "JSON document) ends the program with its message. A <code>?</code> before a call protects it: an " +
+      "error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when " +
+      "the call worked). <code>?! = text;</code> raises an error of your own, which a protected call " +
+      "catches like any other. A server keeps running when one request fails, and a program can skip a " +
+      "bad line of its input and go on."
 ];
 JUNK = ["products.dat", "products.dat.nihil-idx", "notes.txt", "orders.dat", "orders.dat.nihil-idx",
     "orders.dat.nihil-seq", "customers.dat", "customers.dat.nihil-idx", "sales.dat", "sales.dat.nihil-idx",

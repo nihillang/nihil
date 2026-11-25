@@ -1,10 +1,6 @@
 // "_" is the value that is not there; a "?" when a variable is created lets it hold _
 find(v = [0], x = 0) {
-    i = 0;
-    * i < #v {
-        v[i] == x { : i; }
-        i = i + 1;
-    }
+    v : y, i { y == x { : i; } }
     : _;                                // so find returns INT?
 }
 

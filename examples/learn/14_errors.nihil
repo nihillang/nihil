@@ -1,0 +1,19 @@
+// a runtime error ends the program; a "?" before a call turns it into _, and ?! says why
+half(n = 0) { : 100 / n; }
+r? = ?half(4);
+>> r; >> " [" + ?! + "]\n";             // it worked: ?! is empty
+r = ?half(0);
+>> r; >> " | " + ?! + "\n";
+
+// ?! = "why"; raises an error of your own, which a protected call catches like any other
+price(text = "") {
+    p? = text.float();
+    p == _ { ?! = "not a price: " + text; }
+    : p || 0.0;
+}
+total = 0.0;
+["12.5", "abc", "3"] : t {
+    v? = ?price(t);
+    v != _ { total = total + (v || 0.0); } || { >> "skipped, " + ?! + "\n"; }
+}
+>> "total " + $total + "\n";
