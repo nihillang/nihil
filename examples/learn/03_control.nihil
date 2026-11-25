@@ -16,3 +16,8 @@ i = 1;
     i = i + 1;
 }
 >> "\n";
+
+["ana", "bia", "caio"] : name, n {    // each element of an array, and its index
+    >> $n + ":" + name + " ";
+}
+>> "\n";
