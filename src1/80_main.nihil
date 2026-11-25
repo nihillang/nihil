@@ -169,6 +169,10 @@ one_pass() {
             emit_new_map(s_type[i]);           // a MAP global starts as an empty map
             emit_store_global(s_end[i]);
         }
+        s_flags[i] & FLAG_TOP == 0 && s_flags[i] & FLAG_GLOBAL != 0 && is_list(s_type[i]) {
+            emit_new_list();                   // a LIST global starts as an empty list
+            emit_store_global(s_end[i]);
+        }
         s_flags[i] & FLAG_TOP == 0 && s_flags[i] & FLAG_GLOBAL != 0 && is_rec(s_type[i]) {
             emit_alloc_record(s_type[i] >> 8);    // a record global starts as an empty record
             emit_store_global(s_end[i]);

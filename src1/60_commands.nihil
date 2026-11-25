@@ -203,15 +203,17 @@ cmd_expr_block() {
 //   … the block … ; inc qword [rbp+i] ; jmp top
 // end:
 each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
-    t != TYPE_STR && (t & TYPE_ARR == 0 || is_opt(t)) {
+    lst = is_list(t);
+    !lst && t != TYPE_STR && (t & TYPE_ARR == 0 || is_opt(t)) {
         restore_pos(pi, pl, pn, pli);
         error_start();
-        put_str("before ':' there must be an ARRAY or a STRING (each of its elements), but the expression is ");
+        put_str("before ':' there must be an ARRAY, a LIST or a STRING (each of its elements), but the expression is ");
         put_type(t);
         error_end();
     }
     et = TYPE_INT;
     t != TYPE_STR { et = t & ~TYPE_ARR; }
+    lst { et = list_elem(t); }
     next_token();                            // ":" → the element's name
     tok_type != T_IDENT { error_expected("the name of each element after ':'"); }
     xi = tok_start; xl = tok_len; xn = tok_line; xli = tok_lstart;
@@ -230,7 +232,12 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     n = new_slot();
     ix = new_slot();
     emit_store_local(a);
-    eb(0x48, 0x8B, 0x48, 0xF8);              // mov rcx, [rax - 8]: the size
+    lst {
+        eb(0x48, 0x8B, 0x00);                // mov rax, [rax]: a list's count, on entry
+        eb(0x48, 0x89, 0xC1);                // mov rcx, rax
+    } || {
+        eb(0x48, 0x8B, 0x48, 0xF8);          // mov rcx, [rax - 8]: the size
+    }
     eb(0x48, 0x89, 0x8D); emit_d(n);         // mov [rbp + n], rcx
     eb(0x48, 0xC7, 0x85); emit_d(ix); emit_d(0);    // mov qword [rbp + i], 0
     align_loop();
@@ -256,6 +263,7 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
         ki = each_name(ii, il, iln, ili, TYPE_INT);
     }
     eb(0x48, 0x8B, 0x85); emit_d(a);         // mov rax, [rbp + a]
+    lst { eb(0x48, 0x8B, 0x80); emit_d(16); }   // mov rax, [rax + 16]: a list's items, read again each turn (it may grow)
     t == TYPE_STR { eb(0x0F, 0xB6, 0x04, 0x08); } || { eb(0x48, 0x8B, 0x04, 0xC8); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
     emit_store_var(kx);
     has_i { eb(0x48, 0x8B, 0x85); emit_d(ix); emit_store_var(ki); }   // mov rax, [rbp + i]
@@ -583,6 +591,7 @@ cmd_print() {
     t == TYPE_ABSENT { t = TYPE_STR | TYPE_OPT; }     // imprime "_"
     t & TYPE_ARR != 0 { error("'>>' does not print a whole ARRAY; loop over its elements"); }
     t & TYPE_REC != 0 { error("'>>' does not print a record directly: print its fields, or $r for its line"); }
+    is_list(t) { error("'>>' does not print a whole LIST: print v[i], or loop over it (v : x { … })"); }
     t & TYPE_MAP != 0 { error("'>>' does not print a whole MAP: print m[k], or loop over m.keys()"); }
     base_opt(t) == TYPE_FLOAT {
         // FLOAT: the prelude formats it (bits, present, error)
@@ -624,6 +633,7 @@ cmd_print_error() {
     t == TYPE_ABSENT { t = TYPE_STR | TYPE_OPT; }     // imprime "_"
     t & TYPE_ARR != 0 { error("'!>>' does not print a whole ARRAY; loop over its elements"); }
     t & TYPE_REC != 0 { error("'!>>' does not print a record directly: print its fields, or $r for its line"); }
+    is_list(t) { error("'!>>' does not print a whole LIST: print v[i], or loop over it (v : x { … })"); }
     t & TYPE_MAP != 0 { error("'!>>' does not print a whole MAP: print m[k], or loop over m.keys()"); }
     base_opt(t) == TYPE_FLOAT {
         // FLOAT: the prelude formats it (bits, present, error)
@@ -1270,6 +1280,17 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
     }
     tt == 0 { tt = TYPE_UNKNOWN; }
     is_map(tt) { map_assign(k, tt); :; }
+    is_list(tt) || tt == TYPE_UNKNOWN && peek_type() == ']' { list_assign(k, tt); :; }
+    peek_type() == ']' {
+        restore_pos(pi, pl, pn, pli);
+        error_start();
+        put_str("'name[] = value;' adds to a LIST ([value ; *]), but '");
+        put_source(pi, pl);
+        put_str("' is ");
+        put_type(tt);
+        tt & TYPE_ARR != 0 && !is_opt(tt) { put_str(", whose size is fixed"); }
+        error_end();
+    }
     tt != TYPE_UNKNOWN {
         tt == TYPE_STR {
             restore_pos(pi, pl, pn, pli);

@@ -1,0 +1,3 @@
+// a LIST only in a parameter default: the prelude must still come in
+f(v = [0 ; *]) { v[] = 4; v[] = 5; : #v; }
+>> $f() + "\n";
