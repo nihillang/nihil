@@ -27,6 +27,8 @@ cp LICENSE README.md CHANGELOG.md "$root/"
 printf '%s\n' "$version" > "$root/VERSION"
 cp SPEC.md "$root/share/nihil/"
 cp -R std "$root/share/nihil/std"
+mkdir -p "$root/share/nihil/tools"
+cp tools/profile.nihil "$root/share/nihil/tools/"          # `nihil profile` builds it
 cp -R ide/static "$root/share/nihil/ide/static"
 mkdir -p "$root/share/nihil/examples"
 cp examples/*.nihil "$root/share/nihil/examples/"

@@ -6,6 +6,8 @@ before v2.0.
 
 ## Unreleased
 
+- `nihil profile PROGRAM.nihil [ARG…]`: runs the program as `nihil run` does, sampled every 10 ms of CPU time, then reports where the time went: by method and runtime routine, the runtime's time by the method that called it, and each method with what it called (docs/profiling.md). Behind it, the compiler's `-profile` option and a `SIGPROF` sampler in the runtime, which writes `nihil-profile.PID` at the exit; `tools/profile.nihil` reads it. Linux x86_64 for now. `make profilecheck` (CI) checks it
+  - *Why:* Measuring where a real program spent its time took gdb, a hand-made sampler and the assembler's listing (`perf` was blocked on the machine). The cost is under 1% (the planogram's `generate`: 5.86 → 5.91 s), so a program can be measured as it runs
 - FLOAT → text takes its fast way, with exact integers, for numbers with up to 17 decimals (it was up to 3) from about 10^-5 to 2^53: ratios, percentages and measures no longer go through the general algorithm and its big integers. The text is the same (`make floatcheck`: 501,117 cases against Python and against the general algorithm, now with 4 to 17 decimals among them)
   - *Why:* A profile of a real program (a planogram generator writing JSON) showed 12% of its time in the general algorithm; it runs 8% faster (6.39 → 5.89 s), with the same output byte for byte
 
