@@ -1270,10 +1270,49 @@ team : p { >> p.label() + "\n"; }                         // Ana, then prof. Rui
 - There is no `super`: a replacement that needs the parent's behaviour calls a
   method of the parent under another name (`PERSON.base_label`).
 - A call through a model none of whose descendants replaces the method is the plain
-  call it always was; a replaced one tests the model in the record's header (§20.11)
+  call it always was; a replaced one tests the model in the record's header (§20.12)
   and calls directly: no table of methods, a compare per replacing model.
 
-### 20.11 Implementation
+### 20.11 Abstract methods
+
+A model's method whose body is `{ ... }` or `{ ... : example; }` is **abstract**: it
+declares the method and what it returns (by an example, as a parameter's default
+gives its type: `: 0.0;` a FLOAT, `: "";` a STRING, `: NAME();` a record, `: [0];` an
+ARRAY; `{ ... }` alone returns nothing), and leaves its body to the models below:
+
+```text
+SHAPE = @[name: STRING(12)];
+SHAPE.area(s = SHAPE()) { ... : 0.0; }
+SHAPE.describe(s = SHAPE()) { : s.name + ": " + $s.area(); }   // runs the real model's area
+
+CIRCLE = @[SHAPE; r: FLOAT(8)];
+CIRCLE.area(c = CIRCLE()) { : 3.14159 * c.r * c.r; }
+
+shapes = [SHAPE() ; *];                 // an empty LIST of SHAPE: no SHAPE is made
+shapes[] = CIRCLE("c", 1.0);
+SHAPE("x");                             // compile error: SHAPE is abstract (area)
+```
+
+- A model is **abstract** when, for some method, the nearest model at or above it that
+  declares it declares it abstract: the model that declares it, a child that does not
+  implement it, and a child that makes an inherited method abstract again. The others
+  are concrete. An implementation follows §20.10: the same parameters after the first,
+  and the example's return type.
+- No record of an abstract model is made, and each way of making one is a compile error
+  naming the method it lacks: `NAME(…)`, the table reads (`@`, `@?`, `@[i]`, `@{k}` and
+  their optional forms; `NAME @# path` only counts and stays), `from_json`,
+  `from_json_items`, `[r ; n]` through it, `[NAME() ; n]`, and a parameter's default
+  (`s = SHAPE()` and `xs = [SHAPE()]` give the type, but the argument must be passed).
+- `[NAME() ; *]` (an empty LIST) and `{k: NAME() ; n}` (an empty MAP) only give the
+  type, as they always did, and make no record. Locals, parameters and collections of an
+  abstract model hold records of the models below it; a **global** cannot (a record
+  global starts as an empty record of its type).
+- The abstract method itself raises a runtime error (`SHAPE.area is abstract: a model
+  below SHAPE implements it`), which no record the compiler lets be made can reach.
+- Optional returns, interfaces (a model with no fields) and several parents are not
+  part of it.
+
+### 20.12 Implementation
 
 A record is a block of 8-byte slots with the ARRAY layout (§3); a STRING field
 holds the address of its text. Its type is a model number, so each model is a

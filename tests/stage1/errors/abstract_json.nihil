@@ -1,0 +1,7 @@
+// … nor JSON
+SHAPE = @[name: STRING(12)];
+SHAPE.area(s = SHAPE()) { ... : 0.0; }
+CIRCLE = @[SHAPE; r: FLOAT(8)];
+CIRCLE.area(c = CIRCLE()) { : 3.0 * c.r * c.r; }
+as_shape(s = SHAPE()) { : s; }
+s = SHAPE.from_json("{}");

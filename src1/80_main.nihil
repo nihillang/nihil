@@ -283,9 +283,31 @@ check_replacements() {
     }
 }
 
+// a global whose type is an abstract model (SPEC §20.11): refused, since a record global starts as
+// an empty record of its model. Locals and collections of it are fine.
+check_abstract_globals() {
+    k = 0;
+    * k < n_sym_base {
+        s_flags[k] & FLAG_GLOBAL != 0 && s_flags[k] & FLAG_METHOD == 0 && is_rec(base_opt(s_type[k])) {
+            ka = missing_method(base_opt(s_type[k]) >> 8);
+            ka >= 0 {
+                msg_len = 0;
+                put_str("nihilc: the global '");
+                put_source(s_ofs[k], s_len[k]);
+                put_str("' holds a ");
+                put_type(s_type[k]);
+                put_str(", an abstract model: a global holds a model below it, or a list of it");
+                error_end();
+            }
+        }
+        k = k + 1;
+    }
+}
+
 load_program();
 compile();
 check_replacements();
+check_abstract_globals();
 // -map: the runtime ends after the header and its block, the program's code at code_end, the
 // constants follow (8-aligned) up to the end of the file
 // (written with the message buffer: stage 0, which builds this compiler, has no $ for INT)

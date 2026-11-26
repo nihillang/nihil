@@ -497,6 +497,26 @@ skip_method() {
     size_const = sc;
 }
 
+// tok = "{" of an abstract method (SPEC §20.11): its body raises a runtime error, which ?f() catches;
+// its return type is the example's (set in the prescan). Only a record of a model that does not
+// implement it reaches it, and the compiler lets no such record be made.
+abstract_body(k = 0) {
+    const_init();
+    const_put_source(s_ofs[k], s_len[k]);
+    d = 0;
+    * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
+    const_put_str(" is abstract: a model below ");
+    const_put_source(s_ofs[k], d);
+    const_put_str(" implements it");
+    c = const_close();
+    eb(0x48, 0x8D, 0x05);                   // lea rax, [rip + message]
+    register_fixup(size_code, c, false);
+    emit_d(0);
+    emit_call_rt(RT_FAIL);
+    * tok_type != '}' { tok_type == T_END { error_expected("'}'"); } next_token(); }
+    next_token();
+}
+
 cmd_method(k = 0) {
     s_skip[k] != 0 { skip_method(); :; }   // a prelude method the program does not reach
     emit(0xE9);                            // jmp over the body
@@ -571,7 +591,7 @@ cmd_method(k = 0) {
     saw_value = false;
     saw_empty = false;
     saw_absent = false;
-    block();
+    s_abstract[k] { abstract_body(k); } || { block(); }
     // a ": _;" and a ": value;" of type T: the method returns T?
     r = s_type[k];
     saw_absent && r != 0 && r != TYPE_NONE && !is_opt(r) {

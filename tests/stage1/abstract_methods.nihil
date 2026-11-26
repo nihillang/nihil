@@ -1,0 +1,38 @@
+// abstract methods (SPEC §20.11): { ... } or { ... : an example of what it returns; }; a model that
+// does not implement one is abstract, and no record of it is made
+SHAPE = @[name: STRING(12)];
+SHAPE.area(s = SHAPE()) { ... : 0.0; }
+SHAPE.sides(s = SHAPE()) { ... : 0; }
+SHAPE.draw(s = SHAPE()) { ... }                       // returns nothing
+SHAPE.describe(s = SHAPE()) { : s.name + ": " + $s.area() + ", " + $s.sides() + " sides"; }   // calls the real model's
+SHAPE.wait(s = SHAPE()) { ... 1; }                    // a pause, not an abstract method
+
+CIRCLE = @[SHAPE; r: FLOAT(8)];
+CIRCLE.area(c = CIRCLE()) { : 3.0 * c.r * c.r; }
+CIRCLE.sides(c = CIRCLE()) { : 0; }
+CIRCLE.draw(c = CIRCLE()) { >> "( " + c.name + " )\n"; }
+
+POLYGON = @[SHAPE; n: INT(3)];                       // implements sides only: still abstract
+POLYGON.sides(p = POLYGON()) { : p.n; }
+SQUARE = @[POLYGON; side: FLOAT(8)];
+SQUARE.area(q = SQUARE()) { : q.side * q.side; }
+SQUARE.draw(q = SQUARE()) { >> "[ " + q.name + " ]\n"; }
+
+// a child making an inherited method abstract again, and its child implementing it
+ROUND = @[CIRCLE; label: STRING(8)];
+ROUND.area(r = ROUND()) { ... : 0.0; }
+COIN = @[ROUND; value: INT(4)];
+COIN.area(c = COIN()) { : 1.5; }
+
+first_area(xs = [SHAPE() ; *]) { : xs[0].area(); }    // a LIST of an abstract model as a parameter
+
+shapes = [SHAPE() ; *];                                // only gives the type: no SHAPE is made
+shapes[] = CIRCLE("c", 1.0);
+shapes[] = SQUARE("q", 4, 2.0);
+shapes[] = COIN("coin", 2.0, "x", 25);
+shapes : s { >> s.describe() + "\n"; s.draw(); }
+by_name = {"": SHAPE() ; 8};                           // an empty MAP of SHAPE
+by_name["q"] = shapes[1];
+>> $by_name.values()[0].area() + " " + $first_area(shapes) + "\n";
+r? = ?shapes[2].area();
+>> $(r || 0.0) + "\n";
