@@ -1275,6 +1275,12 @@ arm_op(i = 0) {
     k >= OP_IMM && k <= OP_REG { arm_load(k, r, v, o); :; }
     k == OP_CMP_SET { arm_cmp_set(v); :; }
     k == OP_CMP { a_line("cmp x9, x10"); :; }
+    k == OP_CALL_RT && arm_native && (v == RT_DIV || v == RT_MOD) {   // sdiv (by 0: the routine's error)
+        rt_used[v / 5] = true;
+        a_ins("cbz x10, Lrt"); a_num(v); a_nl();
+        v == RT_DIV { a_line("sdiv x9, x9, x10"); } || { a_line("sdiv x16, x9, x10"); a_line("msub x9, x16, x10, x9"); }
+        :;
+    }
     k == OP_CALL_RT && o > 0 { arm_call_nihil(v, o - 1, i); :; }
     k == OP_CALL_RT { arm_call_rt(v); :; }
     k == OP_CCALL || k == OP_CCALL32 {

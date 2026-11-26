@@ -32,7 +32,7 @@ read_raw(k = 0) {
     i = 0;
     name_len[k] { path[i] = names[name_start[k] + i]; i = i + 1; }
     contents = "";
-    k == index_prelude && arm_native && wants_prelude { contents = PRELUDE_TEXT + NATIVE_TEXT; }   // -native: its
+    k == index_prelude && arm_native && wants_prelude { contents = NATIVE_TEXT + PRELUDE_TEXT; }   // -native: its
     || k == index_prelude && arm_native { contents = NATIVE_TEXT; }                             // runtime too
     || k == index_prelude { contents = PRELUDE_TEXT; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
     n = #contents;
