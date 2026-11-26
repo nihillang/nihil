@@ -158,6 +158,7 @@ R nh_unprotect(ARGS) { UNUSED; prot_depth--; err_len = 0; return ret2(rax, rdx);
 #define KEEP_PAGES 256                       // empty small pages kept at a collection: 16 MiB
 #define H_USED 1
 #define H_MARK 2
+#define H_TEXT 4                             // a text made here: bytes, no references (not scanned)
 enum { P_FREE, P_SMALL, P_LARGE, P_CONT };
 
 static const I class_size[] = { 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072,
@@ -170,7 +171,12 @@ static I high;                               // pages in use or used before: [0,
 static I *free_list[NCLASS];                 // free blocks of each class (linked by their first word)
 static I *free_pages;                        // single free pages below high
 static I n_free_pages;
-static I allocated, threshold = (I)16 << 20, live, live_large;
+static I allocated, threshold = (I)16 << 20, live, live_large, live_small;
+// the sweep is lazy: after a mark each small page waits in its class's list (unswept, linked by
+// pnext, + 1) and is swept when its class needs a free block, or before the next mark
+static uint32_t *pnext;
+static I unswept[NCLASS];
+static I kept_pages;                         // empty small pages kept since the last mark
 
 static void heap_init(void) {
     arena = mmap(NULL, (size_t)ARENA, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
@@ -178,7 +184,8 @@ static void heap_init(void) {
     pclass = calloc((size_t)NPAGES, 1);
     pspan = calloc((size_t)NPAGES, 4);
     free_pages = malloc((size_t)NPAGES * sizeof(I));
-    if (arena == MAP_FAILED || !pkind || !pclass || !pspan || !free_pages) { write(2, "nihil: out of memory\n", 21); _exit(2); }
+    pnext = malloc((size_t)NPAGES * 4);
+    if (arena == MAP_FAILED || !pkind || !pclass || !pspan || !free_pages || !pnext) { write(2, "nihil: out of memory\n", 21); _exit(2); }
 }
 
 // the pages p … p + n - 1 back to the system: zero when used again
@@ -214,6 +221,38 @@ static I pages_get(I n) {
 
 static void collect(void);
 
+// a small page swept: its unmarked blocks free (into its class's list), the marks cleared; an
+// empty one back to the system, past the first KEEP_PAGES kept
+static void sweep_page(I p) {
+    int c = pclass[p];
+    I s = class_size[c], k = PAGE / s, used = 0;
+    char *start = arena + p * PAGE;
+    I *first = free_list[c];
+    for (I i = k - 1; i >= 0; i--) {
+        I *b = (I *)(start + i * s);
+        if (b[0] & H_MARK) { b[0] &= ~(I)H_MARK; used++; continue; }
+        b[0] = 0;
+        b[2] = (I)free_list[c];
+        free_list[c] = b;
+    }
+    if (used == 0 && kept_pages >= KEEP_PAGES) {
+        free_list[c] = first;
+        pages_release(p, 1);
+        free_pages[n_free_pages++] = p;
+    } else if (used == 0) {
+        kept_pages++;
+    }
+}
+
+// the next page of class c waiting to be swept, swept (0 if none)
+static int sweep_next(int c) {
+    if (!unswept[c]) return 0;
+    I p = unswept[c] - 1;
+    unswept[c] = pnext[p];
+    sweep_page(p);
+    return 1;
+}
+
 // a block for n words → the value (its words, zeroed; its length n). lazy: the caller may write
 // only part of a large one (a big array of zeros): its pages count when written, not now
 static I *alloc_words_l(I n, int lazy) {
@@ -227,6 +266,7 @@ static I *alloc_words_l(I n, int lazy) {
     if (bytes <= SMALL_MAX) {
         int c = 0;
         while (class_size[c] < bytes) c++;
+        while (!free_list[c] && sweep_next(c)) {}
         if (!free_list[c]) {                 // a new page of that class
             I p = pages_get(1);
             pkind[p] = P_SMALL;
@@ -258,39 +298,58 @@ static I *alloc_words_l(I n, int lazy) {
 
 static I *alloc_words(I n) { return alloc_words_l(n, 0); }
 
-// ---- the collection ----
+// ---- the collection: the mark ----
+// The headers are far apart in memory (a block per record): each one is asked for (prefetch) PF
+// candidates before it is read, so that the reads of many blocks overlap instead of waiting one by
+// one (the largest mark of bench/tables.nihil: 55 → 24 ms). Marking with several threads was tried
+// and was slower: a big array is one block, scanned by one thread, and the others wait for its work.
+#define PF 16
 static I **mark_stack;
 static I mark_n, mark_cap;
+static I *pf_q[PF];
+static int pf_i;
 
-// the block w points into, if it is allocated → its header, else 0
-static I *block_of(U w) {
+// the block w points into → its header (allocated or not), else 0
+static I *block_at(U w) {
     if (w < (U)arena || w >= (U)(arena + high * PAGE)) return 0;
     I off = (I)(w - (U)arena), p = off >> PAGE_SHIFT;
-    I *b;
     switch (pkind[p]) {
     case P_SMALL: {
         I s = class_size[pclass[p]], i = (off & (PAGE - 1)) / s;
         if ((i + 1) * s > PAGE) return 0;    // the page's tail, after its last block
-        b = (I *)(arena + p * PAGE + i * s);
-        break;
+        return (I *)(arena + p * PAGE + i * s);
     }
     case P_CONT: p = pspan[p]; /* fallthrough */
-    case P_LARGE: b = (I *)(arena + p * PAGE); break;
-    default: return 0;
+    case P_LARGE: return (I *)(arena + p * PAGE);
     }
-    return (b[0] & H_USED) ? b : 0;
+    return 0;
 }
 
-static void mark_word(U w) {
-    I *b = block_of(w);
-    if (!b || (b[0] & H_MARK)) return;
+static void mark_header(I *b) {
+    if (!(b[0] & H_USED) || (b[0] & H_MARK)) return;
     b[0] |= H_MARK;
+    I p = ((char *)b - arena) >> PAGE_SHIFT;
+    if (pkind[p] == P_SMALL) live_small += class_size[pclass[p]];
     if (mark_n == mark_cap) {
         mark_cap = mark_cap ? mark_cap * 2 : 65536;
         mark_stack = realloc(mark_stack, (size_t)mark_cap * sizeof(I *));
         if (!mark_stack) { write(2, "nihil: out of memory\n", 21); _exit(2); }
     }
     mark_stack[mark_n++] = b;
+}
+
+static void mark_word(U w) {
+    I *b = block_at(w);
+    if (!b) return;
+    __builtin_prefetch(b, 1);
+    I *old = pf_q[pf_i];
+    pf_q[pf_i] = b;
+    pf_i = (pf_i + 1) & (PF - 1);
+    if (old) mark_header(old);
+}
+
+static void mark_flush(void) {
+    for (int i = 0; i < PF; i++) { if (pf_q[i]) mark_header(pf_q[i]); pf_q[i] = 0; }
 }
 
 static void mark_range(const char *from, const char *to) {
@@ -302,14 +361,14 @@ static I block_bytes(I *b) {
     return pkind[p] == P_SMALL ? class_size[pclass[p]] : (I)pspan[p] * PAGE;
 }
 
-// a block's words; of a large one, only the system pages ever written (mincore): the others are
-// zero, and reading them would make them real (a big array mostly unused costs nothing)
+// a block's words (none for a text); of a large one, only the system pages ever written
+// (mincore): the others are zero, and reading them would make them real
 static void mark_block(I *b) {
+    if (b[0] & H_TEXT) return;
     I bytes = block_bytes(b);
     if (bytes <= SMALL_MAX) { mark_range((const char *)(b + 2), (const char *)b + bytes); return; }
-    static I sys_page;
-    static unsigned char vec[PAGE * 4];
-    if (!sys_page) sys_page = getpagesize();
+    I sys_page = getpagesize();
+    unsigned char vec[1024];
     char *start = (char *)b, *end = start + bytes;
     for (char *chunk = start; chunk < end; ) {
         I n = (end - chunk) / sys_page;
@@ -339,6 +398,15 @@ static __attribute__((noinline)) void mark_roots(void) {
     mark_range((const char *)prot, (const char *)prot[prot_depth]);
 }
 
+static void mark_all(void) {
+    mark_roots();
+    for (;;) {
+        while (mark_n > 0) mark_block(mark_stack[--mark_n]);
+        mark_flush();
+        if (mark_n == 0) return;
+    }
+}
+
 static I now_us(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -347,43 +415,23 @@ static I now_us(void) {
 
 static void collect(void) {
     I t0 = now_us();
+    for (int c = 0; c < NCLASS; c++) while (sweep_next(c)) {}   // the last mark's, cleared first
     live_large = 0;
-    mark_roots();
-    while (mark_n > 0) {
-        I *b = mark_stack[--mark_n];
-        mark_block(b);
-    }
-    // the sweep: the unmarked blocks are free; a small page with none in use goes back to the system
-    for (int c = 0; c < NCLASS; c++) free_list[c] = 0;
+    live_small = 0;
+    mark_all();
+    I t_mark = now_us() - t0;
+    // the large blocks unmarked go back to the system now; each small page waits for its sweep
+    for (int c = 0; c < NCLASS; c++) { free_list[c] = 0; unswept[c] = 0; }
     n_free_pages = 0;
-    live = 0;
-    I kept = 0;
+    kept_pages = 0;
     for (I p = 0; p < high; p++) {
         if (pkind[p] == P_SMALL) {
-            int c = pclass[p];
-            I s = class_size[c], k = PAGE / s, used = 0;
-            char *start = arena + p * PAGE;
-            I *first = free_list[c];
-            for (I i = k - 1; i >= 0; i--) {
-                I *b = (I *)(start + i * s);
-                if (b[0] & H_MARK) { b[0] = H_USED; used++; continue; }
-                b[0] = 0;
-                b[2] = (I)free_list[c];
-                free_list[c] = b;
-            }
-            if (used == 0 && kept >= KEEP_PAGES) {   // empty: back to the system, past the first 16 MiB kept
-                free_list[c] = first;
-                pages_release(p, 1);
-                free_pages[n_free_pages++] = p;
-            } else if (used == 0) {
-                kept++;                      // kept, its blocks free in its class (written again when used)
-            } else {
-                live += used * s;
-            }
+            pnext[p] = (uint32_t)unswept[pclass[p]];
+            unswept[pclass[p]] = p + 1;
         } else if (pkind[p] == P_LARGE) {
             I *b = (I *)(arena + p * PAGE), np = pspan[p];
             if (b[0] & H_MARK) {
-                b[0] = H_USED;
+                b[0] &= ~(I)H_MARK;
             } else {
                 pages_release(p, np);
                 for (I i = 0; i < np; i++) free_pages[n_free_pages++] = p + i;
@@ -393,6 +441,7 @@ static void collect(void) {
             free_pages[n_free_pages++] = p;
         }
     }
+    live = live_small;
     live += live_large;                      // (a large block: its pages written)
     allocated = 0;
     threshold = live > ((I)16 << 20) ? live : ((I)16 << 20);
@@ -401,16 +450,17 @@ static void collect(void) {
     if (torture) threshold = 65536;
     if (getenv("NIHIL_GC_STATS")) {
         char m[160];
-        int k = snprintf(m, sizeof m, "gc: %lld us, live %lld KiB, heap %lld KiB, next after %lld KiB\n", (long long)(now_us() - t0),
+        int k = snprintf(m, sizeof m, "gc: %lld us (mark %lld), live %lld KiB, heap %lld KiB, next after %lld KiB\n", (long long)(now_us() - t0), (long long)t_mark,
                          (long long)(live >> 10), (long long)((high - n_free_pages) * PAGE >> 10), (long long)(threshold >> 10));
         write(2, m, (size_t)k);
     }
 }
 
-// a new STRING of n bytes (room for its 0 at the end, zeroed)
+// a new STRING of n bytes (room for its 0 at the end, zeroed): the collector does not look inside
 static char *new_text(I n) {
     if (n < 0) n = 0;
     I *w = alloc_words((n + 8) / 8);
+    w[-2] |= H_TEXT;
     w[-1] = n;
     return (char *)w;
 }
