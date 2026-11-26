@@ -590,6 +590,21 @@ model_method_call(t = 0, ns = 0, nl = 0) {
         error_end();
     }
     emit(0x50);                            // push rax: the record is the first argument
+    // the descendants of the static model whose own (or nearest inherited) method is not k: the
+    // call tests the record's real model for them (SPEC §20.11); none: a plain call, as before
+    s = t >> 8;
+    dn = 0;
+    o = 0;
+    * o < n_models {
+        descends(o, s) {
+            e = o;
+            ke = -1;
+            * ke < 0 && e != s { ke = lookup_model_method(m_sym[e], ns, nl); e = m_parent[e]; }
+            ke >= 0 && ke != k && dn < 1024 { disp_model[dn] = o; disp_target[dn] = ke; dn = dn + 1; }
+        }
+        o = o + 1;
+    }
+    disp_n = dn;
     sv_k = lib_k; sv_s = lib_name_start; sv_l = lib_name_len;
     lib_k = k; lib_name_start = ns; lib_name_len = nl;
     r = call_method(k, 1);

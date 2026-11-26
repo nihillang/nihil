@@ -1,0 +1,5 @@
+// a replacement takes the same parameters after the first: the same number
+PESSOA = @[nome: STRING(12)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+PESSOA.saudar(p = PESSOA(), x = 0) { : p.nome; }
+ALUNO.saudar(a = ALUNO()) { : a.turma; }

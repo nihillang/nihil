@@ -1,0 +1,11 @@
+Ze | > Ze | pessoa | 36 | 1: Ze | pessoa x none
+Ana (3B) | > Ana | aluno | 18 | 2: Ana | aluno x none
+prof. Rui | > prof. Rui | pessoa | 46 | 3: prof. Rui | pessoa x none
+Bia (3A) | > Bia | aluno | 19 | 4: Bia | aluno x none
+dir. Ivo / Central | > dir. Ivo / Central | pessoa | 56 | 5: dir. Ivo / Central | pessoa x none
+arguments evaluated once: 5; no value: papap
+* Ana / > Ana / dir. Lia / Norte
+prof. Rui / Ana (3B) / Ana
+Caio (3C)
+3 ok, aluno falhou; aluno falhou; 
+block: aluno falhou, log papapa
