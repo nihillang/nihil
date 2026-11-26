@@ -999,36 +999,20 @@ assign(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     expect(';', "';'");
 }
 
-// x = x + k / x = x - k already emitted as load ; mov rcx, k ; add/sub → becomes
-// inc, dec, add or sub directly on the variable. true if it was rewritten.
+// x = x + k / x = x - k already emitted as three operations (x into rax ; k into rcx ; add/sub
+// rax, rcx) → becomes inc, dec, add or sub directly on the variable. true if it was rewritten.
 increment(k = 0) {
     a = start_assignment;
     !optimize || a < 0 || last_target > a || n_fix > 0 && fix_pos[n_fix - 1] >= a { : false; }
-    // the load of x, as emit_load_var emits it
-    end_load = size_code;
-    emit_load_var(k);
-    nc = size_code - end_load;
-    equal = true;
-    i = 0;
-    nc { code[a + i] != code[end_load + i] { equal = false; } i = i + 1; }
-    code_cut(end_load);
-    !equal { : false; }
-    p = a + nc;
-    v = 0;
-    size_code - p == 8 && code[p] == 0xB9 {
-        v = code[p + 1] | (code[p + 2] << 8) | (code[p + 3] << 16) | (code[p + 4] << 24);
-        v >= 0x80000000 { : false; }        // add r/m64, imm32 sign-extends
-        p = p + 5;
-    } || size_code - p == 10 && code[p] == 0x48 && code[p + 1] == 0xC7 && code[p + 2] == 0xC1 {
-        v = code[p + 3] | (code[p + 4] << 8) | (code[p + 5] << 16) | (code[p + 6] << 24);
-        v >= 0x80000000 { v = v - 0x100000000; }
-        p = p + 7;
-    } || {
-        : false;
-    }
-    code[p] != 0x48 || code[p + 2] != 0xC8 || code[p + 1] != 0x01 && code[p + 1] != 0x29 { : false; }
-    sub = code[p + 1] == 0x29;
-    sub { v = -v; }
+    note_use(k);                            // (as the load of x does)
+    !ops_last(3) || op_at[op_back(2)] != a || !is_load_var(op_back(2), k) { : false; }
+    c = op_back(1);
+    op_k[c] != OP_IMM || op_r[c] != R_CX { : false; }
+    s = op_back(0);
+    !op_same(s, OP_ALU, R_AX, ALU_ADD, R_CX) && !op_same(s, OP_ALU, R_AX, ALU_SUB, R_CX) { : false; }
+    v = op_v[c];
+    v >= 0x80000000 || v < -0x80000000 { : false; }   // add r/m64, imm32 sign-extends
+    op_v[s] == ALU_SUB { v = -v; }
     v >= 0x80000000 || v < -0x80000000 { : false; }
     code_cut(a);
     f = s_flags[k];
@@ -1076,46 +1060,31 @@ reg_update(k = 0) {
     a = start_assignment;
     !optimize || a < 0 || s_flags[k] & FLAG_REG == 0 { : false; }
     r = s_end[k];
-    e = size_code;
-    e - a < 6 { : false; }
-    o = code[e - 2];
-    code[e - 3] != 0x48 || code[e - 1] != 0xC8 { : false; }
-    o != 0x01 && o != 0x29 && o != 0x21 && o != 0x09 && o != 0x31 { : false; }
-    lx = 0x48;                              // mov rax, rX: REX.W (+ REX.R from r12 on) 89 C0|(r&7)<<3
-    r >= 8 { lx = 0x4C; }
-    lm = 0xC0 | ((r & 7) << 3);
-    rex = 0x48 | rex_b(r);
+    !ops_last(3) { : false; }
+    s = op_back(0);
+    op_k[s] != OP_ALU || op_r[s] != R_AX || op_o[s] != R_CX { : false; }
+    o = op_v[s];
+    x = op_back(1);
+    y = op_back(2);
+    !op_same(x, OP_REG, R_AX, r, 0) && !op_same(y, OP_REG, R_AX, r, 0) { : false; }
     // y not simple: … ; mov rcx, rax ; mov rax, rX ; op rax, rcx
-    e - a >= 9 && code[e - 9] == 0x48 && code[e - 8] == 0x89 && code[e - 7] == 0xC1
-        && code[e - 6] == lx && code[e - 5] == 0x89 && code[e - 4] == lm
-        && last_target <= e - 9 && (n_fix == 0 || fix_pos[n_fix - 1] < e - 9) {
-        code_cut(e - 9);
-        eb(rex, o, 0xC0 | (r & 7));         // op rX, rax
+    b = op_at[y];
+    op_same(x, OP_REG, R_AX, r, 0) && op_same(y, OP_REG, R_CX, R_AX, 0) && b >= a
+        && last_target <= b && (n_fix == 0 || fix_pos[n_fix - 1] < b) {
+        code_cut(b);
+        op_alu(o, r, R_AX);                 // op rX, rax
         : true;
     }
     // y simple: mov rax, rX ; y into rcx ; op rax, rcx (the whole assignment)
-    code[a] == lx && code[a + 1] == 0x89 && code[a + 2] == lm
-        && last_target <= a && (n_fix == 0 || fix_pos[n_fix - 1] < a) {
-        n = e - 3 - (a + 3);                // y's load
-        !rcx_load(a + 3, n) { : false; }
-        i = 0;
-        n { code[a + i] = code[a + 3 + i]; i = i + 1; }
+    b == a && op_same(y, OP_REG, R_AX, r, 0) && op_r[x] == R_CX && op_k[x] >= OP_IMM && op_k[x] <= OP_REG
+        && op_o[x] == 0 && last_target <= a && (n_fix == 0 || fix_pos[n_fix - 1] < a) {
+        yk = op_k[x];
+        yv = op_v[x];
         code_cut(a);
-        size_code = a + n;             // (y's load, moved back: not an operation any more)
-        eb(rex, o, 0xC8 | (r & 7));         // op rX, rcx
+        op_load(yk, R_CX, yv);
+        op_alu(o, r, R_CX);                 // op rX, rcx
         : true;
     }
-    : false;
-}
-
-// code[a .. a + n) is exactly one simple load into rcx, as simple_to_rcx makes it
-rcx_load(a = 0, n = 0) {
-    n == 5 && code[a] == 0xB9 { : true; }                                            // mov ecx, imm32
-    n == 7 && code[a] == 0x48 && code[a + 1] == 0xC7 && code[a + 2] == 0xC1 { : true; } // mov rcx, simm32
-    n == 10 && code[a] == 0x48 && code[a + 1] == 0xB9 { : true; }                    // mov rcx, imm64
-    n == 8 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x0C && code[a + 3] == 0x25 { : true; }
-    n == 7 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x8D { : true; }  // mov rcx, [rbp + d]
-    n == 3 && (code[a] == 0x48 || code[a] == 0x4C) && code[a + 1] == 0x89 && code[a + 2] & 0xC7 == 0xC1 { : true; }
     : false;
 }
 

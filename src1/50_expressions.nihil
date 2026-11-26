@@ -116,19 +116,19 @@ mode_op(t = 0) {
 
 // left in rax, right in rcx
 emit_op(t = 0) {
-    t == T_EQ { eb(0x48, 0x39, 0xC8, 0x0F, 0x94, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == T_NE { eb(0x48, 0x39, 0xC8, 0x0F, 0x95, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == '<' { eb(0x48, 0x39, 0xC8, 0x0F, 0x9C, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == '>' { eb(0x48, 0x39, 0xC8, 0x0F, 0x9F, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == T_LE { eb(0x48, 0x39, 0xC8, 0x0F, 0x9E, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == T_GE { eb(0x48, 0x39, 0xC8, 0x0F, 0x9D, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == '|' { eb(0x48, 0x09, 0xC8); }
-    || t == '^' { eb(0x48, 0x31, 0xC8); }
-    || t == '&' { eb(0x48, 0x21, 0xC8); }
+    t == T_EQ { op_cmp_set(CC_E); }
+    || t == T_NE { op_cmp_set(CC_NE); }
+    || t == '<' { op_cmp_set(CC_L); }
+    || t == '>' { op_cmp_set(CC_G); }
+    || t == T_LE { op_cmp_set(CC_LE); }
+    || t == T_GE { op_cmp_set(CC_GE); }
+    || t == '|' { op_alu(ALU_OR, R_AX, R_CX); }
+    || t == '^' { op_alu(ALU_XOR, R_AX, R_CX); }
+    || t == '&' { op_alu(ALU_AND, R_AX, R_CX); }
     || t == T_SHL { eb(0x48, 0xD3, 0xE0); }
     || t == T_SHR { eb(0x48, 0xD3, 0xF8); }
-    || t == '+' { eb(0x48, 0x01, 0xC8); }
-    || t == '-' { eb(0x48, 0x29, 0xC8); }
+    || t == '+' { op_alu(ALU_ADD, R_AX, R_CX); }
+    || t == '-' { op_alu(ALU_SUB, R_AX, R_CX); }
     || t == '*' { eb(0x48, 0x0F, 0xAF, 0xC1); }
     || t == '/' { emit_call_rt(RT_DIV); }
     || t == '%' { emit_call_rt(RT_MOD); }
@@ -181,11 +181,11 @@ left_late(a = 0) {
     : -1;
 }
 
-// code[a ..] is the call emit_call_rt(rt) made at a
+// the code from a on is the call emit_call_rt(rt) made at a
 is_call_rt(a = 0, rt = 0) {
-    a < 0 || code[a] != 0xE8 { : false; }
-    v = rt + SIZE_HEADER - a - 5;
-    : code[a + 1] == v & 255 && code[a + 2] == (v >> 8) & 255 && code[a + 3] == (v >> 16) & 255 && code[a + 4] == (v >> 24) & 255;
+    a < 0 { : false; }
+    i = op_last_at(a);
+    : i >= 0 && op_k[i] == OP_CALL_RT && op_v[i] == rt;
 }
 
 // binary: level 0 … 6; from 7 on it becomes unary
@@ -253,7 +253,7 @@ binary(nv = 0) {
             op_load(lk, R_AX, lv);
             op_load(rk, R_CX, rv);
         } || late {
-            eb(0x48, 0x89, 0xC1);           // mov rcx, rax ; the left one into rax
+            op_load(OP_REG, R_CX, R_AX);    // mov rcx, rax ; the left one into rax
             op_load(lk, R_AX, lv);
         } || load_simple(pos_push + 1) >= 0 {
             // the right side is a simple load: load it straight into rcx
