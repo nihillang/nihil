@@ -1011,7 +1011,7 @@ increment(k = 0) {
     equal = true;
     i = 0;
     nc { code[a + i] != code[end_load + i] { equal = false; } i = i + 1; }
-    size_code = end_load;
+    code_cut(end_load);
     !equal { : false; }
     p = a + nc;
     v = 0;
@@ -1030,7 +1030,7 @@ increment(k = 0) {
     sub = code[p + 1] == 0x29;
     sub { v = -v; }
     v >= 0x80000000 || v < -0x80000000 { : false; }
-    size_code = a;
+    code_cut(a);
     f = s_flags[k];
     f & FLAG_REG != 0 {
         r = s_end[k];
@@ -1089,7 +1089,7 @@ reg_update(k = 0) {
     e - a >= 9 && code[e - 9] == 0x48 && code[e - 8] == 0x89 && code[e - 7] == 0xC1
         && code[e - 6] == lx && code[e - 5] == 0x89 && code[e - 4] == lm
         && last_target <= e - 9 && (n_fix == 0 || fix_pos[n_fix - 1] < e - 9) {
-        size_code = e - 9;
+        code_cut(e - 9);
         eb(rex, o, 0xC0 | (r & 7));         // op rX, rax
         : true;
     }
@@ -1100,14 +1100,15 @@ reg_update(k = 0) {
         !rcx_load(a + 3, n) { : false; }
         i = 0;
         n { code[a + i] = code[a + 3 + i]; i = i + 1; }
-        size_code = a + n;
+        code_cut(a);
+        size_code = a + n;             // (y's load, moved back: not an operation any more)
         eb(rex, o, 0xC8 | (r & 7));         // op rX, rcx
         : true;
     }
     : false;
 }
 
-// code[a .. a + n) is exactly one simple load into rcx, as reload_in_rcx makes it
+// code[a .. a + n) is exactly one simple load into rcx, as simple_to_rcx makes it
 rcx_load(a = 0, n = 0) {
     n == 5 && code[a] == 0xB9 { : true; }                                            // mov ecx, imm32
     n == 7 && code[a] == 0x48 && code[a + 1] == 0xC7 && code[a + 2] == 0xC1 { : true; } // mov rcx, simm32

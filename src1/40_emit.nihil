@@ -50,18 +50,67 @@ put_q(pos = 0, v = 0) {
     8 { code[pos + i] = (v >> (i * 8)) & 255; i = i + 1; }
 }
 
-// code that puts v in rax, in the shortest form
-emit_immediate(v = 0) {
-    v >= 0 && v < 4294967296 {
-        emit(0xB8);                        // mov eax, imm32
+// ---- the operations (00_data.nihil: OP_*, the ring) ----
+
+// the operation whose code is code[at .. size_code) was just emitted
+op_note(k = 0, r = 0, v = 0, at = 0) {
+    n_ops - ops_low >= OPS_RING { ops_low = ops_low + 1; }
+    i = n_ops % OPS_RING;
+    op_at[i] = at;
+    op_end[i] = size_code;
+    op_k[i] = k;
+    op_r[i] = r;
+    op_v[i] = v;
+    n_ops = n_ops + 1;
+}
+
+// the last operation, if its code is exactly code[a .. size_code) → its place in the ring, else -1
+op_last_at(a = 0) {
+    n_ops == ops_low { : -1; }
+    i = (n_ops - 1) % OPS_RING;
+    op_at[i] == a && op_end[i] == size_code { : i; }
+    : -1;
+}
+
+// the code is cut back to pos: the operations from there on are gone
+code_cut(pos = 0) {
+    size_code = pos;
+    * n_ops > ops_low && op_end[(n_ops - 1) % OPS_RING] > pos { n_ops = n_ops - 1; }
+}
+
+// r ← (k, v): a load into rax or rcx (R_AX, R_CX), in the shortest x86 form
+x86_load(k = 0, r = 0, v = 0) {
+    k == OP_IMM {
+        v >= 0 && v < 4294967296 {
+            emit(0xB8 | r);                // mov eax, imm32
+            emit_d(v);
+        } || v >= -2147483648 && v < 2147483648 {
+            eb(0x48, 0xC7, 0xC0 | r);       // mov rax, simm32
+            emit_d(v);
+        } || {
+            eb(0x48, 0xB8 | r);             // mov rax, imm64
+            emit_q(v);
+        }
+    } || k == OP_LOCAL {
+        eb(0x48, 0x8B, 0x85 | (r << 3));    // mov rax, [rbp + disp32]
         emit_d(v);
-    } || v >= -2147483648 && v < 2147483648 {
-        eb(0x48, 0xC7, 0xC0);               // mov rax, simm32
+    } || k == OP_GLOBAL {
+        eb(0x48, 0x8B, 0x04 | (r << 3), 0x25);   // mov rax, [disp32]
         emit_d(v);
     } || {
-        eb(0x48, 0xB8);                     // mov rax, imm64
-        emit_q(v);
+        eb(0x48 | rex_r(v), 0x89, 0xC0 | ((v & 7) << 3) | r);   // mov rax, rV
     }
+}
+
+op_load(k = 0, r = 0, v = 0) {
+    at = size_code;
+    x86_load(k, r, v);
+    op_note(k, r, v, at);
+}
+
+// code that puts v in rax, in the shortest form
+emit_immediate(v = 0) {
+    op_load(OP_IMM, R_AX, v);
 }
 
 emit_store_local(d = 0) {
@@ -92,19 +141,17 @@ align_loop() {
 emit_load_var(k = 0) {
     note_use(k);
     s_flags[k] & FLAG_REG != 0 {
-        emit_mov_rax_reg(s_end[k]);
+        op_load(OP_REG, R_AX, s_end[k]);
         :;
     }
     s_flags[k] & FLAG_GLOBAL != 0 && s_flags[k] & FLAG_TOP == 0 {
-        eb(0x48, 0x8B, 0x04, 0x25);         // mov rax, [disp32]
-        emit_d(s_end[k]);
+        op_load(OP_GLOBAL, R_AX, s_end[k]);
         s_flags[k] & FLAG_OPT != 0 {
             eb(0x48, 0x8B, 0x14, 0x25);     // mov rdx, [disp32 + 8]
             emit_d(s_end[k] + 8);
         }
     } || {
-        eb(0x48, 0x8B, 0x85);               // mov rax, [rbp + disp32]
-        emit_d(s_end[k]);
+        op_load(OP_LOCAL, R_AX, s_end[k]);
         s_flags[k] & FLAG_OPT != 0 {
             eb(0x48, 0x8B, 0x95);           // mov rdx, [rbp + disp32 + 8]
             emit_d(s_end[k] + 8);
@@ -185,50 +232,25 @@ emit_return() {
 
 // ---- optimizations on code already emitted ----
 
-// is code[a .. size_code) a single simple load into rax (a constant or a
-// variable)? Returns the length of the instruction, or 0. Nothing may have
-// been registered for fixup in that stretch.
+// is the code from a on a single simple load into rax (OP_IMM, OP_LOCAL, OP_GLOBAL or OP_REG)?
+// → its place in the ring, or -1. Nothing may have been registered for fixup in that stretch.
 load_simple(a = 0) {
-    !optimize { : 0; }
-    n_fix > 0 && fix_pos[n_fix - 1] >= a { : 0; }
-    last_target >= a { : 0; }              // (a jump into it: the code is going to move back)
-    n = size_code - a;
-    n == 5 && code[a] == 0xB8 { : 5; }
-    n == 7 && code[a] == 0x48 && code[a + 1] == 0xC7 && code[a + 2] == 0xC0 { : 7; }
-    n == 10 && code[a] == 0x48 && code[a + 1] == 0xB8 { : 10; }
-    n == 8 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x04 && code[a + 3] == 0x25 { : 8; }
-    n == 7 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x85 { : 7; }
-    n == 3 && (code[a] == 0x48 || code[a] == 0x4C) && code[a + 1] == 0x89 && code[a + 2] & 0xC7 == 0xC0 { : 3; }
-    : 0;
+    !optimize { : -1; }
+    n_fix > 0 && fix_pos[n_fix - 1] >= a { : -1; }
+    last_target >= a { : -1; }             // (a jump into it: the code is going to move back)
+    i = op_last_at(a);
+    i < 0 || op_r[i] != R_AX || op_k[i] < OP_IMM || op_k[i] > OP_REG { : -1; }
+    : i;
 }
 
-// rewrites the simple load at code[a ..] to load rcx instead of rax.
-// None of the forms touches the flags.
-reload_in_rcx(a = 0) {
-    n = size_code - a;
-    n == 5 {
-        code[a] = 0xB9;                      // mov ecx, imm32
-    } || n == 7 && code[a + 1] == 0xC7 {
-        code[a + 2] = 0xC1;                  // mov rcx, simm32
-    } || n == 10 {
-        code[a + 1] = 0xB9;                  // mov rcx, imm64
-    } || n == 8 {
-        code[a + 2] = 0x0C;                  // mov rcx, [disp32]
-    } || n == 7 {
-        code[a + 2] = 0x8D;                  // mov rcx, [rbp + disp32]
-    } || {
-        code[a + 2] = code[a + 2] | 1;        // mov rcx, r
-    }
-}
-
-// moves code[from_ .. size_code) to start at to (to < from_)
-move_code_back(from_ = 0, to = 0) {
-    i = 0;
-    size_code - from_ {
-        code[to + i] = code[from_ + i];
-        i = i + 1;
-    }
-    size_code = size_code - (from_ - to);
+// the simple load at from_ (load_simple) is done again at to, into rcx; the code between
+// (a push, a jump) is dropped. None of the forms touches the flags.
+simple_to_rcx(from_ = 0, to = 0) {
+    i = op_last_at(from_);
+    k = op_k[i];
+    v = op_v[i];
+    code_cut(to);
+    op_load(k, R_CX, v);
 }
 
 // jump "if rax is false" after a condition → position of the rel32.
@@ -241,7 +263,7 @@ emit_jump_if_false() {
         && code[a + 3] == 0x0F && code[a + 4] & 0xF0 == 0x90 && code[a + 5] == 0xC0
         && code[a + 6] == 0x0F && code[a + 7] == 0xB6 && code[a + 8] == 0xC0 {
         cc = code[a + 4] & 15;
-        size_code = a + 3;                 // only the cmp is left
+        code_cut(a + 3);                   // only the cmp is left
         eb(0x0F, 0x80 | (cc ^ 1));          // jcc invertido
         pos = size_code;
         emit_d(0);

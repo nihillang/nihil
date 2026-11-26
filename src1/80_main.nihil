@@ -109,7 +109,7 @@ globals_learn() {
 // compiles the whole program from scratch (code, constants and fixups are
 // redone; types discovered for methods and globals persist)
 one_pass() {
-    size_code = 0;
+    code_cut(0);
     n_fix = 0;
     last_target = -1;
     slots = 0;

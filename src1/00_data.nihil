@@ -182,6 +182,23 @@ fix_val = [0 ; MAX_FIX];
 fix_method = [false ; MAX_FIX];
 n_fix = 0;
 
+// ---- the operations last emitted (40_emit.nihil): what the optimizations read, instead of the x86
+// bytes, so that another backend can emit the same operations. A ring of the last OPS_RING.
+OP_IMM = 1;             // r ← v, a constant
+OP_LOCAL = 2;           // r ← the local at frame offset v
+OP_GLOBAL = 3;          // r ← the global at address v
+OP_REG = 4;             // r ← the register v (rbx, r12 … r15: a local kept in a register)
+R_AX = 0;               // the registers, in x86's numbering: rax, the value
+R_CX = 1;               // rcx, the second operand
+OPS_RING = 256;
+op_at = [0 ; OPS_RING];     // where its code starts
+op_end = [0 ; OPS_RING];    // where its code ends
+op_k = [0 ; OPS_RING];
+op_r = [0 ; OPS_RING];
+op_v = [0 ; OPS_RING];
+n_ops = 0;              // operations noted so far; the ring holds those from ops_low on
+ops_low = 0;
+
 // ---- symbol table (one column per field) ----
 s_ofs = [0 ; MAX_SYM];
 s_len = [0 ; MAX_SYM];
