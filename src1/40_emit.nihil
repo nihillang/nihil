@@ -637,7 +637,9 @@ emit_store_global(a = 0) {
 // or faster, whatever the code. Long nops, which run once, on the way into the loop.
 align_loop() {
     !optimize { :; }
+    at = size_code;
     pad = (16 - (size_code & 15)) & 15;
+    n = pad;
     * pad >= 7 { eb(0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00); pad = pad - 7; }
     pad == 6 { eb(0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00); }
     pad == 5 { eb(0x0F, 0x1F, 0x44, 0x00, 0x00); }
@@ -645,6 +647,7 @@ align_loop() {
     pad == 3 { eb(0x0F, 0x1F, 0x00); }
     pad == 2 { eb(0x90, 0x90); }
     pad == 1 { emit(0x90); }
+    op_note(OP_ALIGN, 0, n, at);
 }
 
 emit_load_var(k = 0) {
@@ -690,9 +693,12 @@ emit_store_var(k = 0) {
     }
 }
 
+// a jump back to dest
 emit_jmp_to(dest = 0) {
+    at = size_code;
     emit(0xE9);
     emit_d(dest - size_code - 4);
+    op_note(OP_JMP, 0, 0, at, dest);
 }
 
 emit_call_rt(rt = 0) {
@@ -704,8 +710,16 @@ emit_call_rt(rt = 0) {
 
 // cmp rcx, [rax-8] ; jae erro_indice
 emit_check_limit() {
-    eb(0x48, 0x3B, 0x48, 0xF8, 0x0F, 0x83);
-    emit_d(RT_ERROR_INDEX + SIZE_HEADER - size_code - 4);
+    op_cmpm(R_CX, R_AX, -8, 0);
+    op_jcc_rt(CC_AE, RT_ERROR_INDEX);
+}
+
+// a jump on cc to the runtime's routine rt
+op_jcc_rt(cc = 0, rt = 0) {
+    at = size_code;
+    eb(0x0F, 0x80 | cc);
+    emit_d(rt + SIZE_HEADER - size_code - 4);
+    op_note(OP_JCC_RT, 0, cc, at, rt);
 }
 
 // the rel32 at pos now points to the current position
@@ -733,8 +747,10 @@ emit_mov_reg_rax(r = 0) {                  // mov r, rax
 
 // method epilogue: restores the saved registers and returns
 emit_return() {
+    at = size_code;
     limit_regs == 0 {
         eb(0xC9, 0xC3);                     // leave ; ret
+        op_note(OP_EPILOGUE, 0, 0, at);
         :;
     }
     eb(0x48, 0x8D, 0x65, (-8 * limit_regs) & 255);   // lea rsp, [rbp - 8·n]
@@ -745,6 +761,7 @@ emit_return() {
         r >= 8 { eb(0x41, 0x58 | (r & 7)); } || { emit(0x58 | r); }   // pop r
     }
     eb(0x5D, 0xC3);                         // pop rbp ; ret
+    op_note(OP_EPILOGUE, 0, limit_regs, at);
 }
 
 // ---- optimizations on code already emitted ----
@@ -774,22 +791,16 @@ simple_to_rcx(from_ = 0, to = 0) {
 // If the condition ended in an INT comparison (cmp ; setcc ; movzx),
 // it becomes a single jcc with the condition inverted.
 emit_jump_if_false() {
-    a = size_code - 9;
     i = -1;
-    optimize && a >= 0 && last_target <= a && (n_fix == 0 || fix_pos[n_fix - 1] < a) { i = op_last_at(a); }
-    i >= 0 && op_k[i] == OP_CMP_SET {
+    optimize && ops_last(1) { i = op_back(0); }
+    i >= 0 && op_k[i] == OP_CMP_SET && last_target <= op_at[i] && (n_fix == 0 || fix_pos[n_fix - 1] < op_at[i]) {
         cc = op_v[i];
-        code_cut(a);
+        code_cut(op_at[i]);
         op_cmp();                          // only the cmp is left
-        eb(0x0F, 0x80 | (cc ^ 1));          // jcc, the condition inverted
-        pos = size_code;
-        emit_d(0);
-        : pos;
+        : op_jcc(cc ^ 1);                  // jcc, the condition inverted
     }
-    eb(0x48, 0x85, 0xC0, 0x0F, 0x84);       // test rax, rax ; jz
-    pos = size_code;
-    emit_d(0);
-    : pos;
+    op_test(R_AX);                         // test rax, rax ; jz
+    : op_jcc(CC_E);
 }
 
 // the rel32 at pos → constant at offset v (or method v, if m)

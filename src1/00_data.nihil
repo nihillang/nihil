@@ -257,6 +257,10 @@ OP_LEA_FWD = 57;        // r ← the address of a place further on (patched: pat
 OP_JCC8 = 58;           // a short forward jump on the condition v, over a few operations (patch8_here)
 OP_FRAME = 59;          // rsp ← rsp - the frame's size (patched at the end: put_frame)
 OP_CALL_FWD = 60;       // a call of a place further on (patched: patch_here)
+OP_ALIGN = 61;          // nops up to an address multiple of 16 (v: how many bytes, in x86)
+OP_JCC_RT = 62;         // a jump on the condition v to the runtime's routine o (an error)
+OP_EPILOGUE = 63;       // a method's end: restores the v saved registers (REGS), rbp, and returns
+CC_AE = 3;              // unsigned >=
 XOP_ADD = 0x58;         // (x86's opcodes, for its encoder)
 XOP_MUL = 0x59;
 XOP_SUB = 0x5C;
