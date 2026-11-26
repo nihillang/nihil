@@ -143,23 +143,7 @@ emit_op_float(op = 0, pi = 0, pl = 0, pn = 0, pli = 0) {
         op_rmovx(R_AX, 0);   // movq rax, xmm0
         : TYPE_FLOAT;
     }
-    // comparisons (NaN: only != is true)
-    op == '>' {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x97, 0xC0);   // ucomisd xmm0, xmm1 ; seta al
-    } || op == T_GE {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x93, 0xC0);   // ucomisd xmm0, xmm1 ; setae al
-    } || op == '<' {
-        eb(0x66, 0x0F, 0x2E, 0xC8, 0x0F, 0x97, 0xC0);   // ucomisd xmm1, xmm0 ; seta al
-    } || op == T_LE {
-        eb(0x66, 0x0F, 0x2E, 0xC8, 0x0F, 0x93, 0xC0);   // ucomisd xmm1, xmm0 ; setae al
-    } || op == T_EQ {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x94, 0xC0);   // ucomisd ; sete al
-        eb(0x0F, 0x9B, 0xC1, 0x20, 0xC8);               // setnp cl ; and al, cl
-    } || {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x95, 0xC0);   // ucomisd ; setne al
-        eb(0x0F, 0x9A, 0xC1, 0x08, 0xC8);               // setp cl ; or al, cl
-    }
-    eb(0x0F, 0xB6, 0xC0);                   // movzx eax, al
+    op_fcmp_set(op);                      // comparisons (NaN: only != is true)
     : TYPE_BOOL;
 }
 
@@ -203,9 +187,9 @@ binary(nv = 0) {
             next_token();
             op_test(R_DX);               // test rdx, rdx
             op == T_EQ {
-                eb(0x0F, 0x94, 0xC0, 0x0F, 0xB6, 0xC0);   // sete al ; movzx eax, al
+                op_setcc(CC_E, R_AX); op_zxb(R_AX);   // sete al ; movzx eax, al
             } || {
-                eb(0x0F, 0x95, 0xC0, 0x0F, 0xB6, 0xC0);   // setne al ; movzx eax, al
+                op_setcc(CC_NE, R_AX); op_zxb(R_AX);  // setne al ; movzx eax, al
             }
             t = TYPE_BOOL;
             op = find_op(nv, tok_type);
@@ -394,9 +378,7 @@ protected_expr() {
     }
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     next_token();                        // "?" → the call
-    eb(0x48, 0x8D, 0x05);                // lea rax, [rip + resume]
-    resume_pos = size_code;
-    emit_d(0);
+    resume_pos = op_lea_fwd(R_AX);       // lea rax, [rip + resume]
     emit_call_rt(RT_PROTECT);
     start = size_code;
     t = postfix();
@@ -406,7 +388,7 @@ protected_expr() {
     }
     emit_call_rt(RT_UNPROTECT);
     t != TYPE_NONE && t != TYPE_UNKNOWN && !is_opt(t) { op_load(OP_IMM, R_DX, 1); }   // mov edx, 1
-    put_d(resume_pos, size_code - (resume_pos + 4));
+    patch_to_here(resume_pos);
     last_target = size_code;             // the runtime lands here
     call_end = size_code;                // may stand alone as a command, like a call
     t == TYPE_NONE || t == TYPE_UNKNOWN { : t; }

@@ -511,6 +511,58 @@ op_fcmp_set(t = 0) {
     op_note(OP_FCMP_SET, R_AX, t, at);
 }
 
+op_zxb(r = 0) {
+    at = size_code;
+    eb(0x0F, 0xB6, 0xC0 | (r << 3) | r);    // movzx eR, r8
+    op_note(OP_ZXB, r, 0, at);
+}
+
+// r ← the address of a place further on → the position to patch (patch_to_here)
+op_lea_fwd(r = 0) {
+    at = size_code;
+    eb(0x48, 0x8D, 0x05 | (r << 3));        // lea r, [rip + rel32]
+    pos = size_code;
+    emit_d(0);
+    op_note(OP_LEA_FWD, r, 0, at);
+    : pos;
+}
+
+// a short forward jump on cc, over a few operations → the position to patch (patch8_here)
+op_jcc8(cc = 0) {
+    at = size_code;
+    eb(0x70 | cc, 0);
+    op_note(OP_JCC8, 0, cc, at);
+    : size_code - 1;
+}
+
+patch8_here(pos = 0) {
+    code[pos] = size_code - (pos + 1);
+}
+
+// rsp ← rsp - the frame's size, known at the end → the position for put_frame
+op_frame() {
+    at = size_code;
+    eb(0x48, 0x81, 0xEC);                   // sub rsp, imm32
+    pos = size_code;
+    emit_d(0);
+    op_note(OP_FRAME, 0, 0, at);
+    : pos;
+}
+
+put_frame(pos = 0, size = 0) {
+    put_d(pos, size);
+}
+
+// a call of a place further on → the position to patch (patch_here)
+op_call_fwd() {
+    at = size_code;
+    emit(0xE8);
+    pos = size_code;
+    emit_d(0);
+    op_note(OP_CALL_FWD, 0, 0, at);
+    : pos;
+}
+
 op_push(r = 0) {
     at = size_code;
     r >= 8 { emit(0x41); }
@@ -658,8 +710,13 @@ emit_check_limit() {
 
 // the rel32 at pos now points to the current position
 patch_here(pos = 0) {
-    put_d(pos, size_code - (pos + 4));
+    patch_to_here(pos);
     last_target = size_code;               // a jump lands here: the code before it cannot change
+}
+
+// the same, for an address taken (op_lea_fwd), not a jump
+patch_to_here(pos = 0) {
+    put_d(pos, size_code - (pos + 4));
 }
 
 // ---- registers: r = 3 (rbx) or 12 … 15 ----

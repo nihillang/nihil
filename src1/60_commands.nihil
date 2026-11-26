@@ -239,12 +239,12 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
         op_ld(R_CX, R_AX, -8, 0);          // mov rcx, [rax - 8]: the size
     }
     op_st(R_BP, n, R_CX, 1);         // mov [rbp + n], rcx
-    eb(0x48, 0xC7, 0x85); emit_d(ix); emit_d(0);    // mov qword [rbp + i], 0
+    op_sti(R_BP, ix, 0, 1);    // mov qword [rbp + i], 0
     align_loop();
     top = size_code;
     last_target = size_code;
     op_ld(R_CX, R_BP, ix, 1);        // mov rcx, [rbp + i]
-    eb(0x48, 0x3B, 0x8D); emit_d(n);         // cmp rcx, [rbp + n]
+    op_cmpm(R_CX, R_BP, n, 1);         // cmp rcx, [rbp + n]
     leave = op_jcc(CC_GE);                          // jge end
     // the block, with x (and i) as its first locals
     line = tok_line;
@@ -282,7 +282,7 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     n_regs = nr;
     candidates = nc;
     level = level - 1;
-    eb(0x48, 0xFF, 0x85); emit_d(ix);        // inc qword [rbp + i]
+    op_addim(R_BP, ix, 1, 1);        // inc qword [rbp + i]
     emit_jmp_to(top);
     patch_here(leave);
     slots = slots - 3;
@@ -336,12 +336,12 @@ counted_loop(with_block = true) {
         emit_mov_reg_rax(r);
         align_loop();
         top = size_code;
-        eb(0x48 | (rex_b(r) * 5), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
+        op_test(r);   // test r, r
         leave = op_jcc(CC_LE);                     // jle rel32
         loop_depth = loop_depth + 1;
         with_block { block(); } || { cmd_call(); }
         loop_depth = loop_depth - 1;
-        eb(0x48 | rex_b(r), 0xFF, 0xC8 | (r & 7));                          // dec r
+        op_addi(r, -1);                          // dec r
         emit_jmp_to(top);
         patch_here(leave);
         n_regs = n_regs - 1;
@@ -352,16 +352,12 @@ counted_loop(with_block = true) {
     emit_store_local(d);
     align_loop();
     top = size_code;
-    eb(0x48, 0x83, 0xBD);                   // cmp qword [rbp+disp32], imm8
-    emit_d(d);
-    eb(0x00, 0x0F, 0x8E);                   // 0 ; jle rel32
-    leave = size_code;
-    emit_d(0);
+    op_cmpim(R_BP, d, 0, 1);                // cmp qword [rbp+disp32], 0
+    leave = op_jcc(CC_LE);                  // jle rel32
     loop_depth = loop_depth + 1;
     with_block { block(); } || { cmd_call(); }
     loop_depth = loop_depth - 1;
-    eb(0x48, 0xFF, 0x8D);                   // dec qword [rbp+disp32]
-    emit_d(d);
+    op_addim(R_BP, d, -1, 1);               // dec qword [rbp+disp32]
     emit_jmp_to(top);
     patch_here(leave);
     slots = slots - 1;
@@ -386,10 +382,8 @@ conditional() {
             patch_here(nxt);
             again = false;
         } || {
-            emit(0xE9);                    // jmp end
-            pending[n_pending] = size_code;
+            pending[n_pending] = op_jmp(); // jmp end
             n_pending = n_pending + 1;
-            emit_d(0);
             patch_here(nxt);             // the next branch starts here
             next_token();                // consome "||"
             tok_type == '{' {
@@ -465,16 +459,14 @@ cmd_method(k = 0) {
     s_end[k] = size_code;
     limit_regs = 0;
     optimize { limit_regs = s_regs[k]; }    // how many registers the previous pass asked for
-    eb(0x55, 0x48, 0x89, 0xE5);             // push rbp ; mov rbp, rsp
+    op_push(R_BP); op_mov(R_BP, R_SP);   // push rbp ; mov rbp, rsp
     i = 0;
     limit_regs {
         r = REGS[i];
-        r >= 8 { eb(0x41, 0x50 | (r & 7)); } || { emit(0x50 | r); }   // push r
+        op_push(r);   // push r
         i = i + 1;
     }
-    eb(0x48, 0x81, 0xEC);                   // sub rsp, N
-    frame = size_code;
-    emit_d(0);
+    frame = op_frame();                     // sub rsp, N
     sv_slots = slots;
     sv_max = max_slots;
     sv_n = n_sym;
@@ -556,7 +548,7 @@ cmd_method(k = 0) {
         op_lea_const(R_SI, m);               // lea rsi, [rip + mensagem]
         emit_call_rt(RT_ERROR);
     }
-    put_d(frame, (max_slots * 8 + 15) & -16);
+    put_frame(frame, (max_slots * 8 + 15) & -16);
     n_sym = sv_n;
     max_slots = sv_max;
     slots = sv_slots;
@@ -795,11 +787,13 @@ cmd_read_line() {
         // end of input into an ordinary variable: the type's "zero" value
         op_test(R_DX);               // test rdx, rdx
         b == TYPE_STR {
-            eb(0x75, 7);                    // jnz +7
+            skip = op_jcc8(CC_NE);          // jnz over it
             op_lea_const(R_AX, const_empty);           // lea rax, [rip + ""]
+            patch8_here(skip);
         } || {
-            eb(0x75, 2);                    // jnz +2
+            skip = op_jcc8(CC_NE);          // jnz over it
             op_zero(R_AX);                 // xor eax, eax (0, false, 0.0)
+            patch8_here(skip);
         }
     }
     emit_store_var(k);
@@ -1007,35 +1001,11 @@ increment(k = 0) {
     code_cut(a);
     f = s_flags[k];
     f & FLAG_REG != 0 {
-        r = s_end[k];
-        v == 1 || v == -1 {
-            eb(0x48 | rex_b(r), 0xFF);
-            v == 1 { emit(0xC0 | (r & 7)); } || { emit(0xC8 | (r & 7)); }       // inc / dec r
-        } || {
-            eb(0x48 | rex_b(r), 0x81, 0xC0 | (r & 7));                         // add r, imm32
-            emit_d(v);
-        }
+        op_addi(s_end[k], v);                // inc / dec / add r, imm32
     } || f & FLAG_GLOBAL != 0 && f & FLAG_TOP == 0 {
-        v == 1 || v == -1 {
-            eb(0x48, 0xFF);
-            v == 1 { emit(0x04); } || { emit(0x0C); }                         // inc / dec [disp32]
-            emit(0x25);
-            emit_d(s_end[k]);
-        } || {
-            eb(0x48, 0x81, 0x04, 0x25);                                         // add qword [disp32], imm32
-            emit_d(s_end[k]);
-            emit_d(v);
-        }
+        op_addim(R_ABS, s_end[k], v, 1);     // inc / dec / add qword [disp32], imm32
     } || {
-        v == 1 || v == -1 {
-            eb(0x48, 0xFF);
-            v == 1 { emit(0x85); } || { emit(0x8D); }                         // inc / dec [rbp + d]
-            emit_d(s_end[k]);
-        } || {
-            eb(0x48, 0x81, 0x85);                                               // add qword [rbp + d], imm32
-            emit_d(s_end[k]);
-            emit_d(v);
-        }
+        op_addim(R_BP, s_end[k], v, 1);      // inc / dec / add qword [rbp + d], imm32
     }
     : true;
 }

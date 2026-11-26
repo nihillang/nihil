@@ -252,6 +252,11 @@ OP_XOP = 52;            // xmm r ← xmm r op xmm o (v: XOP_*)
 OP_I2F = 53;            // xmm r ← the INT o as a double
 OP_F2I = 54;            // r ← xmm o truncated to an INT
 OP_FCMP_SET = 55;       // rax ← xmm0 ?v xmm1 (v: the token: > >= < <= == !=), NaN: only != is true
+OP_ZXB = 56;            // r ← r's low byte, zero-extended
+OP_LEA_FWD = 57;        // r ← the address of a place further on (patched: patch_to_here)
+OP_JCC8 = 58;           // a short forward jump on the condition v, over a few operations (patch8_here)
+OP_FRAME = 59;          // rsp ← rsp - the frame's size (patched at the end: put_frame)
+OP_CALL_FWD = 60;       // a call of a place further on (patched: patch_here)
 XOP_ADD = 0x58;         // (x86's opcodes, for its encoder)
 XOP_MUL = 0x59;
 XOP_SUB = 0x5C;
