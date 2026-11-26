@@ -988,14 +988,28 @@ claude_prompt(project = "", shell = false, reads = false) {
     shell { run = "You may run shell commands on this Mac (Bash, starting in the project folder; long ones in the background, "
                   + "which the IDE shows live). Say what you run, keep to the project, and do not change anything outside it "
                   + "unless asked. A Nihil program is compiled with " + COMPILER + " FILE.nihil OUTPUT. "; }
+    // the short reference goes inside the instructions: an agent that has to open the SPEC first spends an extra
+    // turn (and, the small models, the whole 27k-token file) on every task; measured on repair tasks, the
+    // reference in the prompt halved a small model's tokens against "read the SPEC" and cut its reasoning
+    agent_ref? = @? (DOCS + "/NIHIL-AGENTS.md");
+    spec_note = "its specification is " + DOCS + "/SPEC.md and there are examples in " + DOCS
+                + "/examples: read the parts of the SPEC you need before you write or explain Nihil code, and do not assume it works "
+                + "like another language. ";
+    agent_ref != _ {
+        spec_note = "the short reference below covers what most code needs. The full specification is " + DOCS
+                    + "/SPEC.md (records §20, library §21, MAP §22, network §23, directories and processes §24, JSON §26, "
+                    + "LIST §28) and there are examples in " + DOCS + "/examples: read only the section you need, and do not "
+                    + "assume Nihil works like another language. ";
+    }
+    tail = "";
+    agent_ref != _ { tail = "\n\n<nihil-reference>\n" + (agent_ref || "") + "</nihil-reference>"; }
     : "You are working inside the Nihil IDE, in the project folder " + project + ". Nihil is a small programming language "
-      + "without keywords (symbols only); its specification is " + DOCS + "/SPEC.md and there are examples in " + DOCS
-      + "/examples: read the parts of the SPEC you need before you write or explain Nihil code, and do not assume it works "
-      + "like another language. The user's message may be followed by an <ide> block with what is open in the IDE: the "
+      + "without keywords (symbols only); " + spec_note
+      + "The user's message may be followed by an <ide> block with what is open in the IDE: the "
       + "active file and the cursor, the selected text, the open tabs, unsaved text and the last compile errors; \"this\" "
       + "or \"here\" means the selection, or else the active file. " + run
       + "Change files only inside the project folder, and only when asked. Answer in "
-      + "the language the user writes in, briefly.";
+      + "the language the user writes in, briefly." + tail;
 }
 
 // how many runs (programs, conversations, sign-ins) have not finished

@@ -1,0 +1,31 @@
+// Every claim NIHIL-AGENTS.md makes, checked (traps, conversions, optionals, LIST, MAP, records, library)
+P = @[code: INT(6); name: STRING(12)];
+g = 1;
+bump() { g = 5; }
+bump();
+>> g; >> "\n";
+n = 3; c = 0;
+n { c = c + 1; }
+>> c; >> "\n";
+v = [10, 20];
+v : el, idx { >> $idx + "=" + $el + " "; }
+>> "\n";
+x? = true; x = _; y = false;
+(x || false) || y { >> "or-true\n"; } || { >> "or-false\n"; }
+iv = 7; f = .iv; f2 = .(iv * 2); k = #2.9; >> f; >> " "; >> f2; >> " "; >> k; >> "\n";
+e = [0 ; 0]; l = ["" ; *]; l[] = "a"; l[] = "b"; >> #e; >> #l; >> "\n";
+m = {"": 0 ; 16}; m["a"] = 1; m["b"] = 2; z = m["zz"] || 0; m["a"] = _;
+>> #m; >> z; >> m.contains("b"); >> "\n";
+b? = 0; b = _; b == _ { >> "empty "; } w = b || 7; >> w; >> "\n";
+>> "a" + $42 + $true; >> "\n";
+s = "  pear,fig "; >> s.trim().split(",").sort().join("|"); >> (s.find("fig") || -1); >> "\n";
+p = P(7, "x"); >> p.name; >> p.code; >> "\n";
+rows = [P(1, "a"), P(2, "b"), P(3, "c")]; >> rows.where(code > 1).sum(code); >> "\n";
+q = -7; >> q / 2; >> " "; >> q % 2; >> " "; >> (6 & 1 == 0); >> "\n";
+t = 1; t == 1 { } || { >> "no"; }
+div(a = 0) { : 10 / a; }
+r? = ?div(0); r == _ { >> "caught: " + ?! + "\n"; }
+?{ dz = 10 / (n - 3); } || { >> "block: " + ?! + "\n"; }
+?{ ?! = "why"; } || { >> "raised: " + ?! + "\n"; }
+!>> "err-ok\n";
+:: 3;
