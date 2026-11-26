@@ -324,6 +324,9 @@ arm_text() {
         loop_depths();
         unit_slots(0, n_ops, true);        // the program's own code: all but the methods
         top_csr = unit_csr;
+        q = 0;
+        * q < n_cst { top_cst_v[q] = cst_v[q]; top_cst_r[q] = cst_r[q]; q = q + 1; }
+        n_top_cst = n_cst;
         q = 0;                             // (only the slots its operations touch: uslot)
         * q < n_uslot { top_list[q] = uslot[q]; top_slot[uslot[q]] = unit_reg[uslot[q]]; q = q + 1; }
         n_top = n_uslot;
@@ -343,6 +346,9 @@ arm_text() {
                 q = 0;
                 * q < n_top { u = top_list[q]; uslot[q] = u; slot_in[u] = true; unit_reg[u] = top_slot[u]; q = q + 1; }
                 n_uslot = n_top;
+                q = 0;
+                * q < n_top_cst { cst_v[q] = top_cst_v[q]; cst_r[q] = top_cst_r[q]; q = q + 1; }
+                n_cst = n_top_cst;
                 n_saved = top_saved;
                 unit_top = true;
             }
@@ -457,6 +463,47 @@ back_t = [0 ; BACKS];          // the unit's jumps back: their target, and where
 back_j = [0 ; BACKS];
 n_backs = 0;
 unit_csr = 0;                  // the registers of x1 … x8 its slots took (bits)
+// constants that take more than one instruction, inside loops: a register of x19 … x26 left free
+// holds one for the whole unit, loaded at its start (cst_v, its weight cst_w, its register cst_r)
+CSTS = 64;
+cst_v = [0 ; CSTS];
+cst_w = [0 ; CSTS];
+cst_r = [0 ; CSTS];
+n_cst = 0;
+top_cst_v = [0 ; CSTS];
+top_cst_r = [0 ; CSTS];
+n_top_cst = 0;
+
+// the instructions a_imm takes for v
+imm_cost(v = 0) {
+    n = 0;
+    k = 0;
+    * k < 4 { (v >> (16 * k)) & 0xFFFF != 0 { n = n + 1; } k = k + 1; }
+    n == 0 { : 1; }
+    : n;
+}
+
+cst_note(v = 0, w = 0) {
+    imm_cost(v) < 2 { :; }
+    q = 0;
+    * q < n_cst && cst_v[q] != v { q = q + 1; }
+    q == n_cst {
+        n_cst >= CSTS { :; }
+        cst_v[q] = v;
+        cst_w[q] = 0;
+        cst_r[q] = 0;
+        n_cst = n_cst + 1;
+    }
+    cst_w[q] = cst_w[q] + w;
+}
+
+// the register that holds the constant v in this unit, or 0
+cst_reg(v = 0) {
+    !promote { : 0; }
+    q = 0;
+    * q < n_cst { cst_v[q] == v && cst_r[q] != 0 { : cst_r[q]; } q = q + 1; }
+    : 0;
+}
 top_csr = 0;
 
 slot_seen(s = 0) {
@@ -511,6 +558,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
     slots_clear();
     n_backs = 0;
     unit_csr = 0;
+    n_cst = 0;
     promote_off = false;
     used = 0;
     calls = false;                         // (a leaf: no call in it)
@@ -528,6 +576,8 @@ unit_slots(lo = 0, hi = 0, top = false) {
             d > 6 { d = 6; }
             w = 1 << (3 * d);
             cur_op = i;
+            (k == OP_IMM || k == OP_IMMS || k == OP_IMM64) && lbit(r) != 0 && d > 0 { cst_note(v, w); }
+            (k == OP_CMPI || k == OP_MULI) && d > 0 && (v > 4095 || v < -4095) { cst_note(v, w); }
             jump = k == OP_JMP || k == OP_JCC || k == OP_JCC8;
             jump && lab_op[o] <= i && n_backs < BACKS { back_t[n_backs] = lab_op[o]; back_j[n_backs] = i; n_backs = n_backs + 1; }
             jump && lab_op[o] <= i && n_backs >= BACKS { promote_off = true; }
@@ -609,6 +659,24 @@ unit_slots(lo = 0, hi = 0, top = false) {
             best >= 0 {
                 unit_reg[best] = reg;
                 slot_w[best] = -1;
+                used = used | (1 << reg);
+                !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
+            }
+        }
+        reg = reg + 1;
+    }
+    // the registers still free: the heaviest constants (in a loop: weight 8 or more; a method saves it)
+    reg = 19;
+    * reg <= 26 {
+        used & (1 << reg) == 0 {
+            best = -1;
+            bw = 15;
+            !top { bw = 31; }
+            q = 0;
+            * q < n_cst { cst_r[q] == 0 && cst_w[q] > bw { best = q; bw = cst_w[q]; } q = q + 1; }
+            best >= 0 {
+                cst_r[best] = reg;
+                used = used | (1 << reg);
                 !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
             }
         }
@@ -921,6 +989,7 @@ pend_small(r = 0) { : pend_k[r] == 2 && pend_v[r] >= 0 && pend_v[r] <= 4095; }
 a_cmp_imm(a = 0, v = 0) {
     v >= 0 && v <= 4095 { a_ins("cmp "); a_x(a); a_str(", #"); a_num(v); a_nl(); :; }
     v < 0 && v >= -4095 { a_ins("cmn "); a_x(a); a_str(", #"); a_num(-v); a_nl(); :; }
+    cst_reg(v) > 0 { a_ins("cmp "); a_x(a); a_str(", "); a_x(cst_reg(v)); a_nl(); :; }
     a_imm(17, v);
     a_ins("cmp "); a_x(a); a_str(", x17"); a_nl();
 }
@@ -1044,6 +1113,7 @@ arm_lazy(i = 0) {
     lr != 0 && (k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO) {
         pend_k[r] = 0;
         (live_out_of(i) & lr) != 0 { pend_k[r] = 2; pend_v[r] = v; k == OP_ZERO { pend_v[r] = 0; } }
+        pend_k[r] == 2 && cst_reg(v) > 0 { pend_k[r] = 1; pend_v[r] = cst_reg(v); }   // in its register
         : 1;
     }
     p = 0;
@@ -1255,6 +1325,7 @@ arm_lazy(i = 0) {
         kk >= 0 {
             a_ins("lsl "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(kk); a_nl();
         } || {
+            known && cst_reg(cv) > 0 { c = cst_reg(cv); known = false; }
             known { a_imm(17, cv); }
             a_ins("mul "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl();
         }
@@ -1681,6 +1752,8 @@ arm_op(i = 0) {
             u >= PBASE && unit_reg[u] != 0 { a_ldst_x(false, unit_reg[u], 16 + 8 * (u - PBASE)); }
             q = q + 1;
         }
+        q = 0;                             // the constants in registers
+        * promote && q < n_cst { cst_r[q] != 0 { a_imm(cst_r[q], cst_v[q]); } q = q + 1; }
         :;
     }
     k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
