@@ -22,7 +22,7 @@ TITLES = [
     "Globals and locals: the one rule to remember",
     "Automatic keys",
     "Modeling data",
-    "Errors: protected calls",
+    "Errors: protected calls and blocks",
     "Lists: arrays that grow"
 ];
 INTROS = [
@@ -103,7 +103,9 @@ INTROS = [
       "JSON document) ends the program with its message. A <code>?</code> before a call protects it: an " +
       "error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when " +
       "the call worked). <code>?! = text;</code> raises an error of your own, which a protected call " +
-      "catches like any other. A server keeps running when one request fails, and a program can skip a " +
+      "catches like any other. <code>?{ … }</code> protects a whole block the same way, and " +
+      "<code>|| { … }</code> after it runs only when something inside failed; what the block did before " +
+      "the error stays done. A server keeps running when one request fails, and a program can skip a " +
       "bad line of its input and go on.",
     "An ARRAY keeps the size it was made with. A LIST grows: <code>[x ; *]</code> makes an empty one " +
       "(<code>x</code> only gives the type of its items), <code>v[] = x;</code> adds at the end, and " +

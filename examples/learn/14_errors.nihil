@@ -17,3 +17,12 @@ total = 0.0;
     v != _ { total = total + (v || 0.0); } || { >> "skipped, " + ?! + "\n"; }
 }
 >> "total " + $total + "\n";
+
+// ?{ … } protects a whole block; || { … } runs only when something inside failed
+rows = [3, 0, 5];
+sum = 0;
+?{
+    rows : n { sum = sum + 60 / n; }
+} || {
+    >> "stopped at a bad row (" + ?! + "), sum so far " + $sum + "\n";
+}
