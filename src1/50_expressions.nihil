@@ -231,7 +231,7 @@ binary(nv = 0) {
             code_cut(ls);
         }
         pos_push = size_code;
-        !late { emit(0x50); }              // push rax
+        !late { op_push(R_AX); }              // push rax
         u = binary(nv + 1);
         // "…" + $n: the $ (the right side's last code, a call to RT_INT_TEXT) is dropped and the
         // two go to RT_CONCAT_INT together, which writes the digits straight into the result
@@ -364,18 +364,14 @@ unary() {
             : TYPE_STR;
         }
         t == '$' && u == TYPE_FLOAT {
-            emit(0x50);
+            op_push(R_AX);
             call_prelude("__nihil_ft_text", 8);   // $ x → the shortest text that reads back as x
             : TYPE_STR;
         }
         t == '$' && u == TYPE_BOOL {
             eb(0x48, 0x89, 0xC2);           // mov rdx, rax
-            eb(0x48, 0x8D, 0x05);           // lea rax, [rip + "true"]
-            register_fixup(size_code, bool_text(true), false);
-            emit_d(0);
-            eb(0x48, 0x8D, 0x0D);           // lea rcx, [rip + "false"]
-            register_fixup(size_code, bool_text(false), false);
-            emit_d(0);
+            op_lea_const(R_AX, bool_text(true));           // lea rax, [rip + "true"]
+            op_lea_const(R_CX, bool_text(false));           // lea rcx, [rip + "false"]
             eb(0x48, 0x85, 0xD2, 0x48, 0x0F, 0x44, 0xC1);   // test rdx, rdx ; cmovz rax, rcx
             : TYPE_STR;
         }
@@ -415,7 +411,7 @@ protected_expr() {
         error("'?' goes before a call");
     }
     emit_call_rt(RT_UNPROTECT);
-    t != TYPE_NONE && t != TYPE_UNKNOWN && !is_opt(t) { eb(0xBA, 1, 0, 0, 0); }   // mov edx, 1
+    t != TYPE_NONE && t != TYPE_UNKNOWN && !is_opt(t) { op_load(OP_IMM, R_DX, 1); }   // mov edx, 1
     put_d(resume_pos, size_code - (resume_pos + 4));
     last_target = size_code;             // the runtime lands here
     call_end = size_code;                // may stand alone as a command, like a call
@@ -467,7 +463,7 @@ index_step(t = 0) {
         error_end();
     }
     pos_push = size_code;
-    emit(0x50);                        // push rax
+    op_push(R_AX);                        // push rax
     next_token();
     u = expression();
     u != TYPE_INT && u != TYPE_UNKNOWN {
@@ -512,14 +508,12 @@ primary() {
         : TYPE_BOOL;
     }
     t == T_FALSE {
-        eb(0x31, 0xC0);                     // xor eax, eax
+        op_zero(R_AX);                     // xor eax, eax
         next_token();
         : TYPE_BOOL;
     }
     t == T_STR {
-        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + rel32]
-        register_fixup(size_code, tok_value, false);
-        emit_d(0);
+        op_lea_const(R_AX, tok_value);               // lea rax, [rip + rel32]
         next_token();
         : TYPE_STR;
     }
@@ -662,7 +656,7 @@ primary_array() {
     }
     tok_type == ';' {
         // [value ; n]
-        emit(0x50);
+        op_push(R_AX);
         next_token();
         tok_type == '*' { : list_literal(t); }   // [value ; *]: an empty LIST (SPEC §28)
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
@@ -676,7 +670,7 @@ primary_array() {
         }
         is_rec(t) {
             // [record ; n]: n independent copies of the record
-            emit(0x50);
+            op_push(R_AX);
             push_const(m_schema[t >> 8]);
             call_prelude("__nihil_rec_rep", 24);
         } || {
@@ -686,7 +680,7 @@ primary_array() {
         expect(']', "']' (in [value ; size])");
     } || {
         // [a, b, c]: pushes the values, allocates, pops from the last to the first
-        emit(0x50);
+        op_push(R_AX);
         n = 1;
         * tok_type == ',' {
             next_token();
@@ -701,12 +695,12 @@ primary_array() {
                 put_type(u);
                 error_end();
             }
-            emit(0x50);
+            op_push(R_AX);
             n = n + 1;
         }
         expect(']', "']'");
-        emit(0xB9);                        // mov ecx, n
-        emit_d(n);
+        op_load(OP_IMM, R_CX, n);                        // mov ecx, n
+        
         emit_call_rt(RT_ALLOC);
         r = n;
         * r > 0 {
@@ -777,8 +771,8 @@ call_method(k = 0, pre = 0) {
             put_type(u);
             error_end();
         }
-        is_opt(pt) { emit(0x52); }         // push rdx (presence)
-        emit(0x50);                        // push rax
+        is_opt(pt) { op_push(R_DX); }         // push rdx (presence)
+        op_push(R_AX);                        // push rax
         i = i + 1;
         tok_type == ',' {
             next_token();
@@ -792,32 +786,30 @@ call_method(k = 0, pre = 0) {
         e = base + i;
         p_type[e] & TYPE_ARR != 0 {
             // ARRAY: a new one-element array on every call
-            eb(0xB9, 1, 0, 0, 0);           // mov ecx, 1
+            op_load(OP_IMM, R_CX, 1);           // mov ecx, 1
             emit_call_rt(RT_ALLOC);
-            emit(0x50);
+            op_push(R_AX);
             emit_default(e);
             eb(0x48, 0x8B, 0x0C, 0x24, 0x48, 0x89, 0x01, 0x58);   // mov rcx,[rsp] ; mov [rcx],rax ; pop rax
         } || {
             emit_default(e);
         }
         is_opt(p_type[e]) {
-            eb(0xBA, 1, 0, 0, 0);           // mov edx, 1 (the default is present)
-            emit(0x52);                    // push rdx
+            op_load(OP_IMM, R_DX, 1);           // mov edx, 1 (the default is present)
+            op_push(R_DX);                    // push rdx
         }
-        emit(0x50);
+        op_push(R_AX);
         i = i + 1;
     }
     next_token();                        // consome ")"
     note_call(k);
-    emit(0xE8);                            // call method (patched at the end of the pass)
-    register_fixup(size_code, k, true);
-    emit_d(0);
+    op_call_method(k);                            // call method (patched at the end of the pass)
     np > 0 {
         total = 0;
         j = 0;
         np { total = total + size_param(base + j); j = j + 1; }
-        eb(0x48, 0x81, 0xC4);               // add rsp, size of the arguments
-        emit_d(total);
+        op_stack(total, 1);               // add rsp, size of the arguments
+        
     }
     call_end = size_code;
     r = s_type[k];
@@ -852,9 +844,7 @@ emit_default(e = 0) {
         :;
     }
     b == TYPE_STR {
-        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + string]
-        register_fixup(size_code, p_default[e], false);
-        emit_d(0);
+        op_lea_const(R_AX, p_default[e]);               // lea rax, [rip + string]
     } || {
         emit_immediate(p_default[e]);
     }

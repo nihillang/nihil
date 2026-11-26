@@ -135,6 +135,65 @@ op_load(k = 0, r = 0, v = 0, o = 0) {
     op_note(k, r, v, at, o);
 }
 
+// r ← the address of the constant at offset c (fixed up when the constants are placed)
+op_lea_const(r = 0, c = 0) {
+    at = size_code;
+    eb(0x48, 0x8D, 0x05 | (r << 3));        // lea r, [rip + rel32]
+    register_fixup(size_code, c, false);
+    emit_d(0);
+    op_note(OP_LEA_CONST, r, c, at);
+}
+
+// a call of the method k (fixed up at the end of the pass)
+op_call_method(k = 0) {
+    at = size_code;
+    emit(0xE8);
+    register_fixup(size_code, k, true);
+    emit_d(0);
+    op_note(OP_CALL, 0, k, at);
+}
+
+op_ret() {
+    at = size_code;
+    emit(0xC3);
+    op_note(OP_RET, 0, 0, at);
+}
+
+op_push(r = 0) {
+    at = size_code;
+    r >= 8 { emit(0x41); }
+    emit(0x50 | (r & 7));                  // push r
+    op_note(OP_PUSH, r, 0, at);
+}
+
+op_pop(r = 0) {
+    at = size_code;
+    r >= 8 { emit(0x41); }
+    emit(0x58 | (r & 7));                  // pop r
+    op_note(OP_POP, r, 0, at);
+}
+
+op_zero(r = 0) {
+    at = size_code;
+    eb(0x31, 0xC0 | (r << 3) | r);          // xor eR, eR
+    op_note(OP_ZERO, r, 0, at);
+}
+
+// rsp + n: n > 0 drops n bytes, n < 0 makes room; wide = 1: imm32 even when it fits a byte
+op_stack(n = 0, wide = 0) {
+    at = size_code;
+    m = n;
+    ext = 0xC4;                            // add rsp
+    n < 0 { m = -n; ext = 0xEC; }          // sub rsp
+    wide == 0 && m < 128 {
+        eb(0x48, 0x83, ext, m);
+    } || {
+        eb(0x48, 0x81, ext);
+        emit_d(m);
+    }
+    op_note(OP_STACK, 4, n, at, wide);
+}
+
 // rax ← rax ?cc rcx, 0 or 1
 op_cmp_set(cc = 0) {
     at = size_code;

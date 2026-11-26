@@ -34,14 +34,14 @@ map_kind(t = 0) {
 }
 
 emit_kind(kind = 0) {                   // mov eax, kind ; push rax
-    emit(0xB8);
-    emit_d(kind);
-    emit(0x50);
+    op_load(OP_IMM, R_AX, kind);
+    
+    op_push(R_AX);
 }
 
 // a new empty map of type t in rax (globals, parameter defaults)
 emit_new_map(t = 0) {
-    eb(0x31, 0xC0, 0x50);                   // xor eax, eax ; push rax (room for: any)
+    op_zero(R_AX); op_push(R_AX);                   // xor eax, eax ; push rax (room for: any)
     emit_kind(map_kind(t));
     call_prelude("__nihil_map_new", 16);
 }
@@ -70,7 +70,7 @@ map_literal() {
         put_type(kt);
         error_end();
     }
-    emit(0x50);                            // push rax (key)
+    op_push(R_AX);                            // push rax (key)
     expect(':', "':' between the key and the value ({key: value})");
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     vt = expression();
@@ -81,7 +81,7 @@ map_literal() {
         put_type(vt);
         error_end();
     }
-    emit(0x50);                            // push rax (value)
+    op_push(R_AX);                            // push rax (value)
     t = map_type(kt, vt);
     kind = 1;
     kt == TYPE_STR { kind = 3; }
@@ -97,19 +97,19 @@ map_literal() {
             put_type(u);
             error_end();
         }
-        emit(0x50);
+        op_push(R_AX);
         emit_kind(kind);
         call_prelude("__nihil_map_new", 16);
-        eb(0x48, 0x83, 0xC4, 0x10);         // add rsp, 16 (the sample pair)
+        op_stack(0x10);         // add rsp, 16 (the sample pair)
         expect('}', "'}'");
         slots = sv_slots;
         : t;
     }
-    eb(0x31, 0xC0, 0x50);                   // xor eax, eax ; push rax (room: grows by itself)
+    op_zero(R_AX); op_push(R_AX);                   // xor eax, eax ; push rax (room: grows by itself)
     emit_kind(kind);
     call_prelude("__nihil_map_new", 16);
     q_store(d);
-    emit(0x50);
+    op_push(R_AX);
     emit_kind(kind);
     call_prelude("__nihil_map_put", 32);   // (key, value, map, kind)
     * tok_type == ',' {
@@ -118,14 +118,14 @@ map_literal() {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
         u != kt && u != TYPE_UNKNOWN && kt != TYPE_UNKNOWN { map_mismatch("key", t, u, pi, pl, pn, pli); }
-        emit(0x50);
+        op_push(R_AX);
         expect(':', "':' between the key and the value");
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
         u != vt && u != TYPE_UNKNOWN && vt != TYPE_UNKNOWN { map_mismatch("value", t, u, pi, pl, pn, pli); }
-        emit(0x50);
+        op_push(R_AX);
         q_load(0, d);
-        emit(0x50);
+        op_push(R_AX);
         emit_kind(kind);
         call_prelude("__nihil_map_put", 32);
     }
@@ -151,13 +151,13 @@ map_mismatch(what = "", t = 0, u = 0, pi = 0, pl = 0, pn = 0, pli = 0) {
 
 // tok = "[" after a map (type t, in rax): m[k] → the value, or _ (V?)
 map_get(t = 0) {
-    emit(0x50);                            // push rax (map)
+    op_push(R_AX);                            // push rax (map)
     next_token();
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     u != map_key(t) && u != TYPE_UNKNOWN { map_mismatch("key", t, u, pi, pl, pn, pli); }
     expect(']', "']'");
-    emit(0x50);
+    op_push(R_AX);
     emit_kind(map_kind(t));
     call_prelude("__nihil_map_get", 24);   // rax = value, rdx = present
     : map_val(t) | TYPE_OPT;
@@ -166,13 +166,13 @@ map_get(t = 0) {
 // m[k] = v;  /  m[k] = _;  (tok = "[", variable k of map type t)
 map_assign(k = 0, t = 0) {
     emit_load_var(k);
-    emit(0x50);                            // push rax (map)
+    op_push(R_AX);                            // push rax (map)
     next_token();
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     u != map_key(t) && u != TYPE_UNKNOWN { map_mismatch("key", t, u, pi, pl, pn, pli); }
     expect(']', "']'");
-    emit(0x50);
+    op_push(R_AX);
     expect('=', "'='");
     tok_type == T_UNDERSCORE {
         next_token();
@@ -184,7 +184,7 @@ map_assign(k = 0, t = 0) {
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     u != map_val(t) && u != TYPE_UNKNOWN { map_mismatch("value", t, u, pi, pl, pn, pli); }
-    emit(0x50);
+    op_push(R_AX);
     emit_kind(map_kind(t));
     call_prelude("__nihil_map_set", 32);   // (map, key, value, kind)
     expect(';', "';'");
@@ -195,19 +195,19 @@ map_method(t = 0, ns = 0, nl = 0) {
     next_token();                        // name → "("
     next_token();
     name_is(ns, nl, "contains") || name_is(ns, nl, "has") {     // has: the older name, kept as a synonym
-        emit(0x50);
+        op_push(R_AX);
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
         u != map_key(t) && u != TYPE_UNKNOWN { map_mismatch("key", t, u, pi, pl, pn, pli); }
         expect(')', "')'");
-        emit(0x50);
+        op_push(R_AX);
         emit_kind(map_kind(t));
         call_prelude("__nihil_map_has", 24);
         : TYPE_BOOL;
     }
     name_is(ns, nl, "keys") || name_is(ns, nl, "values") {
         expect(')', "')': .keys() and .values() take nothing");
-        emit(0x50);
+        op_push(R_AX);
         name_is(ns, nl, "keys") {
             call_prelude("__nihil_map_keys", 8);
             : map_key(t) | TYPE_ARR;
@@ -265,7 +265,7 @@ list_elem(t = 0) { : mt_val[t >> 8]; }
 
 // a new empty list in rax (globals, parameter defaults)
 emit_new_list() {
-    eb(0x31, 0xC0, 0x50);                   // xor eax, eax ; push rax (room: the least)
+    op_zero(R_AX); op_push(R_AX);                   // xor eax, eax ; push rax (room: the least)
     call_prelude("__nihil_list_new", 8);
 }
 
@@ -273,7 +273,7 @@ emit_new_list() {
 list_literal(t = 0) {
     next_token();                          // "*" → "]" or the room
     tok_type == ']' {
-        eb(0x31, 0xC0);                     // xor eax, eax
+        op_zero(R_AX);                     // xor eax, eax
     } || {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
@@ -286,9 +286,9 @@ list_literal(t = 0) {
         }
     }
     expect(']', "']' (in [value ; *])");
-    emit(0x50);
+    op_push(R_AX);
     call_prelude("__nihil_list_new", 8);
-    eb(0x48, 0x83, 0xC4, 0x08);             // add rsp, 8 (the sample)
+    op_stack(0x08);             // add rsp, 8 (the sample)
     : list_type(t);
 }
 
@@ -315,11 +315,11 @@ index_int(u = 0) {
 
 // tok = "[" after a list (type t, in rax): v[i]
 list_get(t = 0) {
-    emit(0x50);                            // push rax (list)
+    op_push(R_AX);                            // push rax (list)
     next_token();
     index_int(expression());
     expect(']', "']'");
-    emit(0x50);
+    op_push(R_AX);
     call_prelude("__nihil_list_get", 16);
     : list_elem(t);
 }
@@ -327,7 +327,7 @@ list_get(t = 0) {
 // v[] = x;  /  v[i] = x;  (tok = "[", variable k: a list of type t, or of no type yet)
 list_assign(k = 0, t = 0) {
     emit_load_var(k);
-    emit(0x50);                            // push rax (list)
+    op_push(R_AX);                            // push rax (list)
     next_token();                          // "[" → "]" or the index
     tok_type == ']' {
         next_token();
@@ -335,19 +335,19 @@ list_assign(k = 0, t = 0) {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
         t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && u != list_elem(t) { list_mismatch(k, t, u, pi, pl, pn, pli); }
-        emit(0x50);
+        op_push(R_AX);
         list_call(t, "__nihil_list_push", 16);
         expect(';', "';'");
         :;
     }
     index_int(expression());
-    emit(0x50);
+    op_push(R_AX);
     expect(']', "']'");
     expect('=', "'='");
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && u != list_elem(t) { list_mismatch(k, t, u, pi, pl, pn, pli); }
-    emit(0x50);
+    op_push(R_AX);
     list_call(t, "__nihil_list_set", 24);
     expect(';', "';'");
 }
@@ -356,8 +356,8 @@ list_assign(k = 0, t = 0) {
 // early pass) only the arguments go away: the prelude may not be in the program at all
 list_call(t = 0, name = "", bytes_args = 0) {
     t == TYPE_UNKNOWN {
-        eb(0x48, 0x81, 0xC4);               // add rsp, bytes_args
-        emit_d(bytes_args);
+        op_stack(bytes_args, 1);               // add rsp, bytes_args
+        
         unknowns = unknowns + 1;
         :;
     }

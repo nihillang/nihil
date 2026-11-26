@@ -19,7 +19,7 @@ convert(from_ = 0, to = 0) {
     is_opt(to) {
         from_ == TYPE_ABSENT { : true; }              // _ already leaves rax = rdx = 0
         from_ == base_opt(to) {
-            eb(0xBA, 1, 0, 0, 0);                   // mov edx, 1
+            op_load(OP_IMM, R_DX, 1);                   // mov edx, 1
             : true;
         }
     }

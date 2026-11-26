@@ -395,13 +395,13 @@ call_tool_call() {
     ai = tok_start; al = tok_len; an = tok_line; ali = tok_lstart;
     u = expression();
     u != TYPE_STR && u != TYPE_UNKNOWN { error_op_types(ai, al, an, ali, u, 0); }
-    emit(0x50);                          // push rax: the name
+    op_push(R_AX);                          // push rax: the name
     expect(',', "',' and the arguments (a JSON object)");
     ai = tok_start; al = tok_len; an = tok_line; ali = tok_lstart;
     u = expression();
     u != TYPE_STR && u != TYPE_UNKNOWN { error_op_types(ai, al, an, ali, u, 0); }
     expect(')', "')'");
-    emit(0x50);                          // push rax: the arguments; [rsp] arguments, [rsp+8] name
+    op_push(R_AX);                          // push rax: the arguments; [rsp] arguments, [rsp+8] name
     // the names, separated by spaces → the index of the one asked for (or -1)
     const_init();
     count = 0;
@@ -442,19 +442,17 @@ call_tool_call() {
                     call_prelude("__nihil_tool_str", 24);
                 } || {
                     eb(0x48, 0xB8); emit_q(p_default[e]);   // mov rax, default ; push rax
-                    emit(0x50);
+                    op_push(R_AX);
                     t == TYPE_INT { call_prelude("__nihil_tool_int", 24); }
                     t == TYPE_FLOAT { call_prelude("__nihil_tool_float", 24); }
                     t == TYPE_BOOL { call_prelude("__nihil_tool_bool", 24); }
                 }
-                emit(0x50);
+                op_push(R_AX);
                 j = j + 1;
             }
             note_call(k);
-            emit(0xE8);
-            register_fixup(size_code, k, true);
-            emit_d(0);
-            s_nparam[k] > 0 { eb(0x48, 0x81, 0xC4); emit_d(8 * s_nparam[k]); }
+            op_call_method(k);
+            s_nparam[k] > 0 { op_stack(8 * s_nparam[k], 1);  }
             r = s_type[k];
             r == 0 {
                 final_pass {
@@ -468,11 +466,11 @@ call_tool_call() {
             } || r == TYPE_NONE {
                 const_init();
                 push_const(const_close());
-                emit(0x58);              // pop rax: ""
+                op_pop(R_AX);              // pop rax: ""
             } || r != TYPE_STR {
                 emit_to_json(r);
             }
-            eb(0xBA, 1, 0, 0, 0);        // mov edx, 1
+            op_load(OP_IMM, R_DX, 1);        // mov edx, 1
             emit(0xE9);                  // jmp the end
             dones[nd] = size_code;
             nd = nd + 1;
@@ -485,7 +483,7 @@ call_tool_call() {
     eb(0x31, 0xC0, 0x31, 0xD2);          // xor eax, eax ; xor edx, edx: no such tool
     d = 0;
     * d < nd { patch_here(dones[d]); d = d + 1; }
-    eb(0x48, 0x83, 0xC4, 16);            // add rsp, 16
+    op_stack(16);            // add rsp, 16
     call_end = size_code;                // a call: ?call_tool(…) protects it
     : TYPE_STR | TYPE_OPT;
 }
@@ -516,7 +514,7 @@ library_call(t = 0) {
     }
     is_list(t) && !name_is(ns, nl, "to_json") {
         // a LIST: v.array() copies its items to an ARRAY; every other method is the ARRAY's, on that copy
-        emit(0x50);
+        op_push(R_AX);
         call_prelude("__nihil_list_array", 8);
         name_is(ns, nl, "array") {
             next_token();                // name → "("
@@ -545,7 +543,7 @@ library_call(t = 0) {
     #target == 0 { lib_missing(t, ns, nl); }
     k = lookup_text(target);
     k < 0 || s_flags[k] & FLAG_METHOD == 0 { error_general("internal error: the library was not included"); }
-    emit(0x50);                            // push rax: the value is the first argument
+    op_push(R_AX);                            // push rax: the value is the first argument
     sv_k = lib_k; sv_s = lib_name_start; sv_l = lib_name_len;
     lib_k = k; lib_name_start = ns; lib_name_len = nl;
     r = call_method(k, 1);
@@ -587,7 +585,7 @@ model_method_call(t = 0, ns = 0, nl = 0) {
         }
         error_end();
     }
-    emit(0x50);                            // push rax: the record is the first argument
+    op_push(R_AX);                            // push rax: the record is the first argument
     sv_k = lib_k; sv_s = lib_name_start; sv_l = lib_name_len;
     lib_k = k; lib_name_start = ns; lib_name_len = nl;
     r = call_method(k, 1);
@@ -810,12 +808,13 @@ query_call(t = 0) {
     }
     kind == 4 {
         q_load(0, d_arr);
-        emit(0x50);
+        op_push(R_AX);
         q_load(0, d_res);
-        emit(0x50);
-        emit(0xB8);                        // mov eax, kind of key ; push rax
-        u == TYPE_UNKNOWN { emit_d(1); } || { emit_d(u); }
-        emit(0x50);
+        op_push(R_AX);
+        key_kind = u;                      // mov eax, kind of key ; push rax
+        u == TYPE_UNKNOWN { key_kind = 1; }
+        op_load(OP_IMM, R_AX, key_kind);
+        op_push(R_AX);
         call_prelude("__nihil_sort_by", 24);
     }
     kind == 5 {

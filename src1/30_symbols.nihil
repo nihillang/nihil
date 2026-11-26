@@ -123,12 +123,10 @@ call_prelude(name = "", bytes_args = 0) {
         error_general("internal error: the prelude was not included");
     }
     note_call(k);
-    emit(0xE8);
-    register_fixup(size_code, k, true);
-    emit_d(0);
+    op_call_method(k);
     bytes_args > 0 {
-        eb(0x48, 0x81, 0xC4);               // add rsp, bytes_args
-        emit_d(bytes_args);
+        op_stack(bytes_args, 1);               // add rsp, bytes_args
+        
     }
 }
 

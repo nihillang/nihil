@@ -150,7 +150,7 @@ one_pass() {
     * tok_type != T_END { command(); }
 
     put_d(pos_frame, (max_slots * 8 + 15) & -16);
-    eb(0x31, 0xFF);                         // xor edi, edi
+    op_zero(R_DI);                         // xor edi, edi
     emit_call_rt(RT_EXIT);
 
     // inicializa_globals: every STRING or ARRAY global starts empty
@@ -160,9 +160,7 @@ one_pass() {
         s_flags[i] & FLAG_TOP != 0 {
             // kept at the top level: created by its first assignment, before any read
         } || s_flags[i] & FLAG_GLOBAL != 0 && (s_type[i] == TYPE_STR || s_type[i] & TYPE_ARR != 0) {
-            eb(0x48, 0x8D, 0x05);           // lea rax, [rip + ""]
-            register_fixup(size_code, const_empty, false);
-            emit_d(0);
+            op_lea_const(R_AX, const_empty);           // lea rax, [rip + ""]
             emit_store_global(s_end[i]);
         }
         s_flags[i] & FLAG_TOP == 0 && s_flags[i] & FLAG_GLOBAL != 0 && is_map(s_type[i]) {
@@ -179,7 +177,7 @@ one_pass() {
         }
         i = i + 1;
     }
-    emit(0xC3);                            // ret
+    op_ret();
     emit_constantes();
     close_elf();
 }

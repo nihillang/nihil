@@ -361,7 +361,7 @@ cmd_field_assign() {
     }
     next_token();                        // field → "="
     next_token();
-    emit(0x50);                            // push rax (the record)
+    op_push(R_AX);                            // push rax (the record)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     v = expression();
     v != TYPE_UNKNOWN && ft != TYPE_UNKNOWN && v != ft {
@@ -384,15 +384,13 @@ cmd_field_assign() {
 // ---- new records ---------------------------------------------------------------
 // rax = a new record of model m: zeros, and "" in the STRING fields
 emit_alloc_record(m = 0) {
-    emit(0xB9);                            // mov ecx, n
-    emit_d(m_n[m]);
+    op_load(OP_IMM, R_CX, m_n[m]);                            // mov ecx, n
+    
     emit_call_rt(RT_ALLOC);
     j = 0;
     m_n[m] {
         f_type[m_first[m] + j] == TYPE_STR {
-            eb(0x48, 0x8D, 0x0D);           // lea rcx, [rip + ""]
-            register_fixup(size_code, const_empty, false);
-            emit_d(0);
+            op_lea_const(R_CX, const_empty);           // lea rcx, [rip + ""]
             eb(0x48, 0x89, 0x88);           // mov [rax + disp32], rcx
             emit_d(j * 8);
         }
@@ -435,7 +433,7 @@ new_record(k = 0) {
             f_type[e] == TYPE_FLOAT && u == TYPE_INT { put_str(" (write 12.0, or .n to convert)"); }
             error_end();
         }
-        emit(0x50);                        // push rax
+        op_push(R_AX);                        // push rax
         i = i + 1;
         tok_type == ',' {
             next_token();
@@ -476,7 +474,7 @@ model_from_json(k = 0) {
     u = expression();
     u != TYPE_STR && u != TYPE_UNKNOWN { error_op_types(pi, pl, pn, pli, u, 0); }
     expect(')', "')'");
-    emit(0x50);
+    op_push(R_AX);
     push_model(m);
     items {
         call_prelude("__nihil_r_from_json_items", 32);
@@ -488,10 +486,8 @@ model_from_json(k = 0) {
 
 // ---- files and text ----------------------------------------------------------
 push_const(c = 0) {
-    eb(0x48, 0x8D, 0x05);                   // lea rax, [rip + constant] ; push rax
-    register_fixup(size_code, c, false);
-    emit_d(0);
-    emit(0x50);
+    op_lea_const(R_AX, c);                   // lea rax, [rip + constant] ; push rax
+    op_push(R_AX);
 }
 
 push_model(m = 0) {
@@ -503,7 +499,7 @@ push_model(m = 0) {
 // rax = a record or an ARRAY of records (type t) → rax = its fixed-width text
 emit_rec_text(t = 0) {
     m = (t & ~TYPE_ARR) >> 8;
-    emit(0x50);
+    op_push(R_AX);
     push_model(m);
     is_rec(t) {
         call_prelude("__nihil_rec_text", 32);
@@ -550,9 +546,9 @@ table_read(k = 0) {
     tok_type == '#' && !opt { : record_count(m); }
     tok_type == '{' { : record_by_key(m, opt); }
     model_path(m, "@");
-    emit(0x50);                            // push rax (the path)
-    opt { emit(0xB8); emit_d(1); } || { emit(0xB8); emit_d(0); }   // mov eax, @? or @
-    emit(0x50);
+    op_push(R_AX);                            // push rax (the path)
+    opt { op_load(OP_IMM, R_AX, 1);  } || { op_load(OP_IMM, R_AX, 0);  }   // mov eax, @? or @
+    op_push(R_AX);
     push_model(m);
     call_prelude("__nihil_table_load", 40);   // read in parts (the file is never whole in memory)
     : model_type(m) | TYPE_ARR;
@@ -571,9 +567,9 @@ record_at(m = 0, opt = false) {
         error_end();
     }
     expect(']', "']'");
-    emit(0x50);                            // push rax (i)
+    op_push(R_AX);                            // push rax (i)
     model_path(m, "@[i]");
-    emit(0x50);                            // push rax (path)
+    op_push(R_AX);                            // push rax (path)
     w = line_width(m);
     eb(0x48, 0x8B, 0x4C, 0x24, 0x08);       // mov rcx, [rsp + 8] (i)
     eb(0x48, 0x69, 0xC9);                   // imul rcx, rcx, width
@@ -583,8 +579,8 @@ record_at(m = 0, opt = false) {
     emit_call_rt(RT_READ_AT);             // rax = the line (0: no file), rdx = size
     eb(0x50, 0x52);                         // push rax ; push rdx
     push_model(m);
-    opt { eb(0xB8, 1, 0, 0, 0); } || { eb(0x31, 0xC0); }
-    emit(0x50);                            // push the "optional" flag
+    opt { op_load(OP_IMM, R_AX, 1); } || { op_zero(R_AX); }
+    op_push(R_AX);                            // push the "optional" flag
     call_prelude("__nihil_rec_at", 64);
     opt {
         eb(0x31, 0xD2, 0x48, 0x85, 0xC0, 0x0F, 0x95, 0xC2);   // xor edx,edx ; test rax,rax ; setne dl
@@ -597,10 +593,10 @@ record_at(m = 0, opt = false) {
 record_count(m = 0) {
     next_token();
     model_path(m, "@#");
-    emit(0x50);                            // push rax (path)
+    op_push(R_AX);                            // push rax (path)
     eb(0x31, 0xC9, 0x31, 0xD2);             // xor ecx, ecx ; xor edx, edx (read nothing)
     emit_call_rt(RT_READ_AT);
-    emit(0x52);                            // push rdx (size)
+    op_push(R_DX);                            // push rdx (size)
     push_const(m_schema[m]);
     push_const(m_title[m]);
     call_prelude("__nihil_rec_count", 32);
@@ -623,12 +619,12 @@ cmd_write_record() {
     }
     expect(']', "']'");
     expect(T_SHR, "'>>' after '@[i]'");
-    emit(0x50);                            // push rax (i)
+    op_push(R_AX);                            // push rax (i)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     write_file_arg(u, "@[i]>>", "the path", pi, pl, pn, pli);
     expect(',', "',' between the path and the record");
-    emit(0x50);                            // push rax (path)
+    op_push(R_AX);                            // push rax (path)
     eb(0xFF, 0x74, 0x24, 0x08);             // push [rsp + 8] (i, for the prelude)
     eb(0xFF, 0x74, 0x24, 0x08);             // push [rsp + 8] (path)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
@@ -637,21 +633,21 @@ cmd_write_record() {
         m = t >> 8;
         w = line_width(m);
         m_key[m] >= 0 {
-            emit(0x50);                    // push rax (the record)
+            op_push(R_AX);                    // push rax (the record)
             push_model(m);
-            emit(0xB8);                    // mov eax, key field ; push rax
-            emit_d(m_key[m]);
-            emit(0x50);
+            op_load(OP_IMM, R_AX, m_key[m]);                    // mov eax, key field ; push rax
+            
+            op_push(R_AX);
             call_prelude("__nihil_key_write_at", 56);   // writes it and keeps the index right
-            eb(0x48, 0x83, 0xC4, 0x10);     // add rsp, 16 (i, path)
+            op_stack(0x10);     // add rsp, 16 (i, path)
             expect(';', "';'");
             :;
         }
-        emit(0x50);                        // push rax (the record)
+        op_push(R_AX);                        // push rax (the record)
         eb(0x48, 0x8B, 0x44, 0x24, 0x08);   // mov rax, [rsp + 8] (path)
         eb(0x31, 0xC9, 0x31, 0xD2);         // xor ecx, ecx ; xor edx, edx (only the size)
         emit_call_rt(RT_READ_AT);
-        emit(0x52);                        // push rdx (size)
+        op_push(R_DX);                        // push rdx (size)
         push_model(m);
         call_prelude("__nihil_rec_place", 56);   // rax = the line (with a "\n" before it, if the last line lacks one)
         eb(0x48, 0x89, 0xC1);               // mov rcx, rax (the text)
@@ -660,8 +656,8 @@ cmd_write_record() {
         eb(0x48, 0x69, 0xD2);               // imul rdx, rdx, width
         emit_d(w);
         eb(0x48, 0x2B, 0x51, 0xF8);         // sub rdx, [rcx - 8]: the line ends where line i ends
-        emit(0x58);                        // pop rax (path)
-        eb(0x48, 0x83, 0xC4, 0x08);         // add rsp, 8 (i)
+        op_pop(R_AX);                        // pop rax (path)
+        op_stack(0x08);         // add rsp, 8 (i)
         emit_call_rt(RT_WRITE_AT);
     } || {
         t != TYPE_UNKNOWN {
@@ -672,7 +668,7 @@ cmd_write_record() {
             is_rec_array(t) { put_str(" (write one record: rows[j], or the whole table with @>>)"); }
             error_end();
         }
-        eb(0x48, 0x83, 0xC4, 0x20);         // add rsp, 32
+        op_stack(0x20);         // add rsp, 32
     }
     expect(';', "';'");
 }
@@ -694,13 +690,13 @@ model_key(m = 0) {
 record_by_key(m = 0, opt = false) {
     kf = key_expression(m);
     model_path(m, "@{key}");
-    emit(0x50);                            // push rax (path)
+    op_push(R_AX);                            // push rax (path)
     push_model(m);
-    emit(0xB8);                            // mov eax, key field ; push rax
-    emit_d(kf);
-    emit(0x50);
-    opt { eb(0xB8, 1, 0, 0, 0); } || { eb(0x31, 0xC0); }
-    emit(0x50);                            // push the "optional" flag
+    op_load(OP_IMM, R_AX, kf);                            // mov eax, key field ; push rax
+    
+    op_push(R_AX);
+    opt { op_load(OP_IMM, R_AX, 1); } || { op_zero(R_AX); }
+    op_push(R_AX);                            // push the "optional" flag
     call_prelude("__nihil_key_get", 56);
     opt {
         eb(0x31, 0xD2, 0x48, 0x85, 0xC0, 0x0F, 0x95, 0xC2);   // xor edx,edx ; test rax,rax ; setne dl
@@ -731,7 +727,7 @@ key_expression(m = 0) {
         error_end();
     }
     expect('}', "'}'");
-    emit(0x50);                            // push rax (the key)
+    op_push(R_AX);                            // push rax (the key)
     : kf;
 }
 
@@ -756,13 +752,13 @@ cmd_key_delete(k = 0) {
     next_token();                        // → "{"
     kf = key_expression(m);
     model_path(m, "@{key}");
-    emit(0x50);                            // push rax (path)
+    op_push(R_AX);                            // push rax (path)
     push_model(m);
-    emit(0xB8);                            // mov eax, key field ; push rax
-    emit_d(kf);
-    emit(0x50);
-    opt { eb(0xB8, 1, 0, 0, 0); } || { eb(0x31, 0xC0); }
-    emit(0x50);
+    op_load(OP_IMM, R_AX, kf);                            // mov eax, key field ; push rax
+    
+    op_push(R_AX);
+    opt { op_load(OP_IMM, R_AX, 1); } || { op_zero(R_AX); }
+    op_push(R_AX);
     expect('=', "'= _;' (NAME @{key} path = _; deletes that record)");
     tok_type != T_UNDERSCORE { error_expected("'_': a record is deleted with NAME @{key} path = _; and written with @{}>> path, r;"); }
     next_token();
@@ -781,18 +777,18 @@ cmd_put_key() {
     u = expression();
     write_file_arg(u, "@{}>>", "the path", pi, pl, pn, pli);
     expect(',', "',' between the path and the record");
-    emit(0x50);                            // push rax (path)
+    op_push(R_AX);                            // push rax (path)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
     is_rec(t) {
         m = t >> 8;
         m_key[m] < 0 { restore_pos(pi, pl, pn, pli); }
         kf = model_key(m);
-        emit(0x50);                        // push rax (the record)
+        op_push(R_AX);                        // push rax (the record)
         push_model(m);
-        emit(0xB8);                        // mov eax, key field ; push rax
-        emit_d(kf);
-        emit(0x50);
+        op_load(OP_IMM, R_AX, kf);                        // mov eax, key field ; push rax
+        
+        op_push(R_AX);
         m_auto[m] { call_prelude("__nihil_key_put_auto", 48); } || { call_prelude("__nihil_key_put", 48); }
     } || {
         t != TYPE_UNKNOWN {
@@ -802,7 +798,7 @@ cmd_put_key() {
             put_type(t);
             error_end();
         }
-        eb(0x48, 0x83, 0xC4, 0x08);         // add rsp, 8
+        op_stack(0x08);         // add rsp, 8
     }
     expect(';', "';'");
 }
@@ -823,7 +819,7 @@ file_intrinsic(kind = 0) {
         expect(')', "')'");
         : TYPE_INT;
     }
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
     kind >= 6 {                            // __nihil_truncate(path, size), _ns
@@ -833,7 +829,7 @@ file_intrinsic(kind = 0) {
         expect(')', "')'");
         : TYPE_NONE;
     }
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
     kind == 3 {
@@ -863,7 +859,7 @@ net_intrinsic(kind = 0) {
         kind == 5 { : TYPE_NONE; }
         : TYPE_INT;
     }
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
     eb(0x48, 0x89, 0xC1, 0x58);             // mov rcx, rax ; pop rax
@@ -882,10 +878,10 @@ copy_intrinsic(kind = 0) {
     next_token();                        // name → "("
     next_token();
     expression();
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
     eb(0x48, 0x89, 0xC2, 0x59, 0x58);       // mov rdx, rax ; pop rcx ; pop rax
@@ -904,7 +900,7 @@ json_intrinsic(kind = 0) {
     next_token();                        // name → "("
     next_token();
     expression();
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
     eb(0x48, 0x89, 0xC1, 0x58);             // mov rcx, rax ; pop rax
@@ -923,7 +919,7 @@ syscall_intrinsic() {
     next_token();
     tok_type == '[' && optimize {
         next_token();
-        eb(0x48, 0x83, 0xEC, 0x40);         // sub rsp, 64
+        op_stack(-0x40);         // sub rsp, 64
         n = 0;
         * tok_type != ']' {
             n == 7 { error("__nihil_syscall takes [n, a1 … a6]"); }
@@ -939,7 +935,7 @@ syscall_intrinsic() {
         emit_d(n);
         eb(0x48, 0x8D, 0x44, 0x24, 0x08);   // lea rax, [rsp + 8]
         emit_call_rt(RT_SYSCALL);
-        eb(0x48, 0x83, 0xC4, 0x40);         // add rsp, 64
+        op_stack(0x40);         // add rsp, 64
         call_end = size_code;
         expect(')', "')'");
         : TYPE_INT;
@@ -959,7 +955,7 @@ bytes_intrinsic(kind = 0) {
     next_token();
     expression();
     kind == 1 {
-        emit(0x50);                        // push rax (n)
+        op_push(R_AX);                        // push rax (n)
         eb(0x48, 0x8D, 0x48, 0x08);         // lea rcx, [rax + 8]
         eb(0x48, 0xC1, 0xE9, 0x03);         // shr rcx, 3: n + 1 bytes, in qwords
         emit_call_rt(RT_ALLOC);            // zeroed memory
@@ -967,10 +963,10 @@ bytes_intrinsic(kind = 0) {
         expect(')', "')'");
         : TYPE_STR;
     }
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
-    emit(0x50);
+    op_push(R_AX);
     expect(',', "','");
     expression();
     eb(0x59, 0x5A, 0x88, 0x04, 0x0A);       // pop rcx ; pop rdx ; mov [rdx + rcx], al

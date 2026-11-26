@@ -206,6 +206,16 @@ CC_LE = 14;
 CC_G = 15;
 R_AX = 0;               // the registers, in x86's numbering: rax, the value
 R_CX = 1;               // rcx, the second operand
+R_DX = 2;               // rdx, an optional's presence
+R_SI = 6;
+R_DI = 7;
+OP_LEA_CONST = 13;      // r ← the address of the constant at offset v
+OP_CALL = 14;           // a call of the method v (its symbol)
+OP_RET = 15;
+OP_PUSH = 9;            // push r
+OP_POP = 10;            // pop r
+OP_ZERO = 11;           // r ← 0 (xor)
+OP_STACK = 12;          // the stack pointer + v (v < 0: room; v > 0: dropped); o = 1: the wide x86 form
 OPS_RING = 256;
 op_at = [0 ; OPS_RING];     // where its code starts
 op_end = [0 ; OPS_RING];    // where its code ends

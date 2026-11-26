@@ -559,9 +559,7 @@ cmd_method(k = 0) {
         const_put_source(s_ofs[k], s_len[k]);
         const_put_str("' ended without returning a value (missing ': value;')");
         m = const_close();
-        eb(0x48, 0x8D, 0x35);               // lea rsi, [rip + mensagem]
-        register_fixup(size_code, m, false);
-        emit_d(0);
+        op_lea_const(R_SI, m);               // lea rsi, [rip + mensagem]
         emit_call_rt(RT_ERROR);
     }
     put_d(frame, (max_slots * 8 + 15) & -16);
@@ -595,10 +593,10 @@ cmd_print() {
     t & TYPE_MAP != 0 { error("'>>' does not print a whole MAP: print m[k], or loop over m.keys()"); }
     base_opt(t) == TYPE_FLOAT {
         // FLOAT: the prelude formats it (bits, present, error)
-        emit(0x50);                        // push rax
-        is_opt(t) { emit(0x52); } || { eb(0xB8, 1, 0, 0, 0); emit(0x50); }
-        eb(0x31, 0xC0);                     // error = false
-        emit(0x50);
+        op_push(R_AX);                        // push rax
+        is_opt(t) { op_push(R_DX); } || { op_load(OP_IMM, R_AX, 1); op_push(R_AX); }
+        op_zero(R_AX);                     // error = false
+        op_push(R_AX);
         call_prelude("__nihil_print_float", 24);
         expect(';', "';'");
         :;
@@ -637,10 +635,10 @@ cmd_print_error() {
     t & TYPE_MAP != 0 { error("'!>>' does not print a whole MAP: print m[k], or loop over m.keys()"); }
     base_opt(t) == TYPE_FLOAT {
         // FLOAT: the prelude formats it (bits, present, error)
-        emit(0x50);                        // push rax
-        is_opt(t) { emit(0x52); } || { eb(0xB8, 1, 0, 0, 0); emit(0x50); }
-        eb(0xB8, 1, 0, 0, 0);               // error = true
-        emit(0x50);
+        op_push(R_AX);                        // push rax
+        is_opt(t) { op_push(R_DX); } || { op_load(OP_IMM, R_AX, 1); op_push(R_AX); }
+        op_load(OP_IMM, R_AX, 1);               // error = true
+        op_push(R_AX);
         call_prelude("__nihil_print_float", 24);
         expect(';', "';'");
         :;
@@ -694,7 +692,7 @@ cmd_write_file(kind = 0) {
     t = expression();
     write_file_arg(t, op, "the path", pi, pl, pn, pli);
     expect(',', "',' between the path and the text");
-    emit(0x50);                            // push rax (the path)
+    op_push(R_AX);                            // push rax (the path)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
     is_rec(t) || is_rec_array(t) {
@@ -703,7 +701,7 @@ cmd_write_file(kind = 0) {
     }
     write_file_arg(t, op, "the text", pi, pl, pn, pli);
     eb(0x48, 0x89, 0xC1);                   // mov rcx, rax (the text)
-    emit(0x58);                            // pop rax (the path)
+    op_pop(R_AX);                            // pop rax (the path)
     kind == T_APPEND_FILE { emit_call_rt(RT_APPEND_FILE); } || { emit_call_rt(RT_WRITE_FILE); }
     expect(';', "';'");
 }
@@ -725,7 +723,7 @@ write_file_arg(t = 0, op = "", what = "", pi = 0, pl = 0, pn = 0, pli = 0) {
 cmd_exit() {
     next_token();
     tok_type == ';' {
-        eb(0x31, 0xFF);                     // xor edi, edi
+        op_zero(R_DI);                     // xor edi, edi
     } || {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         t = expression();
@@ -804,12 +802,10 @@ cmd_read_line() {
         eb(0x48, 0x85, 0xD2);               // test rdx, rdx
         b == TYPE_STR {
             eb(0x75, 7);                    // jnz +7
-            eb(0x48, 0x8D, 0x05);           // lea rax, [rip + ""]
-            register_fixup(size_code, const_empty, false);
-            emit_d(0);
+            op_lea_const(R_AX, const_empty);           // lea rax, [rip + ""]
         } || {
             eb(0x75, 2);                    // jnz +2
-            eb(0x31, 0xC0);                 // xor eax, eax (0, false, 0.0)
+            op_zero(R_AX);                 // xor eax, eax (0, false, 0.0)
         }
     }
     emit_store_var(k);
@@ -830,7 +826,7 @@ cmd_return() {
     method_current >= 0 { method_return(); :; }
     next_token();
     tok_type == ';' {
-        eb(0x31, 0xFF);                     // xor edi, edi
+        op_zero(R_DI);                     // xor edi, edi
     } || {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         t = expression();
@@ -1284,7 +1280,7 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
         put_type(u);
         error_end();
     }
-    emit(0x50);                            // push rax  (index)
+    op_push(R_AX);                            // push rax  (index)
     expect(']', "']'");
     expect('=', "'='");
     v = expression();
