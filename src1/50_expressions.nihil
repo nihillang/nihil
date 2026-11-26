@@ -454,7 +454,7 @@ fail_intrinsic() {
     : TYPE_NONE;
 }
 
-// record.name(…) through a model some descendants replace name in (SPEC §20.11): the receiver,
+// record.name(…) through a model some descendants replace name in (SPEC §20.10): the receiver,
 // pushed first, is read back from under the arguments; the model in its block header (m + 1, the
 // top 16 bits) picks the call; anything else (k's own models, a record with no model) calls k.
 // Only compares, direct calls and jumps (what the macOS translator takes); every branch ends at

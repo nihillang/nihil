@@ -591,7 +591,7 @@ model_method_call(t = 0, ns = 0, nl = 0) {
     }
     emit(0x50);                            // push rax: the record is the first argument
     // the descendants of the static model whose own (or nearest inherited) method is not k: the
-    // call tests the record's real model for them (SPEC §20.11); none: a plain call, as before
+    // call tests the record's real model for them (SPEC §20.10); none: a plain call, as before
     s = t >> 8;
     dn = 0;
     o = 0;

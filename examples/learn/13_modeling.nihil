@@ -79,3 +79,8 @@ wallets[] = savings;
 in_all = 0;
 wallets : w { in_all = in_all + w.left(); }
 >> "in all wallets: " + $in_all + "\n";
+
+// SAVINGS replaces WALLET's describe: a call through a WALLET runs the record's own model's
+WALLET.describe(w = WALLET()) { : w.owner + ": " + $w.left(); }
+SAVINGS.describe(s = SAVINGS()) { : s.owner + ": " + $s.left() + " at " + $s.rate + "%"; }
+wallets : w { >> w.describe() + "\n"; }

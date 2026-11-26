@@ -1059,7 +1059,7 @@ bytes_intrinsic(kind = 0) {
     : TYPE_NONE;
 }
 
-// a record's model (SPEC §20.10): __nihil_set_model(r, tag) ORs tag (a schema's last word) into the
+// a record's model (SPEC §20.11): __nihil_set_model(r, tag) ORs tag (a schema's last word) into the
 // header of r, a block just made; __nihil_model_of(r) → the model + 1 its header holds, 0 for none
 model_intrinsic(kind = 0) {
     next_token();                        // name → "("

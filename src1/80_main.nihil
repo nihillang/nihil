@@ -247,7 +247,7 @@ one_pass() {
     close_elf();
 }
 
-// once the types settled: a method that replaces an inherited one (SPEC §20.11) returns the same
+// once the types settled: a method that replaces an inherited one (SPEC §20.10) returns the same
 // type, so a call through the parent gets what it expects whichever model's runs; checked also for
 // a replacement no call reaches
 check_replacements() {

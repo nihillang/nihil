@@ -232,7 +232,7 @@ descends(m = 0, a = 0) {
 
 // MODEL.name may replace a method its parent (or an ancestor) declares, and be replaced by a
 // child's, when they take the same parameters after the first (the receiver, each declaration's own
-// model): a call through the parent then runs the record's real model's (SPEC §20.11). The return
+// model): a call through the parent then runs the record's real model's (SPEC §20.10). The return
 // types are compared once they settle (check_replacements). Both orders are checked, since methods
 // are registered in the order they are written. k: the method being registered.
 no_replacement(m = 0, start = 0, n = 0, ns = 0, nl = 0, k = 0) {

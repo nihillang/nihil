@@ -1,6 +1,7 @@
 # Replacing an inherited method: dispatch — design note
 
-Status: **reviewed by Codex twice, not implemented.** `main` at `1405752`: models built from another
+Status: **implemented** (SPEC §20.10 and §20.11), after two reviews by Codex. What follows is the
+design as reviewed. `main` at `1405752`: models built from another
 (SPEC §20.8), a child accepted where its parent is expected at the edges (§20.9), and a compile error
 for a method that would replace an inherited one (`no_replacement()` in `src1/70_prescan.nihil`).
 Planned as two pull requests: the model number in the block header (no dispatch), then dispatch.
