@@ -129,7 +129,7 @@ PRODUCT @{3} FILE = _;                      // delete by key</pre>
             <tr><td><code>xs : x, i { … }</code></td><td>each element of an array (or byte of a text), and its index</td></tr>
             <tr><td><code>f(a = 0, s = "") { … }</code></td><td>a method; every parameter has a default, which gives its type</td></tr>
             <tr><td><code>M.f(m = M()) { … }</code>, <code>_x</code></td><td>a method of the model <code>M</code>; a field named <code>_x</code> is private to those methods</td></tr>
-            <tr><td><code>C = @[M; y: INT(3)];</code></td><td>a model that starts from <code>M</code>'s fields and methods</td></tr>
+            <tr><td><code>C = @[M; y: INT(3)];</code></td><td>a model that starts from <code>M</code>'s fields and methods; a <code>C</code> goes where an <code>M</code> is expected as an argument or a collection's element</td></tr>
             <tr><td><code>: value;</code></td><td>return</td></tr>
             <tr><td><code>&gt;&gt; x;</code> / <code>&lt;&lt; x;</code></td><td>write to standard output / read a line</td></tr>
             <tr><td><code>x? = 5;</code>, <code>x || 0</code>, <code>x == _</code></td><td>optionals: a value that may be missing</td></tr>

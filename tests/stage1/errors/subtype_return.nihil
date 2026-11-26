@@ -1,0 +1,5 @@
+// a method returns one type: a parent and a child are not joined
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+quem(b = true) { b { : PESSOA("Rui"); } : ALUNO("Ana", "3B"); }
+>> quem().nome;

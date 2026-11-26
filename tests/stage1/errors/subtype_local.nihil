@@ -1,0 +1,5 @@
+// a local keeps the type of its first assignment: a child, then its parent, is an error
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+x = ALUNO("Ana", "3B");
+x = PESSOA("Rui");
