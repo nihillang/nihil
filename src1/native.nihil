@@ -837,3 +837,167 @@ __nihil_rt_read_byte() {
     __nihil_rt_in_pos = 1;
     : __nihil_peekb(__nihil_rt_in_buf);
 }
+
+// ---- reading texts: JSON values, lines of a fixed width, a table's records ----
+
+// the end of the JSON string that starts at s[i] ('"') → after its closing '"', or -1
+__nihil_rt_json_string(s = 0, n = 0, i = 0) {
+    i = i + 1;
+    * i < n {
+        __c = __nihil_peekb(s + i);
+        i = i + 1;
+        __c == '"' { : i; }
+        __c == 92 { i = i + 1; }
+    }
+    : -1;
+}
+
+__nihil_rt_json_space(c = 0) { : c == ' ' || c == 10 || c == 13 || c == 9; }
+
+// json_end(s, i): the end of the JSON value at s[i] (after blanks) → the index after it, or -1
+__nihil_rt_json_end(s = 0, i = 0) {
+    __n = __nihil_peek(s - 8);
+    i < 0 { : -1; }
+    * i < __n && __nihil_rt_json_space(__nihil_peekb(s + i)) { i = i + 1; }
+    i >= __n { : -1; }
+    __c = __nihil_peekb(s + i);
+    __c == '"' { : __nihil_rt_json_string(s, __n, i); }
+    __c == '{' || __c == '[' {
+        __depth = 0;
+        * i < __n {
+            __c = __nihil_peekb(s + i);
+            __c == '"' {
+                i = __nihil_rt_json_string(s, __n, i);
+                i < 0 { : -1; }
+            } || {
+                i = i + 1;
+                __c == '{' || __c == '[' { __depth = __depth + 1; }
+                || __c == '}' || __c == ']' { __depth = __depth - 1; __depth == 0 { : i; } }
+            }
+        }
+        : -1;
+    }
+    __start = i;
+    * i < __n {
+        __c = __nihil_peekb(s + i);
+        __c == ',' || __c == '}' || __c == ']' || __nihil_rt_json_space(__c) { __n = i; } || { i = i + 1; }
+    }
+    i == __start { : -1; }
+    : i;
+}
+
+// lines(s, w): how many lines of w characters (and a line break) s has, or -1 if it is not so
+__nihil_rt_lines(s = 0, w = 0) {
+    __n = __nihil_peek(s - 8);
+    w <= 0 { : -1; }
+    __n == 0 { : 0; }
+    __whole = __n / (w + 1);
+    __rest = __n % (w + 1);
+    __lines = __whole;
+    __rest != 0 { __rest != w { : -1; } __lines = __lines + 1; }
+    __k = 0;
+    * __k < __whole { __nihil_peekb(s + __k * (w + 1) + w) != 10 { : -1; } __k = __k + 1; }
+    __breaks = 0;
+    __i = 0;
+    * __i < __n { __nihil_peekb(s + __i) == 10 { __breaks = __breaks + 1; } __i = __i + 1; }
+    __breaks != __whole { : -1; }
+    : __lines;
+}
+
+__nihil_rt_pow10 = [0.0 ; 23];             // 1e0 … 1e22, exact as doubles
+__nihil_rt_pow10_made = false;
+
+// rec_parse(t, at, schema): the record in the line of t at at, its fields by schema ([n, type,
+// width, …]: 1 INT, 2 BOOL, 3 STRING, another FLOAT) → a new record (its texts inside its block), or -1
+__nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
+    __nf = __nihil_peek(schema);
+    __words = __nf;
+    __a = at;
+    __i = 0;
+    * __i < __nf {                                          // the size: the slots and the texts
+        __w = __nihil_peek(schema + 16 + 16 * __i);
+        __nihil_peek(schema + 8 + 16 * __i) == 3 {
+            __e = __a + __w;
+            * __e > __a && __nihil_peekb(t + __e - 1) == ' ' { __e = __e - 1; }
+            __words = __words + (__e - __a + 16) / 8;
+        }
+        __a = __a + __w;
+        __i = __i + 1;
+    }
+    __r = [0 ; __words];
+    __rec = __nihil_addr(__r);
+    __nihil_poke8(__rec - 8, __nf);
+    __next = __rec + 8 * __nf;
+    __i = 0;
+    * __i < __nf {
+        __type = __nihil_peek(schema + 8 + 16 * __i);
+        __a = at;
+        __b = at + __nihil_peek(schema + 16 + 16 * __i);
+        at = __b;
+        __type != 3 { * __a < __b && __nihil_peekb(t + __a) == ' ' { __a = __a + 1; } }
+        * __b > __a && __nihil_peekb(t + __b - 1) == ' ' { __b = __b - 1; }
+        __v = 0;
+        __type == 1 && __a < __b {                          // INT
+            __neg = false;
+            __c = __nihil_peekb(t + __a);
+            __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
+            __a == __b { : -1; }
+            * __a < __b {
+                __d = __nihil_peekb(t + __a) - '0';
+                __d < 0 || __d > 9 || __v > (9223372036854775807 - __d) / 10 { : -1; }
+                __v = __v * 10 + __d;
+                __a = __a + 1;
+            }
+            __neg { __v = -__v; }
+        } || __type == 2 {                                  // BOOL
+            __b - __a == 1 {
+                __c = __nihil_peekb(t + __a);
+                __c == 'T' { __v = 1; } || __c != 'F' { : -1; }
+            } || __b != __a { : -1; }
+        } || __type == 3 {                                  // STRING, in the record's block
+            __m = __b - __a;
+            __nihil_poke8(__next, __m);
+            __nihil_c("memcpy", __next + 8, t + __a, __m);
+            __v = __next + 8;
+            __next = __next + 8 + ((__m + 8) / 8) * 8;
+        } || __a < __b {                                    // FLOAT (any other type): Clinger's fast path
+            __neg = false;
+            __c = __nihil_peekb(t + __a);
+            __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
+            __mant = 0;
+            __digits = 0;
+            __pw = 0;
+            __seen = false;
+            __dot = false;
+            * __a < __b {
+                __c = __nihil_peekb(t + __a);
+                __c == '.' && !__dot {
+                    __dot = true;
+                } || {
+                    __d = __c - '0';
+                    __d < 0 || __d > 9 { : -1; }
+                    __seen = true;
+                    __mant != 0 || __d != 0 {
+                        __digits >= 15 { : -1; }
+                        __digits = __digits + 1;
+                        __mant = __mant * 10 + __d;
+                    }
+                    __dot { __pw = __pw - 1; }
+                }
+                __a = __a + 1;
+            }
+            !__seen || __pw < -22 { : -1; }
+            !__nihil_rt_pow10_made {
+                __p = 1.0;
+                __k = 0;
+                * __k < 23 { __nihil_rt_pow10[__k] = __p; __p = __p * 10.0; __k = __k + 1; }
+                __nihil_rt_pow10_made = true;
+            }
+            __mant != 0 { __v = __nihil_addr(.__mant / __nihil_rt_pow10[-__pw]); }
+            __neg { __v = __v | (1 << 63); }
+        }
+        __nihil_poke8(__rec + 8 * __i, __v);
+        __i = __i + 1;
+    }
+    : __rec;
+}
