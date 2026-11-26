@@ -54,6 +54,7 @@ put_q(pos = 0, v = 0) {
 
 // the operation whose code is code[at .. size_code) was just emitted
 op_note(k = 0, r = 0, v = 0, at = 0, o = 0) {
+    want_arm && n_ops - ops_low >= ops_cap { ops_grow(); }   // -arm keeps them all: more room
     n_ops - ops_low >= ops_cap {
         ops_low = ops_low + 1;
     }
@@ -754,6 +755,7 @@ label_new(kind = 0, v = 0, fix = -1) {
     l >= 0 {
         lab_free = lab_next[l];
     } || {
+        want_arm && n_labs >= lab_cap { labels_grow(); }
         n_labs >= lab_cap { error("too many labels"); }
         l = n_labs;
         n_labs = n_labs + 1;
@@ -773,6 +775,7 @@ label_bind(l = 0) {
     f >= 0 && lab_kind[l] != LAB_JUMP8 { put_d(f, size_code - (f + 4)); }
     want_arm {
         lab_op[l] = n_ops;                 // before the next operation
+        n_binds >= binds_cap { binds = grown(binds, n_binds, 2 * binds_cap); binds_cap = 2 * binds_cap; }
         binds[n_binds] = l;
         n_binds = n_binds + 1;
     } || f >= 0 {

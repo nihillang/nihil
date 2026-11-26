@@ -396,7 +396,7 @@ static void mark_block(I *b) {
     I bytes = block_bytes(b);
     if (bytes <= SMALL_MAX) { mark_range((const char *)(b + 2), (const char *)b + bytes); return; }
     I sys_page = getpagesize();
-    unsigned char vec[1024];
+    static unsigned char vec[65536];         // (a call for many pages costs less than many calls)
     char *start = (char *)b, *end = start + bytes;
     for (char *chunk = start; chunk < end; ) {
         I n = (end - chunk) / sys_page;

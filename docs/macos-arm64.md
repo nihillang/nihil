@@ -134,10 +134,26 @@ The code (`src1/42_arm.nihil`, `-native` optimized) keeps x86's operations but n
 - division and remainder are `sdiv`/`msub` (by a power of 2, shifts), with x86's results (INT_MIN /
   -1, the remainder's sign) and the runtime's error for a division by zero.
 
-Measured (best of 3, M4; C with `cc -O2`): a double loop of `+`, `^` and `%`, 0.37 → 0.155 s (C
-0.142); Collatz up to 3 000 000, 1.45 → 0.71 s (C 0.33); a sieve and `fib(35)` do not change (a
-BOOL array takes 8 bytes an element; a call passes its arguments on the stack). Next: the calls,
-arguments and results in registers, and `sp` as the stack.
+Calls and methods:
+- a method call reads no register and leaves none (liveness); a method's start and end are one
+  `stp`/`ldp` of x29 and x30; an empty frame costs nothing;
+- a method's parameters, when used enough (in loops), are loaded once into a register of x19 …
+  x26, as its locals are;
+- a value computed and pushed in the middle of an expression (`a[i] * b[i]`) waits in a free
+  register of x0 … x7, not on the stack, when nothing before its pop calls C or a method;
+- each method has a local symbol `_m_<name>_<k>`, so profilers and backtraces name it
+  (`xctrace record --template 'Time Profiler'`).
+
+The compiler's own arrays for `-arm`/`-native` (operations, labels, the text) start small and
+double: a collection reads only what is there (`mincore` of 1.6 GB of untouched arrays took 25 ms a
+collection). Compiling itself natively: 0.22 → 0.14 s, with no collection at all.
+
+Measured (best of 3, M4; C with `cc -O2`): a double loop of `+`, `^` and `%`, 0.37 → 0.154 s (C
+0.142); Collatz up to 3 000 000, 1.45 → 0.69 s (C 0.32); a dot product in a method called 100 000
+times, 0.083 → 0.056 s (C without vectorizing 0.052). A sieve and `fib(35)` do not change: a BOOL
+array takes 8 bytes an element, and `fib` is about 7 cycles a call already (clang transforms the
+recursion). A calling convention with arguments in registers was left out: calls are not where the
+time goes (the compiler's profile: its symbol lookup, a linear search, 22%).
 
 ## The original plan (a second backend)
 
