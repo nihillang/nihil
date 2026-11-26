@@ -1,0 +1,4 @@
+// a private field read outside its model
+C = @[n: INT(3); _x: INT(3)];
+c = C(1, 2);
+>> c._x;

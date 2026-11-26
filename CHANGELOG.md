@@ -4,6 +4,11 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## Unreleased
+
+- private fields: a field whose name starts with `_` is private to its model, and only the model's own methods read it or change it (SPEC §20.7); anywhere else, `r._field`, `r._field = v;` and a query naming it are compile errors. Creating a record, tables and JSON still go through every field. No field in the repository or in the programs we know of started with `_`, so no program changes meaning
+  - *Why:* The first of four steps towards the pillars of object orientation (encapsulation; then inheritance of fields, dispatch and abstract methods): a model's methods could keep its data consistent, but nothing stopped the rest of the program from changing a field behind them. `_` is a name the language already allows, so this needs no keyword and no new symbol
+
 ## v4.10.0
 
 A profiler and faster FLOAT text, from measuring a real program (a planogram generator) on its Linux server;

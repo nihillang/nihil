@@ -84,7 +84,9 @@ INTROS = [
       "in another table (<code>customer</code> below holds a <code>CUSTOMER</code> id). The table does not " +
       "enforce the link, so the program checks it when it writes (<code>sell</code>), and a <b>join</b> is " +
       "a lookup by key (<code>CUSTOMER @{s.customer} CUSTOMERS</code>), a few small reads through the " +
-      "index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and " +
+      "index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and a field " +
+      "whose name starts with <code>_</code> is <b>private</b>: only those methods read or change it " +
+      "(<code>_cents</code> at the end), so they keep the data consistent. " +
       "<code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> " +
       "are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of " +
       "its lines, so the old table no longer reads with the new model. Convert it once, reading it with " +

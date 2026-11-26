@@ -1151,7 +1151,36 @@ shelves[i].free() > 0.0 { … }
 - There is no inheritance: a model can hold another one's fields, and its
   methods can call that model's methods.
 
-### 20.7 Implementation
+### 20.7 Private fields
+
+A field whose name starts with `_` is **private** to its model: only the model's
+own methods (§20.6) read it or change it. Anywhere else, naming it is a compile
+error, so the methods decide what the rest of the program can do with it:
+
+```text
+ACCOUNT = @[#id: INT(4); owner: STRING(20); _balance: FLOAT(14)];
+
+ACCOUNT.deposit(a = ACCOUNT(), v = 0.0) {
+    v <= 0.0 { ?! = "a deposit must be positive"; }
+    a._balance = a._balance + v;          // inside a method of ACCOUNT
+}
+ACCOUNT.balance(a = ACCOUNT()) { : a._balance; }
+
+acc = ACCOUNT(1, "Ana", 0.0);             // creating fills every field
+acc.deposit(50.0);
+>> acc.balance();                         // 50.0
+>> acc._balance;                          // compile error: private to ACCOUNT
+```
+
+- It holds for `r._field`, for `r._field = value;` and for a field named inside
+  a query (`rows.where(_balance > 0.0)`, §21.1): a query in one of the model's
+  methods may name it; a method of another model may not.
+- Creating a record, `ACCOUNT(1, "Ana", 0.0)`, fills every field in order, the
+  private ones too. Tables (§20.3) and JSON (§26) write and read them as any other
+  field: they are part of the data, and privacy is about the program's code.
+- It is checked when compiling and costs nothing when running.
+
+### 20.8 Implementation
 
 A record is a block of 8-byte slots with the ARRAY layout (§3); a STRING field
 holds the address of its text. Its type is a model number, so each model is a

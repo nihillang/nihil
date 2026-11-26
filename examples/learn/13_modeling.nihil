@@ -53,3 +53,15 @@ i = 0;
 // a join inside a query: the city of each sale's customer
 lajeado = sales.where((CUSTOMER @{customer} CUSTOMERS).city == "Lajeado");
 >> "sold in Lajeado: " + $lajeado.sum(total) + "\n";
+
+// a field whose name starts with _ is private: only the model's own methods read or change it
+WALLET = @[owner: STRING(12); _cents: INT(8)];
+WALLET.pay(w = WALLET(), cents = 0) {
+    cents > w._cents { ?! = "not enough: " + $w._cents + " cents"; }
+    w._cents = w._cents - cents;
+}
+WALLET.left(w = WALLET()) { : w._cents; }
+wallet = WALLET("Ana", 5000);
+wallet.pay(1200);
+?wallet.pay(9000);                      // refused by the method; wallet._cents = 0; would not compile
+>> "left: " + $wallet.left() + " (" + ?! + ")\n";
