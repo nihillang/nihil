@@ -64,8 +64,7 @@ static char *stack_top;
 
 I nh_start(int argc, char **argv, I sp) {
     (void)argc; (void)argv;
-    char here;
-    c_stack_top = &here;
+    c_stack_top = (char *)sp;                // the adapters' saves (alloc's rcx, rsi, rdi) are below it
     base_sp = sp;
     char *s = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (s == MAP_FAILED) { write(2, "nihil: out of memory\n", 21); _exit(2); }
@@ -392,8 +391,11 @@ static I block_bytes(I *b) {
 // a block's words (none for a text); of a large one, only the system pages ever written
 // (mincore): the others are zero, and reading them would make them real
 static void mark_block(I *b) {
-    if (b[0] & H_TEXT) return;
     I bytes = block_bytes(b);
+    if (b[0] & H_TEXT) {                     // not scanned; a large one still counts (written whole)
+        if (bytes > SMALL_MAX) live_large += bytes;
+        return;
+    }
     if (bytes <= SMALL_MAX) { mark_range((const char *)(b + 2), (const char *)b + bytes); return; }
     I sys_page = getpagesize();
     static unsigned char vec[65536];         // (a call for many pages costs less than many calls)

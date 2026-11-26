@@ -649,7 +649,7 @@ scratch_free() {
 vs_flush() {
     q = 0;
     * q < n_vs {
-        vs_k[q] == 1 { a_push(vs_v[q]); } || { a_imm(16, vs_v[q]); a_push(16); }
+        vs_k[q] == 1 { a_push(vs_v[q]); } || { a_imm(14, vs_v[q]); a_push(14); }   // (x14: x16, x17 may hold a result being made)
         q = q + 1;
     }
     n_vs = 0;
@@ -985,11 +985,12 @@ arm_lazy(i = 0) {
     k == OP_MUL || k == OP_MULI {
         a = 0;
         c = 17;
-        cv = -1;
-        k == OP_MULI { cv = v; a = srcr(o); }
-        k == OP_MUL && pend_k[r] == 2 { cv = pend_v[r]; a = srcr(o); }
-        k == OP_MUL && cv < 0 && pend_k[o] == 2 { cv = pend_v[o]; a = srcr(r); }
-        k == OP_MUL && cv < 0 { a = srcr(r); c = srcr(o); }
+        cv = 0;
+        known = false;                     // a constant factor (cv, any sign) goes into x17
+        k == OP_MULI { cv = v; known = true; a = srcr(o); }
+        k == OP_MUL && pend_k[r] == 2 { cv = pend_v[r]; known = true; a = srcr(o); }
+        k == OP_MUL && !known && pend_k[o] == 2 { cv = pend_v[o]; known = true; a = srcr(r); }
+        k == OP_MUL && !known { a = srcr(r); c = srcr(o); }
         kk = -1;
         cv > 0 && (cv & (cv - 1)) == 0 { kk = 0; * (1 << kk) < cv { kk = kk + 1; } }
         d = dest_of(i, r);
@@ -998,7 +999,7 @@ arm_lazy(i = 0) {
         kk >= 0 {
             a_ins("lsl "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(kk); a_nl();
         } || {
-            cv >= 0 { a_imm(17, cv); }
+            known { a_imm(17, cv); }
             a_ins("mul "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl();
         }
         dest_done(r, d);
@@ -1028,12 +1029,12 @@ arm_lazy(i = 0) {
         b = o >> 1;
         k == OP_LOCAL { b = R_BP; }
         k == OP_GLOBAL { b = R_ABS; }
-        bn = 0;
+        bn = -1;                           // (x0 is a register a value may wait in)
         lbit(b) != 0 { bn = srcr(b); }
         d = dest_of(i, r);
         sk = skip;
         dest_clear(r, d);
-        bn != 0 { a_ldst_n(false, d, 8, bn, v); } || { a_ldst(false, d, 8, b, v); }
+        bn >= 0 { a_ldst_n(false, d, 8, bn, v); } || { a_ldst(false, d, 8, b, v); }
         dest_done(r, d);
         : 1 + sk;
     }
@@ -1147,10 +1148,8 @@ native_end() {
             a_line("stp x29, x30, [sp, #-16]!");
             a_line("adrp x16, _nh_sp@PAGE");      // the program's stack, for the collector
             a_line("str x28, [x16, _nh_sp@PAGEOFF]");
-            n == RT_ALLOC {
-                a_line("stp x10, x12, [sp, #-32]!");   // alloc keeps rcx, rsi, rdi (roots, on C's stack)
-                a_line("str x13, [sp, #16]");
-            }
+            a_line("stp x10, x12, [sp, #-32]!");   // rcx, rsi, rdi kept (C may change them; they are
+            a_line("str x13, [sp, #16]");          // roots for alloc, on C's stack)
             n == RT_PROTECT {
                 a_line("sub sp, sp, #80");        // what to restore: x28, x29, x19 … x26
                 a_line("stp x28, x29, [sp]");
@@ -1172,10 +1171,8 @@ native_end() {
             a_line("mov x9, x0");
             a_line("mov x11, x1");
             n == RT_PROTECT { a_line("add sp, sp, #80"); }
-            n == RT_ALLOC {
-                a_line("ldr x13, [sp, #16]");
-                a_line("ldp x10, x12, [sp], #32");
-            }
+            a_line("ldr x13, [sp, #16]");
+            a_line("ldp x10, x12, [sp], #32");
             n == RT_READ_AT {
                 a_line("adrp x16, _nh_ret_rcx@PAGE");
                 a_line("ldr x10, [x16, _nh_ret_rcx@PAGEOFF]");
