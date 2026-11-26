@@ -457,6 +457,7 @@ cmd_method(k = 0) {
     s_skip[k] != 0 { skip_method(); :; }   // a prelude method the program does not reach
     jump = op_jmp();                            // jmp over the body
     s_end[k] = size_code;
+    a_method(k);
     limit_regs = 0;
     optimize { limit_regs = s_regs[k]; }    // how many registers the previous pass asked for
     op_push(R_BP); op_mov(R_BP, R_SP);   // push rbp ; mov rbp, rsp

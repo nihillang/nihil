@@ -6,7 +6,11 @@ cd "$(dirname "$0")/.."
 T=build/macos/t
 mkdir -p $T
 # 1. compile every program in the VM at once (the compiler is x86)
-for src in tests/*.nihil tests/stage1/*.nihil; do n=$(echo $src | tr / _); printf "%s\n" "-map $PWD/$src" | build/macos/nihilc1-native > $T/$n.x86 2> $T/$n.map; done
+#    NIHIL_ARM=1: the compiler writes the program in ARM64 (-arm); NIHIL_O0=1: no optimizations;
+#    NIHILC1_NATIVE=path: another native compiler
+native=${NIHILC1_NATIVE:-build/macos/nihilc1-native}
+opt=""; [ "${NIHIL_O0:-0}" = 1 ] && opt="-O0 "; [ "${NIHIL_ARM:-0}" = 1 ] && opt="$opt-arm "
+for src in tests/*.nihil tests/stage1/*.nihil; do n=$(echo $src | tr / _); printf "%s\n" "$opt-map $PWD/$src" | $native > $T/$n.x86 2> $T/$n.map; done
 macos/translator.sh || exit 1
 ok=0; failed=0; skipped=0
 clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o $T/rt.o

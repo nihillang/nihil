@@ -1,0 +1,302 @@
+// =============================================================================
+// ARM64 text for the operations (-arm): each operation (40_emit.nihil) also writes its ARM64
+// assembly here, with the conventions of macos/translate.nihil, so that the runtime it translates
+// serves the program unchanged:
+//   rax rcx rdx rsi rdi → x9 x10 x11 x12 x13; rbx r12 … r15 → x19 … x23; rbp → x29; rsp → x28, the
+//   x86 stack emulated exactly (8-byte slots); globals through x27 (_nh_globals_start); the
+//   constants at Lconst; a runtime routine rt at L_<its jump table address>_c (call) or L_<…> (jump).
+// Every operation starts with the label L_<its x86 address>, so jumps back name it; a forward jump
+// names Lf<the position patched>, written where patch_here lands; a method k starts at Lm<k>.
+// The text goes to stderr after the map line and "nihil-arm" (macos/nihil, macos/translate.nihil).
+// =============================================================================
+
+a_byte(b = 0) {
+    arm_len >= ARM_SIZE { error("the ARM64 text is too large"); }
+    arm[arm_len] = b;
+    arm_len = arm_len + 1;
+}
+
+a_str(s = "") {
+    i = 0;
+    #s { a_byte(s[i]); i = i + 1; }
+}
+
+a_num(n = 0) {
+    n < 0 { a_byte('-'); n = -n; }
+    n == 0 { a_byte('0'); :; }
+    d = [0 ; 20];
+    k = 0;
+    * n > 0 { d[k] = '0' + n % 10; n = n / 10; k = k + 1; }
+    * k > 0 { k = k - 1; a_byte(d[k]); }
+}
+
+a_hex(n = 0) {
+    n == 0 { a_byte('0'); :; }
+    d = [0 ; 16];
+    k = 0;
+    * n != 0 && k < 16 {
+        h = n & 15;
+        h < 10 { d[k] = '0' + h; } || { d[k] = 'a' + h - 10; }
+        n = (n >> 4) & 0x0FFFFFFFFFFFFFFF;
+        k = k + 1;
+    }
+    * k > 0 { k = k - 1; a_byte(d[k]); }
+}
+
+a_nl() { a_byte(10); }
+a_ins(s = "") { a_str("    "); a_str(s); }
+a_line(s = "") { a_ins(s); a_nl(); }
+
+// the ARM register of an x86 one
+a_rn(r = 0) {
+    r == 0 { : 9; }
+    r == 1 { : 10; }
+    r == 2 { : 11; }
+    r == 3 { : 19; }
+    r == 4 { : 28; }
+    r == 5 { : 29; }
+    r == 6 { : 12; }
+    r == 7 { : 13; }
+    r >= 12 && r <= 15 { : r + 8; }
+    error("internal error: no ARM64 register for an x86 one");
+    : 0;
+}
+
+a_x(n = 0) { a_str("x"); a_num(n); }
+a_w(n = 0) { a_str("w"); a_num(n); }
+a_reg(r = 0) { a_x(a_rn(r)); }
+
+// an x86 condition (its number) → ARM's, after cmp or tst
+a_cond(cc = 0) {
+    cc == 4 { : "eq"; }
+    cc == 5 { : "ne"; }
+    cc == 12 { : "lt"; }
+    cc == 13 { : "ge"; }
+    cc == 14 { : "le"; }
+    cc == 15 { : "gt"; }
+    cc == 2 { : "lo"; }
+    cc == 3 { : "hs"; }
+    cc == 6 { : "ls"; }
+    cc == 7 { : "hi"; }
+    cc == 8 { : "mi"; }
+    cc == 9 { : "pl"; }
+    error("internal error: no ARM64 condition for an x86 one");
+    : "";
+}
+
+// x<n> ← v (movz / movk, as the translator's imm)
+a_imm(n = 0, v = 0) {
+    v == 0 { a_ins("mov "); a_x(n); a_str(", #0"); a_nl(); :; }
+    first = true;
+    k = 0;
+    * k < 4 {
+        part = (v >> (16 * k)) & 0xFFFF;
+        part != 0 || first && k == 3 {
+            first { a_ins("movz "); } || { a_ins("movk "); }
+            a_x(n); a_str(", #"); a_num(part); a_str(", lsl #"); a_num(16 * k); a_nl();
+            first = false;
+        }
+        k = k + 1;
+    }
+    first { a_ins("mov "); a_x(n); a_str(", #0"); a_nl(); }
+}
+
+// x<d> ← x<s> + v
+a_add_imm(d = 0, s = 0, v = 0) {
+    v >= 0 && v <= 4095 { a_ins("add "); a_x(d); a_str(", "); a_x(s); a_str(", #"); a_num(v); a_nl(); :; }
+    v >= -4095 && v < 0 { a_ins("sub "); a_x(d); a_str(", "); a_x(s); a_str(", #"); a_num(-v); a_nl(); :; }
+    a_imm(17, v);
+    a_ins("add "); a_x(d); a_str(", "); a_x(s); a_str(", x17"); a_nl();
+}
+
+// a load or store of x<t> (w<t> for a byte) at [base + disp] (base: an x86 register, or R_ABS: a global)
+a_ldst(store = false, t = 0, size = 8, base = 0, disp = 0) {
+    b = 0;
+    off = disp;
+    base < 0 {
+        b = 27;
+        off = disp - (BASE_DATA + OFS_GLOBALS);
+    } || {
+        b = a_rn(base);
+    }
+    m = "ldr";
+    store { m = "str"; }
+    off >= 0 && off <= 4095 * size && off % size == 0 {
+        a_ins(m);
+    } || off >= -256 && off <= 255 {
+        store { a_ins("stur"); } || { a_ins("ldur"); }
+    } || {
+        off >= -4095 && off <= 4095 { a_add_imm(15, b, off); } || {
+            a_imm(15, off);
+            a_ins("add x15, "); a_x(b); a_str(", x15"); a_nl();
+        }
+        b = 15;
+        off = 0;
+        a_ins(m);
+    }
+    size == 1 { a_str("b "); a_w(t); } || { a_str(" "); a_x(t); }
+    a_str(", ["); a_x(b);
+    off != 0 { a_str(", #"); a_num(off); }
+    a_str("]"); a_nl();
+}
+
+a_push(n = 0) { a_ins("str "); a_x(n); a_str(", [x28, #-8]!"); a_nl(); }
+a_pop(n = 0) { a_ins("ldr "); a_x(n); a_str(", [x28], #8"); a_nl(); }
+
+// "op xD, xS" / "op xD, xA, xB" with x86 registers
+a_rr(op = "", d = 0, s = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(s); a_nl(); }
+a_rrr(op = "", d = 0, a = 0, b = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(a); a_str(", "); a_reg(b); a_nl(); }
+
+a_label_l(pos = 0) { a_str("L_"); a_hex(BASE_CODE + pos); }
+a_label_f(pos = 0) { a_str("Lf"); a_num(pos); }
+a_label_rt(rt = 0) { a_str("L_"); a_hex(BASE_CODE + SIZE_HEADER + rt); }
+
+// where patch_here (or patch_to_here, patch8_here) lands: the label of the jump at pos
+a_land(pos = 0) {
+    !want_arm { :; }
+    a_label_f(pos); a_str(":"); a_nl();
+}
+
+// a method k starts here: its label, and its return address on the x86 stack (as call does)
+a_method(k = 0) {
+    !want_arm { :; }
+    a_str("Lm"); a_num(k); a_str(":"); a_nl();
+    a_line("str x30, [x28, #-8]!");
+}
+
+// the start of a place called (op_call_fwd): the return address on the x86 stack
+a_entry() {
+    !want_arm { :; }
+    a_line("str x30, [x28, #-8]!");
+}
+
+// ---- each operation ----
+
+// r ← (k, v) (OP_IMM, OP_LOCAL, OP_GLOBAL, OP_REG); o = 1: an optional, its presence into rdx too
+arm_load(k = 0, r = 0, v = 0, o = 0) {
+    k == OP_IMM { a_imm(a_rn(r), v); :; }
+    k == OP_REG { a_rn(r) != a_rn(v) { a_rr("mov ", r, v); } :; }
+    base = R_BP;
+    k == OP_GLOBAL { base = R_ABS; }
+    a_ldst(false, a_rn(r), 8, base, v);
+    o == 1 { a_ldst(false, a_rn(R_DX), 8, base, v + 8); }
+}
+
+arm_cmp_set(cc = 0) {
+    a_line("cmp x9, x10");
+    a_ins("cset x9, "); a_str(a_cond(cc)); a_nl();
+}
+
+arm_alu(alu = 0, r = 0, s = 0) {
+    alu == ALU_ADD { a_rrr("add ", r, r, s); :; }
+    alu == ALU_SUB { a_rrr("sub ", r, r, s); :; }
+    alu == ALU_AND { a_rrr("and ", r, r, s); :; }
+    alu == ALU_OR { a_rrr("orr ", r, r, s); :; }
+    a_rrr("eor ", r, r, s);
+}
+
+arm_call_rt(rt = 0) { a_ins("bl "); a_label_rt(rt); a_str("_c"); a_nl(); }
+
+arm_lea_const(r = 0, c = 0) {
+    n = a_rn(r);
+    a_ins("adrp "); a_x(n); a_str(", Lconst@PAGE"); a_nl();
+    a_ins("add "); a_x(n); a_str(", "); a_x(n); a_str(", Lconst@PAGEOFF"); a_nl();
+    c != 0 { a_add_imm(n, n, c); }
+}
+
+arm_stack(n = 0) { a_add_imm(28, 28, n); }
+
+arm_jcc(cc = 0, pos = 0) { a_ins("b."); a_str(a_cond(cc)); a_str(" "); a_label_f(pos); a_nl(); }
+
+// the frame's size, patched by put_frame: two 16-bit halves in fixed-width hex
+FRAMES = 16;
+frame_pos = [0 ; FRAMES];
+frame_tx = [0 ; FRAMES];               // where the low half's 4 hex digits are in the text
+frame_tx2 = [0 ; FRAMES];              // and the high half's
+n_frames = 0;
+
+arm_frame(pos = 0) {
+    i = 0;
+    * i < n_frames && frame_pos[i] != pos { i = i + 1; }
+    i == n_frames {
+        n_frames >= FRAMES { error("internal error: too many open frames"); }
+        n_frames = n_frames + 1;
+    }
+    frame_pos[i] = pos;
+    a_ins("movz x17, #0x");
+    frame_tx[i] = arm_len;
+    a_str("0000, lsl #0"); a_nl();
+    a_ins("movk x17, #0x");
+    frame_tx2[i] = arm_len;
+    a_str("0000, lsl #16"); a_nl();
+    a_line("sub x28, x28, x17");
+}
+
+a_put_hex4(at = 0, v = 0) {
+    k = 0;
+    4 {
+        h = (v >> (12 - 4 * k)) & 15;
+        h < 10 { arm[at + k] = '0' + h; } || { arm[at + k] = 'a' + h - 10; }
+        k = k + 1;
+    }
+}
+
+arm_put_frame(pos = 0, size = 0) {
+    i = 0;
+    * i < n_frames && frame_pos[i] != pos { i = i + 1; }
+    i == n_frames { :; }                   // (its text was cut back)
+    a_put_hex4(frame_tx[i], size & 0xFFFF);
+    a_put_hex4(frame_tx2[i], (size >> 16) & 0xFFFF);
+    n_frames = n_frames - 1;               // closed: its place goes to the last one open
+    frame_pos[i] = frame_pos[n_frames];
+    frame_tx[i] = frame_tx[n_frames];
+    frame_tx2[i] = frame_tx2[n_frames];
+}
+
+arm_epilogue(n = 0) {
+    n == 0 {
+        a_line("mov x28, x29");
+    } || {
+        a_add_imm(28, 29, -8 * n);
+        i = n;
+        * i > 0 { i = i - 1; a_pop(a_rn(REGS[i])); }
+    }
+    a_pop(29);
+    a_pop(30);
+    a_line("ret");
+}
+
+// cvttsd2si: x86 gives the smallest INT for NaN and out of range; ARM saturates (0 for NaN)
+arm_f2i(r = 0, x = 0) {
+    n = a_rn(r);
+    a_ins("fcvtzs "); a_x(n); a_str(", d"); a_num(x); a_nl();
+    a_imm(16, 1 << 63);
+    a_imm(17, (1 << 63) - 1);
+    a_ins("cmp "); a_x(n); a_str(", x17"); a_nl();
+    a_ins("csel "); a_x(n); a_str(", x16, "); a_x(n); a_str(", eq"); a_nl();
+    a_ins("fcmp d"); a_num(x); a_str(", d"); a_num(x); a_nl();
+    a_ins("csel "); a_x(n); a_str(", x16, "); a_x(n); a_str(", vs"); a_nl();
+}
+
+arm_fcmp_set(t = 0) {
+    t == '<' || t == T_LE { a_line("fcmp d1, d0"); } || { a_line("fcmp d0, d1"); }
+    t == '>' || t == '<' { a_line("cset x9, gt"); :; }
+    t == T_GE || t == T_LE { a_line("cset x9, ge"); :; }
+    t == T_EQ {
+        a_line("cset x9, eq");
+        a_line("cset x10, vc");
+        a_line("and x9, x9, x10");
+        :;
+    }
+    a_line("cset x9, ne");
+    a_line("cset x10, vs");
+    a_line("orr x9, x9, x10");
+}
+
+arm_xop(xop = 0, x = 0, y = 0) {
+    xop == XOP_ADD { a_ins("fadd d"); }
+    xop == XOP_SUB { a_ins("fsub d"); }
+    xop == XOP_MUL { a_ins("fmul d"); }
+    xop == XOP_DIV { a_ins("fdiv d"); }
+    a_num(x); a_str(", d"); a_num(x); a_str(", d"); a_num(y); a_nl();
+}

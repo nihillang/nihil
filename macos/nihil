@@ -3,6 +3,8 @@
 # with no VM: the compiler (itself translated to ARM64) emits its x86-64 code and the map,
 # the translator (macos/translate.nihil) turns that into ARM64 assembly, clang links it with arm64/rt.c
 #   NIHIL_O0=1   no optimizations
+#   NIHIL_ARM=1  the compiler writes the program in ARM64 itself (-arm): only the runtime is translated
+#   NIHILC1_NATIVE=path   another native compiler (e.g. build/macos/nihilc1-cand)
 set -e
 here=$(cd "$(dirname "$0")/.." && pwd)
 src=$1; out=${2:-${1%.nihil}}
@@ -10,8 +12,11 @@ src=$1; out=${2:-${1%.nihil}}
 abs=$(cd "$(dirname "$src")" && pwd)/$(basename "$src")
 w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
 option=""; [ "${NIHIL_O0:-0}" = 1 ] && option="-O0 "
-printf '%s\n' "$option-map $abs" | "$here/build/macos/nihilc1-native" > "$w/p.x86" 2> "$w/p.map" || { grep -v '^nihil-map' "$w/p.map" >&2; exit 1; }
-grep -v '^nihil-map' "$w/p.map" >&2 || true
+[ "${NIHIL_ARM:-0}" = 1 ] && option="$option-arm "
+compiler=${NIHILC1_NATIVE:-$here/build/macos/nihilc1-native}
+messages() { sed '/^nihil-arm$/,$d' "$w/p.map" | grep -v '^nihil-map' >&2; }
+printf '%s\n' "$option-map $abs" | "$compiler" > "$w/p.x86" 2> "$w/p.map" || { messages; exit 1; }
+messages || true
 "$here/macos/translator.sh"
 printf '%s\n%s\n%s\n' "$w/p.x86" "$w/p.map" "$w/p.s" | "$here/build/macos/translate" 2> "$w/t.err" || { cat "$w/t.err" >&2; exit 1; }
 [ -f "$here/build/macos/rt.o" ] && [ "$here/build/macos/rt.o" -nt "$here/arm64/rt.c" ] || clang -O2 -arch arm64 -Wno-unused-result -c "$here/arm64/rt.c" -o "$here/build/macos/rt.o"

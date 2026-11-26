@@ -15,6 +15,7 @@
 @ "20_lexer.nihil";
 @ "30_symbols.nihil";
 @ "40_emit.nihil";
+@ "42_arm.nihil";
 @ "45_optionals.nihil";
 @ "47_records.nihil";
 @ "48_library.nihil";

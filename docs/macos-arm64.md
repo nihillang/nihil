@@ -56,6 +56,22 @@ Bootstrapping a new Mac: `build/macos/nihilc1-native` comes from translating the
 `printf -- "-map src1/nihilc1.nihil\n" | build/nihilc1` (Linux), once; after that the Mac
 rebuilds its compiler by itself (`macos/nihil src1/nihilc1.nihil build/macos/nihilc1-native`).
 
+## Next: the compiler writes ARM64 itself (branch arm64-backend)
+
+Every instruction the compiler emits is an operation (`src1/40_emit.nihil`: `op_load`, `op_push`,
+`op_ld`, `op_jcc` … about 60 kinds, `OP_*` in `src1/00_data.nihil`), noted in a ring that the
+optimizations read instead of the x86 bytes. With `-arm`, each operation also writes its ARM64 text
+(`src1/42_arm.nihil`), on stderr after the map and a line `nihil-arm`; the translator then uses that
+text for the program and translates only the runtime:
+
+    NIHIL_ARM=1 macos/nihil prog.nihil [out]
+    NIHIL_ARM=1 macos/test-native.sh          (127 programs, also with NIHIL_O0=1)
+    macos/same-bytes.sh                       the x86 output, byte for byte, against a reference
+
+The first step keeps the translator's conventions (rax → x9, the x86 stack emulated in x28), so its
+runtime serves as it is; the speed is the translator's. The gains come next, operation by operation:
+the native stack and more registers for locals inside methods, then a native runtime.
+
 ## The original plan (a second backend)
 
 ## The target

@@ -321,6 +321,14 @@ load_program() {
             size_names = size_names - 4;
             going = true;
         }
+        size_names >= 5 && names[0] == '-' && names[1] == 'a' && names[2] == 'r' && names[3] == 'm' && names[4] == ' ' {
+            want_arm = true;                // -arm: the ARM64 text too, on stderr after the map (42_arm.nihil)
+            arm = [0 ; ARM_SIZE];
+            i = 0;
+            size_names - 5 { names[i] = names[i + 5]; i = i + 1; }
+            size_names = size_names - 5;
+            going = true;
+        }
         size_names >= 5 && names[0] == '-' && names[1] == 'm' && names[2] == 'a' && names[3] == 'p' && names[4] == ' ' {
             want_map = true;
             i = 0;

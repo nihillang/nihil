@@ -274,6 +274,11 @@ OP_POP = 10;            // pop r
 OP_ZERO = 11;           // r ← 0 (xor)
 OP_STACK = 12;          // the stack pointer + v (v < 0: room; v > 0: dropped); o = 1: the wide x86 form
 OPS_RING = 256;
+want_arm = false;       // -arm: each operation also writes its ARM64 text (42_arm.nihil)
+ARM_SIZE = 64 << 20;
+arm = [0 ; 1];          // the text (made the size of ARM_SIZE by -arm)
+arm_len = 0;
+op_tx = [0 ; OPS_RING]; // where each operation's text starts
 op_at = [0 ; OPS_RING];     // where its code starts
 op_end = [0 ; OPS_RING];    // where its code ends
 op_k = [0 ; OPS_RING];
