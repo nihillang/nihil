@@ -1,5 +1,6 @@
-// a child is not yet accepted where its parent is expected
+// a child is accepted where its parent is expected only at the edges (an argument, an element):
+// a variable typed by the parent does not take one
 PESSOA = @[nome: STRING(20)];
 ALUNO = @[PESSOA; turma: STRING(4)];
-nome_de(p = PESSOA()) { : p.nome; }
->> nome_de(ALUNO("Ana", "3B"));
+quem = PESSOA("Rui");
+quem = ALUNO("Ana", "3B");

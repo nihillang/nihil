@@ -1206,12 +1206,42 @@ s = STUDENT(1, "Ana", 2008, "3B", 8.5);
   yet.
 - A parent's private field (§20.7) stays private to the parent: the child's own
   methods use the parent's methods to reach it.
-- A child is a type of its own: it is **not** accepted where its parent is expected
-  (a parameter, an assignment, an ARRAY of the parent), so a record is always read,
-  copied and written with its own model.
+- A child is a type of its own. It is accepted where its parent is expected only at
+  the places §20.9 lists (an argument, an element stored into a collection).
 - The IDE reads a child's table with its whole line (the parent's fields first).
 
-### 20.9 Implementation
+### 20.9 A child where its parent is expected
+
+A child's record is accepted where its parent's is expected **at four places**,
+where the expected type is fixed by something else:
+
+```text
+show(p = PERSON()) { : p.name; }
+team = [PERSON() ; *];
+s = STUDENT(1, "Ana", 2008, "3B", 8.5);
+>> show(s);                 // 1. an argument for a parameter of the parent's type
+team[] = s;                 // 2. an element of a LIST of the parent (added or replaced)
+people = [PERSON() ; 3];
+people[0] = s;              // 3. an element of an ARRAY of the parent
+by_class = {"": PERSON() ; 8};
+by_class["3B"] = s;         // 4. a value of a MAP of the parent
+```
+
+- It is the same record, not a copy: a change through the parent shows in the child.
+- What copies or writes a record takes the model of the expression: `[p ; n]` through
+  a PERSON gives PERSONs, and `$p`, `to_json` and the table writes write the PERSON's
+  fields. A STUDENT is written whole through a STUDENT-typed expression.
+- An optional parameter of the parent's type takes a child (present) or a child's
+  optional (with its presence).
+- Everywhere else the models must be equal: assigning a child to a variable typed by
+  its parent, an ARRAY literal mixing them, a method returning both, a parent where a
+  child is expected. A collection of a child is **never** taken for a collection of its
+  parent (the callee could store a parent in it). `as_person(p = PERSON()) { : p; }`
+  gives a PERSON-typed reference to any descendant.
+- The design and what was left out (inferring a common type) are in
+  `docs/subtyping.md`.
+
+### 20.10 Implementation
 
 A record is a block of 8-byte slots with the ARRAY layout (§3); a STRING field
 holds the address of its text. Its type is a model number, so each model is a

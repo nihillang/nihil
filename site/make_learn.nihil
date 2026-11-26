@@ -87,7 +87,8 @@ INTROS = [
       "index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and a field " +
       "whose name starts with <code>_</code> is <b>private</b>: only those methods read or change it " +
       "(<code>_cents</code> at the end), so they keep the data consistent. A model can start from another " +
-      "(<code>SAVINGS = @[WALLET; rate: FLOAT(5)];</code>): its fields come first, and its methods work on it. " +
+      "(<code>SAVINGS = @[WALLET; rate: FLOAT(5)];</code>): its fields come first, its methods work on it, " +
+      "and a SAVINGS goes where a WALLET is expected as an argument or as an element of a list. " +
       "<code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> " +
       "are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of " +
       "its lines, so the old table no longer reads with the new model. Convert it once, reading it with " +
