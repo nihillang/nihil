@@ -1597,42 +1597,47 @@ __nihil_rt_pow10 = [0.0 ; 23];             // 1e0 … 1e22, exact as doubles
 __nihil_rt_pow10_made = false;
 
 // rec_parse(t, at, schema): the record in the line of t at at, its fields by schema ([n, type,
-// width, …]: 1 INT, 2 BOOL, 3 STRING, another FLOAT) → a new record (its texts inside its block), or -1
+// width, …]: 1 INT, 2 BOOL, 3 STRING, another FLOAT) → a new record (its texts inside its block), or
+// -1. One pass: the block is as large as the schema's texts can be (its words: kept by schema).
+__nihil_rt_sch = 0;
+__nihil_rt_sch_words = 0;
 __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
     __nf = __nihil_peek(schema);
-    __words = __nf;
-    __sa = at;                                              // (names of their own in each loop: a slot
-    __si = 0;                                               // no call crosses can stay in a register)
-    * __si < __nf {                                         // the size: the slots and the texts
-        __sw = __nihil_peek(schema + 16 + 16 * __si);
-        __nihil_peek(schema + 8 + 16 * __si) == 3 {
-            __se = __sa + __sw;
-            * __se > __sa && __nihil_peekb(t + __se - 1) == ' ' { __se = __se - 1; }
-            __words = __words + (__se - __sa + 16) / 8;
-        }
-        __sa = __sa + __sw;
-        __si = __si + 1;
+    schema != __nihil_rt_sch {
+        __words = __nf;
+        __f = schema + 8;
+        __fend = __f + 16 * __nf;
+        * __f < __fend { __nihil_peek(__f) == 3 { __words = __words + (__nihil_peek(__f + 8) + 16) / 8; } __f = __f + 16; }
+        __nihil_rt_sch = schema;
+        __nihil_rt_sch_words = __words;
     }
-    __r = [0 ; __words];
+    __r = [0 ; __nihil_rt_sch_words];
     __rec = __nihil_addr(__r);
     __nihil_poke8(__rec - 8, __nf);
     __next = __rec + 8 * __nf;
-    __i = 0;
-    * __i < __nf {
-        __type = __nihil_peek(schema + 8 + 16 * __i);
-        __a = at;
-        __b = at + __nihil_peek(schema + 16 + 16 * __i);
-        at = __b;
-        __type != 3 { * __a < __b && __nihil_peekb(t + __a) == ' ' { __a = __a + 1; } }
-        * __b > __a && __nihil_peekb(t + __b - 1) == ' ' { __b = __b - 1; }
+    __slot = __rec;
+    __fs = schema + 8;
+    __fe = __fs + 16 * __nf;
+    * __fs < __fe {
+        __type = __nihil_peek(__fs);
+        __a = t + at;                      // (addresses, not indexes)
+        at = at + __nihil_peek(__fs + 8);
+        __b = t + at;
+        __fs = __fs + 16;
+        * __b - 8 >= __a && __nihil_peek(__b - 8) == 0x2020202020202020 { __b = __b - 8; }   // its blanks: 8 at a time
+        * __b > __a && __nihil_peekb(__b - 1) == ' ' { __b = __b - 1; }
+        __type != 3 {
+            * __a + 8 <= __b && __nihil_peek(__a) == 0x2020202020202020 { __a = __a + 8; }
+            * __a < __b && __nihil_peekb(__a) == ' ' { __a = __a + 1; }
+        }
         __v = 0;
         __type == 1 && __a < __b {                          // INT
             __neg = false;
-            __c = __nihil_peekb(t + __a);
+            __c = __nihil_peekb(__a);
             __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
             __a == __b { : -1; }
             * __a < __b {
-                __d = __nihil_peekb(t + __a) - '0';
+                __d = __nihil_peekb(__a) - '0';
                 __d < 0 || __d > 9 { : -1; }
                 __v >= 922337203685477580 && (__v > 922337203685477580 || __d > 7) { : -1; }   // (INT's largest, / 10)
                 __v = __v * 10 + __d;
@@ -1641,20 +1646,22 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
             __neg { __v = -__v; }
         } || __type == 2 {                                  // BOOL
             __b - __a == 1 {
-                __c = __nihil_peekb(t + __a);
+                __c = __nihil_peekb(__a);
                 __c == 'T' { __v = 1; } || __c != 'F' { : -1; }
             } || __b != __a { : -1; }
-        } || __type == 3 {                                  // STRING, in the record's block
+        } || __type == 3 {                                  // STRING, in the record's block: 8 bytes at a time
             __m = __b - __a;
             __nihil_poke8(__next, __m);
-            __q = 0;                       // (a byte at a time: no call in the loop of the fields)
-            __dst = __nihil_str_at(__next + 8);
-            * __q < __m { __nihil_poke(__dst, __q, __nihil_peekb(t + __a + __q)); __q = __q + 1; }
-            __v = __next + 8;
-            __next = __next + 8 + ((__m + 8) / 8) * 8;
+            __dst = __next + 8;
+            __q = 0;
+            * __q + 8 <= __m { __nihil_poke8(__dst + __q, __nihil_peek(__a + __q)); __q = __q + 8; }
+            __ds = __nihil_str_at(__dst);
+            * __q < __m { __nihil_poke(__ds, __q, __nihil_peekb(__a + __q)); __q = __q + 1; }
+            __v = __dst;
+            __next = __dst + ((__m + 8) / 8) * 8;
         } || __a < __b {                                    // FLOAT (any other type): Clinger's fast path
             __neg = false;
-            __c = __nihil_peekb(t + __a);
+            __c = __nihil_peekb(__a);
             __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
             __mant = 0;
             __digits = 0;
@@ -1662,7 +1669,7 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
             __seen = false;
             __dot = false;
             * __a < __b {
-                __c = __nihil_peekb(t + __a);
+                __c = __nihil_peekb(__a);
                 __c == '.' && !__dot {
                     __dot = true;
                 } || {
@@ -1688,8 +1695,8 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
             __mant != 0 { __v = __nihil_addr(.__mant / __nihil_rt_pow10[-__pw]); }
             __neg { __v = __v | (1 << 63); }
         }
-        __nihil_poke8(__rec + 8 * __i, __v);
-        __i = __i + 1;
+        __nihil_poke8(__slot, __v);
+        __slot = __slot + 8;
     }
     : __rec;
 }
