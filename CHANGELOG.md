@@ -4,7 +4,10 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
-## Unreleased
+## v4.10.0
+
+A profiler and faster FLOAT text, from measuring a real program (a planogram generator) on its Linux server;
+protected blocks, try/catch without a keyword; and a short reference for the IDE's coding agents.
 
 - `nihil profile PROGRAM.nihil [ARG…]`: runs the program as `nihil run` does, sampled every 10 ms of CPU time, then reports where the time went: by method and runtime routine, the runtime's time by the method that called it, and each method with what it called (docs/profiling.md). Behind it, the compiler's `-profile` option and a `SIGPROF` sampler in the runtime, which writes `nihil-profile.PID` at the exit; `tools/profile.nihil` reads it. Linux x86_64 for now. `make profilecheck` (CI) checks it
   - *Why:* Measuring where a real program spent its time took gdb, a hand-made sampler and the assembler's listing (`perf` was blocked on the machine). The cost is under 1% (the planogram's `generate`: 5.86 → 5.91 s), so a program can be measured as it runs
