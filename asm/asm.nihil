@@ -216,6 +216,8 @@ CHANGED = false;                // a label moved in this pass
 UNRES = false;                  // the expression used a label not known yet
 FINAL = false;                  // the last pass: everything must be known
 LAST = "";                      // the last plain label (for .local)
+PLAIN_NAMES = ["" ; *256];      // the plain labels and their offsets, in the final pass (profiler)
+PLAIN_ADDRS = [0 ; *256];
 HERE = 0;                       // $: the address of the line
 ORG = 0;
 
@@ -1023,7 +1025,10 @@ line(i = 0) {
     * j < #t && is_word(t[j]) { j = j + 1; }
     j > 0 && j < #t && t[j] == ':' {
         name = t.slice(0, j);
-        !name.starts_with(".") && !name.starts_with("..@") { LAST = name; }
+        !name.starts_with(".") && !name.starts_with("..@") {
+            LAST = name;
+            FINAL { PLAIN_NAMES[] = name; PLAIN_ADDRS[] = HERE - ORG; }   // for the profiler (runtime_sym_*)
+        }
         set_sym(full_name(name), HERE, 1);
         t = t.slice(j + 1).trim();
     }
@@ -1111,6 +1116,20 @@ assemble() {
 
 ALL_BYTES = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2A\x2B\x2C\x2D\x2E\x2F\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3A\x3B\x3C\x3D\x3E\x3F\x40\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4A\x4B\x4C\x4D\x4E\x4F\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5A\x5B\x5C\x5D\x5E\x5F\x60\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6A\x6B\x6C\x6D\x6E\x6F\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7A\x7B\x7C\x7D\x7E\x7F\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8A\x8B\x8C\x8D\x8E\x8F\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9A\x9B\x9C\x9D\x9E\x9F\xA0\xA1\xA2\xA3\xA4\xA5\xA6\xA7\xA8\xA9\xAA\xAB\xAC\xAD\xAE\xAF\xB0\xB1\xB2\xB3\xB4\xB5\xB6\xB7\xB8\xB9\xBA\xBB\xBC\xBD\xBE\xBF\xC0\xC1\xC2\xC3\xC4\xC5\xC6\xC7\xC8\xC9\xCA\xCB\xCC\xCD\xCE\xCF\xD0\xD1\xD2\xD3\xD4\xD5\xD6\xD7\xD8\xD9\xDA\xDB\xDC\xDD\xDE\xDF\xE0\xE1\xE2\xE3\xE4\xE5\xE6\xE7\xE8\xE9\xEA\xEB\xEC\xED\xEE\xEF\xF0\xF1\xF2\xF3\xF4\xF5\xF6\xF7\xF8\xF9\xFA\xFB\xFC\xFD\xFE\xFF";           // each byte, to write them as they are
 
+plain_names() {
+    parts = ["" ; #PLAIN_NAMES];
+    k = 0;
+    * k < #PLAIN_NAMES { parts[k] = PLAIN_NAMES[k]; k = k + 1; }
+    : parts.join(" ");
+}
+
+plain_offsets() {
+    parts = ["" ; #PLAIN_ADDRS];
+    k = 0;
+    * k < #PLAIN_ADDRS { parts[k] = $PLAIN_ADDRS[k]; k = k + 1; }
+    : parts.join(", ");
+}
+
 main() {
     src = ""; dirs = ""; out = ""; defs = ""; listing = "";
     << src;
@@ -1142,7 +1161,10 @@ main() {
     k = 0;
     * k < NOUT { nums[k] = $OUT[k]; k = k + 1; }
     @>> out, "// generated from src/runtime.asm by `make runtime` (asm/asm.nihil; nasm gives the same bytes) — do not edit; `make runtime-check` compares\nruntime_bin = ["
-        + nums.join(", ") + "\n];\n";
+        + nums.join(", ") + "\n];\n"
+        + "// the runtime's plain labels (the profiler names the code by them): names, then offsets\n"
+        + "runtime_sym_names = \"" + plain_names() + "\";\n"
+        + "runtime_sym_ofs = [" + plain_offsets() + "];\n";
     !>> "asm: " + $NOUT + " bytes, " + $#LT + " lines\n";
     // a listing (for finding a difference with nasm's): file:line address size text
     #listing > 0 {

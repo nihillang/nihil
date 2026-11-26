@@ -19,6 +19,11 @@ for _ in range(int(sys.argv[2]) if len(sys.argv) > 2 else 20000):
 # takes its fast way (float_text.nihil, __nihil_ft_fast)
 for _ in range(int(sys.argv[2]) if len(sys.argv) > 2 else 20000):
     cases.append(random.randint(-10**random.randint(1, 15), 10**random.randint(1, 15)) / random.choice([1, 10, 100, 1000]))
+# and 4 to 17 decimals, ratios and small values, where the fast way now goes on to 17 decimals
+for _ in range(int(sys.argv[2]) if len(sys.argv) > 2 else 20000):
+    cases.append(random.randint(-10**random.randint(1, 17), 10**random.randint(1, 17)) / 10 ** random.randint(4, 17))
+    cases.append(random.random() * 10 ** random.randint(-8, 8))
+    cases.append(random.randint(1, 10**6) / random.randint(1, 10**6))
 cases = [c for c in cases if c is not None and math.isfinite(c)]
 cases += [-c for c in cases[:200]]
 stdin = ''.join(f'{bits(c)} {repr(c)}\n' for c in cases)

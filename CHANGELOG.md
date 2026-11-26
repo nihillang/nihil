@@ -6,8 +6,25 @@ before v2.0.
 
 ## Unreleased
 
+- `nihil profile PROGRAM.nihil [ARG…]`: runs the program as `nihil run` does, sampled every 10 ms of CPU time, then reports where the time went: by method and runtime routine, the runtime's time by the method that called it, and each method with what it called (docs/profiling.md). Behind it, the compiler's `-profile` option and a `SIGPROF` sampler in the runtime, which writes `nihil-profile.PID` at the exit; `tools/profile.nihil` reads it. Linux x86_64 for now. `make profilecheck` (CI) checks it
+  - *Why:* Measuring where a real program spent its time took gdb, a hand-made sampler and the assembler's listing (`perf` was blocked on the machine). The cost is under 1% (the planogram's `generate`: 5.86 → 5.91 s), so a program can be measured as it runs
+- `?{ … } || { … }`: a protected block (SPEC §25.1), as `?f()` protects a call. A runtime error anywhere inside the block goes to the block after `||`, with `?!` holding its text; what the block changed before the error stays changed. `: value;` inside it leaves the protection too
+  - *Why:* Protecting a few commands took a method written only to be called with `?`. The symbols are the ones the language already has: `?` for "protected" and `||` for "otherwise", so no program changes meaning (`{ … } : { … }` was considered, but `: {…}` already returns a MAP after a plain block)
+- FLOAT → text takes its fast way, with exact integers, for numbers with up to 17 decimals (it was up to 3) from about 10^-5 to 2^53: ratios, percentages and measures no longer go through the general algorithm and its big integers. The text is the same (`make floatcheck`: 501,117 cases against Python and against the general algorithm, now with 4 to 17 decimals among them)
+  - *Why:* A profile of a real program (a planogram generator writing JSON) showed 12% of its time in the general algorithm; it runs 8% faster (6.39 → 5.89 s), with the same output byte for byte
 - `NIHIL-AGENTS.md`: a short reference for coding agents (about 1,800 tokens against the SPEC's 27,600): a table from C, Go and Python to Nihil, the ten traps a model trained on other languages falls into, the core syntax in two examples, and pointers to the SPEC's sections. The IDE puts it in its agents' instructions (Claude Code's system prompt, Codex's first message) and points to the SPEC only for details; without the file it gives the old instructions. It ships in `share/nihil`, and `tests/stage1/agents_reference_*` keep its examples and claims true
   - *Why:* The IDE told its agents to read the SPEC before writing code. Measured on the same repair tasks, a small model given the SPEC spent 2.6 times the tokens; the short reference as a file still cost it an extra turn, while the same text in the instructions halved its tokens against the SPEC, cut its reasoning below having no reference at all, and kept it to the protocol. Larger models were unaffected either way
+
+## v4.9.1
+
+Three fixes in the runtime, found while researching threads for Nihil and measuring the planogram on its Linux server.
+
+- `@>>` writes its temporary as `path.nihil-tmp.PID` (this process's id) instead of `path.nihil-tmp`: two programs replacing the same file no longer write into one temporary. The longest path `@>>` accepts goes from 4080 to 4064 bytes
+  - *Why:* With one shared name, one program renamed the other's half-written temporary, and the other then failed with "could not write: no such file or directory" (two programs writing one file 1,500 times each: one of them failed before, both finish now)
+- Writing to the standard output and errors, reading the standard input and reading a file try again when the kernel interrupts the call (`EINTR`), as the network and the table reads already did
+  - *Why:* An interrupted write stopped silently and an interrupted read looked like the end of the input; a prerequisite for anything that delivers signals to the program
+- The heap no longer asks the kernel for huge pages (`MADV_HUGEPAGE`)
+  - *Why:* Where the kernel's defrag setting is `madvise`, a common default, a machine short of free memory compacted memory on the spot for each 2 MiB page: the planogram's `generate` took 14 to 68 s instead of 12 to 14 s, and its server started in 3 to 6 s instead of 1.5 s (2 CPUs, 2 GB free of 31 GB). Where the setting is `always`, the kernel still gives huge pages
 
 ## v4.9.0
 

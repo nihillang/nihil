@@ -1,0 +1,2 @@
+// one block after || (no chain)
+?{ >> 1; } || { >> 2; } || { >> 3; }

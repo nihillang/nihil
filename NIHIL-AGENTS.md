@@ -1,8 +1,9 @@
-# Nihil for coding agents (short reference, v4.9)
+# Nihil for coding agents (short reference, v4.10)
 
 Nihil has **no keywords**: blocks are driven by the type of the expression before `{`.
-Statements end with `;`. Comments: `//`, `/* */`. Compile: `nihil prog.nihil out`; run: `nihil run prog.nihil`.
-Full spec only if needed: `SPEC.md` §5 optionals, §20 records, §21 library, §22 MAP, §28 LIST.
+Statements end with `;`. Comments: `//`, `/* */`. Compile: `nihil prog.nihil out`; run: `nihil run prog.nihil`;
+where the time goes: `nihil profile prog.nihil` (Linux).
+Full spec only if needed: `SPEC.md` §5 optionals, §20 records, §21 library, §22 MAP, §25 errors, §28 LIST.
 
 ## From C / Go / Python
 
@@ -92,4 +93,6 @@ Records array: `rows.where(cond)`, `count(cond)`, `first(cond)`, `sort(key)`, `s
 
 `>> x;` stdout, `!>> x;` stderr, `<< x;` read a line (end of input gives 0/""/false, or `_` for optionals),
 `@path` read a file (STRING), `@>> path, text;` write a file, `@ "other.nihil";` include (top level, own line),
-`:: code;` exit. Runtime errors print `nihil: <reason>` and exit 2. `r? = ?f();` catches a runtime error (`?!` = message).
+`:: code;` exit. Runtime errors print `nihil: <reason>` and exit 2. `r? = ?f();` catches a runtime error in a call
+(`?!` = message); `?{ … } || { … }` catches one anywhere in a block (try/catch: the `||` block runs only on an error);
+`?! = "why";` raises one (throw).

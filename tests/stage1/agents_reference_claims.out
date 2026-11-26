@@ -12,3 +12,5 @@ x7
 5
 -3 -1 true
 caught: division by zero
+block: division by zero
+raised: why

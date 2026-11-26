@@ -368,7 +368,7 @@ rows : r, i { r.qty > 0 { : i; } }            // an early return leaves the loop
 | `!>> expr;` | Like `>>`, but to **standard error**. It flushes standard output first, to keep the order on a terminal. |
 | `:: expr;` / `::;` | **Ends the program from anywhere**, including from inside methods, with exit code `expr` (an INT) or 0. Output is flushed first. |
 | `... expr;` | **Waits** `expr` milliseconds (an INT; `<= 0` does not wait). Output is flushed first, so what was written shows up before the pause. Uses `nanosleep` and resumes after a signal (stage 1). |
-| `@>> path, text;` | **Writes a file**: creates it or replaces its contents with the STRING `text` (stage 1). Atomic: the text goes to `path.nihil-tmp`, which is synced to disk (`fsync`) and renamed over `path`, so a crash leaves the old file or the new one, never a mix. A new file gets mode `0644` (minus the umask); a replaced file gets those permissions too. |
+| `@>> path, text;` | **Writes a file**: creates it or replaces its contents with the STRING `text` (stage 1). Atomic: the text goes to `path.nihil-tmp.PID` (`PID` = this process's id, so two programs replacing the same file never share a temporary), which is synced to disk (`fsync`) and renamed over `path`, so a crash leaves the old file or the new one, never a mix. A new file gets mode `0644` (minus the umask); a replaced file gets those permissions too. |
 | `@+>> path, text;` | **Appends** `text` to the file, creating it if needed, and syncs it to disk before going on (stage 1). |
 | `@[i]>> path, r;` | **Changes record `i`** of a table file in place, writing only that line (§20.4, stage 1). |
 | `@{}>> path, r;` | **Writes `r` under its key**: replaces the record with the same key, or adds `r` (§20.5, stage 1). |
@@ -386,7 +386,7 @@ nihil: could not write 'notes/today.txt': no such file or directory
 
 The reasons spelled out are: no such file or directory, permission denied, it
 is a directory, a part of the path is not a directory, no space left on the
-device, read-only file system, the path is too long (over 4080 bytes), disk
+device, read-only file system, the path is too long (over 4064 bytes), disk
 quota exceeded; any other one is shown as `error N` (the `errno`). A failed
 `@>>` removes its temporary file. Both commands sync every write, which makes
 them durable but slow in a tight loop (a few milliseconds each): build the text
@@ -526,6 +526,7 @@ command         ::= method                      (* top level only *)
                   | expression ":" IDENT [ "," IDENT ] block   (* each element, §7.6 *)
                   | assignment ";"
                   | [ expression ] block ( "||" [ expression ] block )*
+                  | "?" block [ "||" block ]        (* protected block, §25.1 *)
                   | [ expression ] call ";"
                   | "@" STRING ";"              (* inclusion, §16 *)
 
@@ -744,7 +745,9 @@ inclusions (§16). `build/runtime.nihil` is generated from `runtime.bin`, and
      itself);
   3. `nihilc2`, without optimizations, produces exactly `nihilc1` again.
 - **Protocol:** `nihilc1` reads the path of the program from stdin (one line,
-  optionally prefixed with `-O0 `), reads the files itself with `@`, writes the
+  optionally prefixed with options: `-O0 ` (no optimizations), `-map ` (where the runtime,
+  the code and the constants end, on stderr: the macOS translator reads it) and `-profile `
+  (the executable samples where its time goes: docs/profiling.md)), reads the files itself with `@`, writes the
   executable to stdout and errors to stderr (with exit code 1). `nihilc1.sh` gives
   it the same command line as `nihilc`.
 - `nihilc1` reports compile errors with `!>>` and exits with `:: 1;`.
@@ -1488,6 +1491,34 @@ r == _ { >> "failed: " + ?! + "\n"; } // ?! : the text of that error
 - What was written before the error stays written: the output buffer is not touched.
 - A protected call costs a few instructions when nothing fails, and the stack does not grow
   when it is used in a loop.
+
+### 25.1 Protected blocks
+
+`?{ … }` protects a block, as `?` protects a call: a runtime error anywhere inside it, however
+deep, ends the block and goes on after it, with `?!` holding its text. `|| { … }` after it is
+the block that runs only then:
+
+```text
+?{
+    rows = PRODUCT @ "products.dat";
+    @>> "total.txt", $rows.sum(price);
+} || {
+    !>> "could not: " + ?! + "\n";        // ?! : the error's text
+}
+```
+
+- What the block changed before the error **stays changed**: variables keep the last values
+  given to them, and what was written stays written. (So that this holds, the locals of a
+  method with a protected block, or the globals of a top level with one, are kept in memory,
+  not in the registers the optimizer would give them.)
+- Without `|| { … }` the error is only in `?!`; a block that ends normally leaves `?!` empty,
+  and its `|| { … }` does not run. `||` takes one block: no condition, no chain.
+- `: value;` inside the block leaves the method and the protection with it; `::` ends the
+  program as usual. A runtime error inside the `|| { … }` block, including `?! = text;`, goes
+  to the protection around it, if any: so `?! = ?!;` passes the error on.
+- Blocks and calls nest, up to 64 protections at a time; in a loop, each turn is protected
+  on its own.
+- The same things are caught as by `?f()`, and the same are not (`out of memory`, `::`).
 
 **Implementation.** A stack of protections in the runtime, 64 levels deep: the stack pointer,
 the frame pointer, the address to resume at and the optimizer's registers (rbx, r12–r15: a

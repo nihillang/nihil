@@ -49,6 +49,9 @@ jobs:
       - name: Garbage collector under pressure
         run: make gcstress
 
+      - name: Profiler (-profile and its report)
+        run: make profilecheck
+
   # what someone without nasm gets: stage 1 from the latest release's compiler, then its tests
   without-nasm:
     runs-on: ubuntu-24.04

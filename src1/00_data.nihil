@@ -130,6 +130,7 @@ RT_UNPROTECT = 250;
 RT_ERR_TEXT = 255;      // ?! → rax = a new STRING
 RT_FAIL = 260;          // rax = STRING: a runtime error with that message
 RT_CONCAT_INT = 265;    // rax = STRING, rcx = INT → "…" + $n in one block
+RT_PROF_START = 270;    // rax = STRING with the symbols: samples until the exit (-profile)
 last_int_text = -1;     // where the code of the last $ of an INT ends (binary fuses it with a "…" +)
 
 // ---- limits (the same as the stage 0 arenas) ----
@@ -275,6 +276,7 @@ call_from = [0 ; MAX_CALLS];   // the calls of this pass: method making it (-1: 
 call_to = [0 ; MAX_CALLS];     // … and method called
 n_calls = 0;
 s_reach = [0 ; MAX_SYM];       // reached from the program in this pass
+s_mend = [0 ; MAX_SYM];        // a method: where its code ends (s_end: where it starts), for -profile
 s_skip = [0 ; MAX_SYM];        // a prelude method left out of this pass (not reached in the last)
 s_kept = [0 ; MAX_SYM];        // left out once and then needed: never left out again
 q_model = -1;                // inside a query: the model whose field names stand for the element
@@ -303,12 +305,17 @@ pv2_line = 0;
 // ---- optimizations (M9) ----
 optimize = true;                 // "-O0 " before the path turns them off (the same bytes as stage 0)
 want_map = false;                // "-map " before the path: where the code ends, on stderr (for the macOS translator)
+want_profile = false;            // "-profile " before the path: the executable samples itself (Linux)
+pos_profile = 0;                 // the rel32 of its "lea rax, [rip + symbols]"
 code_end = 0;                    // where the program's code ends and its constants begin
 REGS = [3, 12, 13, 14, 15];     // rbx, r12 … r15 (preserved by the runtime)
 n_regs = 0;                     // registers in use in the current method
 limit_regs = 0;                // how many the current method saved in its prologue
 candidates = 0;                 // live locals that would fit in a register
 demand = 0;                    // largest number of candidates at the same time (up to 5)
+prot_depth = 0;                // protected blocks ?{ … } open around the code being compiled
+prot_in_method = false;        // the method being compiled has a ?{ … }: its locals stay in memory
+prot_at_top = false;           // the top level has one (this pass): its globals stay in memory
 base_frame = 0;                // bytes of the saved registers, below rbp
 last_target = -1;               // last position some jump points to
 start_assignment = -1;         // the code of an assignment's expression starts here

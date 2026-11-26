@@ -291,6 +291,7 @@ i64 nh_linux_syscall(i64 n0, i64 a1, i64 a2, i64 a3, i64 a4, i64 a5, i64 a6) {
     case 33: return res(dup2((int)x[1], (int)x[2]));
     case 57: return res(fork());
     case 59: execve((const char *)x[1], (char *const *)x[2], (char *const *)x[3]); return -errno;
+    case 39: return res(getpid());
     case 61: {                                        // wait4(pid, status, options, rusage)
         int st = 0;
         pid_t r = wait4((pid_t)x[1], &st, (int)x[3], 0);
