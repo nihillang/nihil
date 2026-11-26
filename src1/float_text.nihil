@@ -285,13 +285,16 @@ __nihil_ft_put_dec(buf = [0], end = 0, v = 0, width = 1) {
     * __i > end - width { __i = __i - 1; buf[__i] = '0' + __x % 10; __x = __x / 10; }
 }
 
-// A FLOAT with at most 3 decimals (a price, a measure, a whole number) as its text, worked out
-// with exact integers, or "" when it is not one (then the general algorithm runs). For
-// v = mant / 2^s and k = 0 … 3: m is the integer nearest to v·10^k, and m / 10^k reads back as
+// A FLOAT with at most 17 decimals (a price, a measure, a ratio, a whole number) as its text,
+// worked out with exact integers, or "" when it is not one (then the general algorithm runs). For
+// v = mant / 2^s and k = 0 … 17: m is the integer nearest to v·10^k, and m / 10^k reads back as
 // v when it is less than half an ulp of v away: |m·2^s − mant·10^k| < 10^k / 2. The first k that
 // works gives the fewest digits, and m is the nearest of them, as the general algorithm gives.
-// Ties, numbers from 2^53 up (where the last digits can round away), powers of two below 2^52
-// (whose ulp is smaller on one side) and subnormals take that way. b has no sign; neg adds "-".
+// v·10^k is kept as q (its integer part) and r (the rest, in units of 2^-s), with r in two parts
+// of 59 bits, so that s can go up to 118 (v down to about 10^-20) and each step only multiplies
+// by 10. Ties, numbers from 2^53 up (where the last digits can round away), powers of two below
+// 2^52 (whose ulp is smaller on one side), subnormals, numbers the general algorithm writes in
+// scientific notation and q past 9·10^17 take that way. b has no sign; neg adds "-".
 __nihil_ft_fast(b = 0, neg = false) {
     __ex = (b >> 52) & 0x7FF;
     __ex == 0 { : ""; }
@@ -309,23 +312,55 @@ __nihil_ft_fast(b = 0, neg = false) {
     } || {
         __f == 0 { : ""; }
         __s = -__e;
-        __s > 60 { : ""; }
-        __unit = 1 << __s;
-        __half = 1 << (__s - 1);
-        * __k <= 3 && !__found {
-            __t = __mant * __p;
-            __q = __t >> __s;
-            __r = __t - (__q << __s);
-            __r == __half { : ""; }                 // a tie: the general algorithm decides
+        __s > 118 { : ""; }
+        __lm = 576460752303423487;                  // 2^59 - 1: a part of r
+        __q = 0;
+        __rl = __mant;
+        __s < 53 { __q = __mant >> __s; __rl = __mant - (__q << __s); }
+        __rh = 0;
+        __hh = 0; __hl = 0;                         // half an ulp (2^(s-1)) and an ulp (2^s), in parts
+        __uh = 0; __ul = 0;
+        __s - 1 >= 59 { __hh = 1 << (__s - 60); } || { __hl = 1 << (__s - 1); }
+        __s >= 59 { __uh = 1 << (__s - 59); } || { __ul = 1 << __s; }
+        * __k <= 17 && !__found {
+            __c = 0;                                // r against half an ulp
+            __rh > __hh { __c = 1; } || __rh < __hh { __c = -1; } || __rl > __hl { __c = 1; } || __rl < __hl { __c = -1; }
+            __c == 0 { : ""; }                      // a tie: the general algorithm decides
+            __dh = __rh;
+            __dl = __rl;
             __m = __q;
-            __diff = __r;
-            __r > __half { __m = __q + 1; __diff = __unit - __r; }
-            __diff * 2 < __p { __found = true; } || { __p = __p * 10; __k = __k + 1; }
+            __c > 0 {                               // nearer to q + 1: the distance is an ulp − r
+                __m = __q + 1;
+                __dh = __uh - __rh;
+                __dl = __ul - __rl;
+                __dl < 0 { __dl = __dl + __lm + 1; __dh = __dh - 1; }
+            }
+            __dh == 0 && __dl * 2 < __p {
+                __found = true;
+            } || {
+                __q > 90000000000000000 { : ""; }   // q·10 would leave 9·10^17 behind
+                __k = __k + 1;
+                __p = __p * 10;
+                __t = __rl * 10;                    // r·10, then what reaches 2^s goes to q
+                __rl = __t & __lm;
+                __rh = __rh * 10 + (__t >> 59);
+                __top = 0;
+                __s >= 59 {
+                    __top = __rh >> (__s - 59);
+                    __rh = __rh & ((1 << (__s - 59)) - 1);
+                } || {
+                    __top = (__rh << (59 - __s)) | (__rl >> __s);
+                    __rh = 0;
+                    __rl = __rl & ((1 << __s) - 1);
+                }
+                __q = __q * 10 + __top;
+            }
         }
         !__found { : ""; }
     }
     __ip = __m / __p;                               // the text: [-]digits.digits, written in place
     __wi = __nihil_ft_ndigits(__ip, 1);
+    __ip == 0 && __m < __p / 100000 { : ""; }        // below 10^-5: the general algorithm writes 1.0e-6
     __wf = __k;
     __k == 0 { __wf = 1; }
     __lead = 0;
