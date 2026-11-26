@@ -609,7 +609,7 @@ rt_lines:
     ret
 
 ; rt_rec_parse: rax = text, rcx = where the line starts, rdx = schema ([n, type, width, …]:
-; 1 INT, 2 BOOL, 3 STRING, 4 FLOAT) → rax = a new ARRAY of n slots (the record), or -1 when a
+; 1 INT, 2 BOOL, 3 STRING, 4 FLOAT; then the model's tag) → rax = a new ARRAY of n slots (the record), or -1 when a
 ; field is not plain (an error, a FLOAT with an exponent or more than 15 digits, an INT that
 ; overflows): then the prelude reads that line its own way, with its messages. INT, BOOL and
 ; FLOAT fields drop the spaces around; STRING keeps the leading ones. FLOAT: Clinger's fast
@@ -669,6 +669,12 @@ rt_rec_parse:
 .sized:
     call rt_alloc
     mov rcx, [r14]
+    mov rdx, rcx                    ; the record's model, schema[1 + 2n] ((m + 1) << 48, or 0),
+    shl rdx, 4                      ; into the header's top 16 bits
+    mov rdx, [r14 + rdx + 8]
+    mov r8, [rax - 16]
+    or r8, rdx
+    mov [rax - 16], r8
     mov [rax - 8], rcx
     mov r15, rax                    ; the record
     lea rcx, [rax + rcx * 8]
@@ -2291,7 +2297,8 @@ gc_mark:
 .drain_block:
     mov rbx, [r15]
     mov rcx, [rbx]
-    shr rcx, 8                      ; n
+    shl rcx, 16                     ; without the model in the top 16 bits (a record's, SPEC §20.10)
+    shr rcx, 24                     ; n
     lea rsi, [rbx + 16]
     lea rdi, [rsi + rcx * 8]
     cmp rcx, GC_SMALL_MAX / 8

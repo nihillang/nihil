@@ -270,6 +270,7 @@ __nihil_rec_rep(r = 0, n = 0, schema = [0]) {
     __i = 0;
     n {
         __b = [0 ; schema[0]];
+        __nihil_set_model(__b, schema[1 + 2 * schema[0]]);     // the static model's (SPEC §20.10)
         __j = 0;
         schema[0] { __b[__j] = __src[__j]; __j = __j + 1; }
         __rows[__i] = __nihil_addr(__b);
@@ -318,6 +319,7 @@ __nihil_rec_parse(text = "", at = 0, schema = [0], names = "", path = "", line =
     __fast >= 0 { : __fast; }
     __n = schema[0];
     __slots = [0 ; __n];
+    __nihil_set_model(__slots, schema[1 + 2 * __n]);
     __pos = at;
     __i = 0;
     * __i < __n {
@@ -2233,6 +2235,7 @@ __nihil_r_from_json(text = "", schema = [0], names = "", model = "") {
     __t = __nihil_s_trim(text);
     !__nihil_json_whole(__t, '{') { __nihil_fail(model + ".from_json: the text is not a valid JSON object"); }
     __slots = [0 ; schema[0]];
+    __nihil_set_model(__slots, schema[1 + 2 * schema[0]]);
     __i = 0;
     * __i < schema[0] {
         __ty = schema[1 + __i * 2];
