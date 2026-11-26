@@ -6,6 +6,8 @@ before v2.0.
 
 ## Unreleased
 
+- a model can start from another: `CHILD = @[PARENT; field: …];` has the parent's fields first (in its order, with its key) and then its own, and the parent's methods work on it (SPEC §20.8). A child has a table of its own, and the IDE reads it with the whole line. For now a child does not replace an inherited method and is not accepted where its parent is expected; a parent's private fields stay private to the parent
+  - *Why:* Step 2 of the way to the pillars of object orientation, cut down after a review by Codex: models that share fields repeated them by hand. Reusing the fields and methods needs no new symbol and changes no program; letting a child stand for its parent needs rules for copies, tables and JSON first, and replacing methods needs dispatch
 - private fields: a field whose name starts with `_` is private to its model, and only the model's own methods read it or change it (SPEC §20.7); anywhere else, `r._field`, `r._field = v;` and a query naming it are compile errors. Creating a record, tables and JSON still go through every field. No field in the repository or in the programs we know of started with `_`, so no program changes meaning
   - *Why:* The first of four steps towards the pillars of object orientation (encapsulation; then inheritance of fields, dispatch and abstract methods): a model's methods could keep its data consistent, but nothing stopped the rest of the program from changing a field behind them. `_` is a name the language already allows, so this needs no keyword and no new symbol
 

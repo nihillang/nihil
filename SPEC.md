@@ -532,7 +532,8 @@ command         ::= method                      (* top level only *)
 
 method          ::= IDENT "(" [ param ( "," param )* ] ")" block
 param           ::= IDENT [ "?" ] "=" ( literal | IDENT "(" ")" | "[" IDENT "(" ")" "]" )
-model           ::= IDENT "=" "@" "[" field ( ";" field )* [ ";" ] "]" ";"
+model           ::= IDENT "=" "@" "[" ( IDENT [ ";" fields ] | fields ) "]" ";"   (* IDENT: the parent, §20.8 *)
+fields          ::= field ( ";" field )* [ ";" ]
 field           ::= [ "#" [ "+" ] ] IDENT ":" ( ( "INT" | "STRING" | "FLOAT" ) "(" INTEGER ")" | "BOOL" )
 block           ::= "{" command* "}"
 assignment      ::= IDENT [ "?" ] [ "[" expression "]" ] "=" expression
@@ -1148,8 +1149,8 @@ shelves[i].free() > 0.0 { … }
 - `value.name(…)` is resolved when compiling, from the model of the value: it is
   an ordinary call, with no table of methods and no cost. A name the model does
   not have is a compile error that lists the ones it has.
-- There is no inheritance: a model can hold another one's fields, and its
-  methods can call that model's methods.
+- A model can start from another one's fields and methods (§20.8); a model can
+  also hold another one's key, and its methods can call that model's methods.
 
 ### 20.7 Private fields
 
@@ -1180,7 +1181,37 @@ acc.deposit(50.0);
   field: they are part of the data, and privacy is about the program's code.
 - It is checked when compiling and costs nothing when running.
 
-### 20.8 Implementation
+### 20.8 A model from another
+
+`CHILD = @[PARENT; field: …];` starts from a model declared before it: the
+child's fields are the parent's, in the parent's order and with its key, followed
+by its own. The parent's methods work on the child, since a child's record has the
+parent's fields where a parent's record has them:
+
+```text
+PERSON = @[#id: INT(4); name: STRING(20); _born: INT(4)];
+PERSON.age(p = PERSON(), year = 0) { : year - p._born; }
+
+STUDENT = @[PERSON; class: STRING(4); grade: FLOAT(5)];   // id, name, _born, class, grade
+s = STUDENT(1, "Ana", 2008, "3B", 8.5);
+>> s.age(2026);                         // 18: PERSON's method, on a STUDENT
+@>> "students.dat", [s];                // a table of its own: PERSON's line, then class and grade
+```
+
+- `@[PARENT]` alone is a model with the parent's fields and methods and a table of
+  its own. Several levels work (a child of a child).
+- A child cannot declare a field its parent has, a second key, or a method its
+  parent has (`STUDENT.age` would be a compile error): replacing an inherited method
+  needs the call to look at the record's real model, which the language does not do
+  yet.
+- A parent's private field (§20.7) stays private to the parent: the child's own
+  methods use the parent's methods to reach it.
+- A child is a type of its own: it is **not** accepted where its parent is expected
+  (a parameter, an assignment, an ARRAY of the parent), so a record is always read,
+  copied and written with its own model.
+- The IDE reads a child's table with its whole line (the parent's fields first).
+
+### 20.9 Implementation
 
 A record is a block of 8-byte slots with the ARRAY layout (§3); a STRING field
 holds the address of its text. Its type is a model number, so each model is a

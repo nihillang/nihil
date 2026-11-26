@@ -65,3 +65,9 @@ wallet = WALLET("Ana", 5000);
 wallet.pay(1200);
 ?wallet.pay(9000);                      // refused by the method; wallet._cents = 0; would not compile
 >> "left: " + $wallet.left() + " (" + ?! + ")\n";
+
+// a model can start from another: SAVINGS has WALLET's fields first, and WALLET's methods
+SAVINGS = @[WALLET; rate: FLOAT(5)];
+savings = SAVINGS("Bia", 10000, 0.5);
+savings.pay(2500);
+>> savings.owner + ": " + $savings.left() + " left, at " + $savings.rate + "%\n";

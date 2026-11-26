@@ -220,11 +220,13 @@ m_names = [0 ; MAX_MODEL];    // constant: STRING with the field names separated
 m_title = [0 ; MAX_MODEL];    // constant: STRING with the model's name
 m_key = [0 ; MAX_MODEL];      // the key field (#name), or -1
 m_auto = [false ; MAX_MODEL]; // the key is automatic (#+name): @{}>> numbers a record whose key is 0
+m_parent = [0 ; MAX_MODEL];   // CHILD = @[PARENT; …] (SPEC §20.8): the parent's model, or -1
 n_models = 0;
 f_start = [0 ; MAX_FIELD];
 f_len = [0 ; MAX_FIELD];
 f_type = [0 ; MAX_FIELD];
 f_width = [0 ; MAX_FIELD];
+f_owner = [0 ; MAX_FIELD];    // the model that declared the field (a child repeats its parent's fields)
 n_fields = 0;
 
 // ---- method parameters ----

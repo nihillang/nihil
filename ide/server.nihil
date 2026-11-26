@@ -255,13 +255,14 @@ files_json(project = "") {
 }
 
 // ---- tables: the data model that fits a .dat file ---------------------------------------------
-// A model is "NAME = @[field: TYPE(width); …];" in a program of the project. The one chosen
+// A model is "NAME = @[field: TYPE(width); …];" (or "NAME = @[PARENT; …];") in a program of the project. The one chosen
 // has the width of the file's lines, preferring a program that names the file.
 M_NAME = ["" ; *];          // every model found: name, file, fields (as JSON), width, the text
 M_FILE = ["" ; *];
 M_FIELDS = ["" ; *];        // "name|TYPE|width|key;…"
 M_WIDTH = [0 ; *];
 M_TEXT = ["" ; *];
+M_PARENT = ["" ; *];        // CHILD = @[PARENT; …]: the parent's name until its fields are put in front
 
 ident_char(c = 0) {
     : c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_';
@@ -302,6 +303,7 @@ field_spec(part = "") {
 
 find_models(project = "") {
     M_NAME = ["" ; *]; M_FILE = ["" ; *]; M_FIELDS = ["" ; *]; M_WIDTH = [0 ; *]; M_TEXT = ["" ; *];
+    M_PARENT = ["" ; *];
     FILES = ["" ; *];
     TABLES = ["" ; *];
     rs = roots_of(project);
@@ -339,9 +341,12 @@ find_models(project = "") {
                         specs = ["" ; *];
                         width = 0;
                         good = true;
+                        parent = "";
                         pi = 0;
                         * pi < #parts {
-                            #parts[pi].trim() > 0 {
+                            pi == 0 && is_name(parts[0].trim()) {
+                                parent = parts[0].trim();   // CHILD = @[PARENT; …]: its fields come first
+                            } || #parts[pi].trim() > 0 {
                                 sp = field_spec(parts[pi]);
                                 #sp == 0 { good = false; } || {
                                     specs[] = sp;
@@ -350,9 +355,9 @@ find_models(project = "") {
                             }
                             pi = pi + 1;
                         }
-                        good && #specs > 0 {
+                        good && (#specs > 0 || #parent > 0) {
                             M_NAME[] = name; M_FILE[] = FILES[fi]; M_FIELDS[] = specs.join(";");
-                            M_WIDTH[] = width; M_TEXT[] = text || "";
+                            M_WIDTH[] = width; M_TEXT[] = text || ""; M_PARENT[] = parent;
                         }
                     }
                 }
@@ -361,6 +366,36 @@ find_models(project = "") {
         }
         fi = fi + 1;
     }
+    // a child's fields: its parent's first (the parent may be in another file, and have a parent too)
+    round = 0;
+    * round < 16 {
+        changed = false;
+        i = 0;
+        * i < #M_NAME {
+            #M_PARENT[i] > 0 {
+                pq = 0;
+                * pq < #M_NAME && M_NAME[pq] != M_PARENT[i] { pq = pq + 1; }
+                pq < #M_NAME && #M_PARENT[pq] == 0 {
+                    #M_FIELDS[i] == 0 { M_FIELDS[i] = M_FIELDS[pq]; } || { M_FIELDS[i] = M_FIELDS[pq] + ";" + M_FIELDS[i]; }
+                    M_WIDTH[i] = M_WIDTH[pq] + M_WIDTH[i];
+                    M_PARENT[i] = "";
+                    changed = true;
+                }
+            }
+            i = i + 1;
+        }
+        round = round + 1;
+        !changed { round = 16; }
+    }
+    i = 0;
+    * i < #M_NAME { #M_PARENT[i] > 0 { M_WIDTH[i] = -1; } i = i + 1; }   // a parent not found: no table fits
+}
+
+// a model's name alone (the parent in CHILD = @[PARENT; …])
+is_name(p = "") {
+    #p == 0 || p[0] >= '0' && p[0] <= '9' { : false; }
+    p : ch { !ident_char(ch) { : false; } }
+    : true;
 }
 
 // the data model a table is read with: among the models of the programs whose lines have its

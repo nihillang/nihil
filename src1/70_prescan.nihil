@@ -220,6 +220,38 @@ model_method_check(k = 0, ns = 0, nl = 0) {
         put_str("()");
         error_end();
     }
+    is_model(km) { no_replacement(s_extra[km], ns + d + 1, nl - d - 1, ns, nl); }
+}
+
+// m descends from a (a parent, its parent, …)?
+descends(m = 0, a = 0) {
+    p = m_parent[m];
+    * p >= 0 { p == a { : true; } p = m_parent[p]; }
+    : false;
+}
+
+// MODEL.name may not replace a method a parent declared, nor be replaced by a child's: that
+// needs dispatch by the record's real model, which the language does not have yet (SPEC §20.8).
+// Both orders are checked, since methods are registered in the order they are written.
+no_replacement(m = 0, start = 0, n = 0, ns = 0, nl = 0) {
+    o = 0;
+    * o < n_models {
+        (descends(m, o) || descends(o, m)) && lookup_model_method(m_sym[o], start, n) >= 0 {
+            a = m; b = o;
+            descends(o, m) { a = o; b = m; }       // a: the child, b: the parent
+            error_start();
+            put_source(s_ofs[m_sym[a]], s_len[m_sym[a]]);
+            put_str(".");
+            put_source(start, n);
+            put_str(" would replace ");
+            put_source(s_ofs[m_sym[b]], s_len[m_sym[b]]);
+            put_str(".");
+            put_source(start, n);
+            put_str(", which it inherits: a model does not replace an inherited method yet (give it another name)");
+            error_end();
+        }
+        o = o + 1;
+    }
 }
 
 // default literal: tok = start → lit_type, lit_value; the lexer stays on the
