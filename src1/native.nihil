@@ -30,6 +30,7 @@ __nihil_gc_free = 0;                       // single free pages below high (8 by
 __nihil_gc_nfree = 0;
 __nihil_gc_high = 0;                       // pages in use or used before
 __nihil_gc_csize = 0;                      // the 21 classes' sizes (8 bytes each)
+__nihil_gc_cls = 0;                        // the class of a block of b bytes: a byte at (b + 15) / 16
 __nihil_gc_cur = 0;                        // a class's page it hands out of (+ 1), its next slot, its pages with room
 __nihil_gc_slot = 0;
 __nihil_gc_room = 0;
@@ -71,6 +72,7 @@ __nihil_gc_init() {
     __nihil_gc_pnext = __nihil_c("calloc", 8, 1 << 20);
     __nihil_gc_free = __nihil_c("calloc", 8, 1 << 20);
     __nihil_gc_csize = __nihil_c("calloc", 8, 21);
+    __nihil_gc_cls = __nihil_c("calloc", 1, 2049);
     __nihil_gc_cur = __nihil_c("calloc", 8, 21);
     __nihil_gc_slot = __nihil_c("calloc", 8, 21);
     __nihil_gc_room = __nihil_c("calloc", 8, 21);
@@ -85,6 +87,13 @@ __nihil_gc_init() {
         __nihil_poke8(__nihil_gc_csize + 8 * __c, __s);
         __c % 2 == 0 { __s = __s + __s / 2; } || { __s = __s / 3 * 4; }
         __c = __c + 1;
+    }
+    __q = 0;
+    __c = 0;
+    * __q <= 2048 {                        // the smallest class that holds 16 · q bytes
+        * __nihil_peek(__nihil_gc_csize + 8 * __c) < 16 * __q { __c = __c + 1; }
+        __nihil_rt_pokeb(__nihil_gc_cls, __q, __c);
+        __q = __q + 1;
     }
     __nihil_gc_next_at = 16 << 20;
     __nihil_gc_threshold = 16 << 20;
@@ -155,7 +164,33 @@ __nihil_gc_pages(n = 0) {
     : __p;
 }
 
-__nihil_rt_alloc(n = 0) { : __nihil_gc_alloc(n, true); }
+// alloc(n): a block of n words. The usual case here, without a call: a small block, no collection
+// due, its class's page with room (its next slot clear in `used`), zeroed 8 bytes at a time
+__nihil_rt_alloc(n = 0) {
+    __nihil_gc_arena == 0 || n < 0 || n > 62 { : __nihil_gc_alloc(n, true); }   // (n itself: n · 8 could overflow)
+    __bytes = n * 8 + 16;
+    __al = __nihil_gc_allocated + __bytes;
+    __al > __nihil_gc_threshold || __nihil_gc_child != 0 { : __nihil_gc_alloc(n, true); }
+    __c = __nihil_peekb(__nihil_gc_cls + (__bytes + 15) / 16);
+    __cp = __nihil_peek(__nihil_gc_cur + 8 * __c);
+    __cp == 0 { : __nihil_gc_alloc(n, true); }
+    __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
+    __i = __nihil_peek(__nihil_gc_slot + 8 * __c);
+    __pg = __nihil_gc_arena + ((__cp - 1) << 16);
+    __m = __nihil_gc_used + 4096 + ((__cp - 1) << 11);
+    __off = __i * __s;
+    * __off + __s <= 65536 && __nihil_peekb(__m + (__off >> 5)) != 0 { __off = __off + __s; }
+    __off + __s > 65536 { : __nihil_gc_alloc(n, true); }
+    __nihil_poke8(__nihil_gc_slot + 8 * __c, __off / __s + 1);
+    __nihil_gc_allocated = __al;
+    __b = __pg + __off;
+    __e = __b + __s;
+    __z = __b;
+    * __z < __e { __nihil_poke8(__z, 0); __z = __z + 8; }
+    __nihil_poke8(__b + 8, n);
+    __nihil_rt_pokeb(__m, __off >> 5, 1);
+    : __b + 16;
+}
 
 __nihil_rt_array_rep(n = 0, fill = 0) {
     __a = __nihil_gc_alloc(n, fill == 0);
@@ -179,11 +214,11 @@ __nihil_gc_alloc(n = 0, lazy = false) {
     __nihil_gc_allocated > __nihil_gc_threshold { __nihil_gc_collect(); }
     __b = 0;
     __bytes <= 32768 {
-        __c = 0;
-        * __nihil_peek(__nihil_gc_csize + 8 * __c) < __bytes { __c = __c + 1; }
+        __c = __nihil_peekb(__nihil_gc_cls + (__bytes + 15) / 16);
         __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
         __b = __nihil_gc_small(__c, __s);
-        __nihil_c("memset", __b, 0, __s);
+        __s <= 512 { __z = __b; * __z < __b + __s { __nihil_poke8(__z, 0); __z = __z + 8; } }
+        || { __nihil_c("memset", __b, 0, __s); }
     } || {
         __np = (__bytes + 65535) >> 16;
         __p = __nihil_gc_pages(__np);

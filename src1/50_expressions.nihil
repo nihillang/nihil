@@ -554,6 +554,7 @@ primary_name() {
         k < 0 && name_is(pi, pl, "__nihil_fail_rt") { : fail_intrinsic(); }
         k < 0 && name_is(pi, pl, "__nihil_peek") { : peek_intrinsic(); }
         k < 0 && name_is(pi, pl, "__nihil_peekb") { : peekb_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_prefetch") { : prefetch_intrinsic(); }
         k < 0 && name_is(pi, pl, "__nihil_poke8") { : poke8_intrinsic(); }
         k < 0 && name_is(pi, pl, "__nihil_c") { : ccall_intrinsic(false); }
         k < 0 && name_is(pi, pl, "__nihil_c32") { : ccall_intrinsic(true); }

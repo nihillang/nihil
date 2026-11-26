@@ -776,7 +776,7 @@ op_rw(i = 0) {
     k == OP_ADDIM || k == OP_CMPIM { op_rd = mb; op_wr = L_FL; :; }
     k == OP_LDX || k == OP_LDBX { op_rd = lbit(v) | lbit(o); op_wr = lr; :; }
     k == OP_STX || k == OP_STBX { op_rd = lbit(v) | lbit(o) | lr; :; }
-    k == OP_PUSH { op_rd = lr; :; }
+    k == OP_PUSH || k == OP_PREFETCH { op_rd = lr; :; }
     k == OP_XMOV || k == OP_I2F { op_rd = lbit(o); :; }
     k == OP_JCC || k == OP_JCC8 { op_rd = L_FL; :; }
     k == OP_JCC_RT { op_rd = L_FL | L_AX | L_CX; o != RT_ERROR_INDEX { op_rd = L_ALL; } :; }
@@ -931,7 +931,7 @@ vs_safe(i = 0) {
     k = op_k[i];
     k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO || k == OP_LOCAL || k == OP_GLOBAL { : true; }
     k == OP_LEA_CONST || k == OP_ALU || k == OP_ADDI || k == OP_MUL || k == OP_MULI || k == OP_CMP || k == OP_CMPI { : true; }
-    k == OP_TEST || k == OP_SETCC || k == OP_XMOV || k == OP_I2F || k == OP_XLD || k == OP_XOP || k == OP_RMOVX { : true; }
+    k == OP_TEST || k == OP_SETCC || k == OP_XMOV || k == OP_I2F || k == OP_XLD || k == OP_XOP || k == OP_RMOVX || k == OP_PREFETCH { : true; }
     k == OP_SHRI || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG || k == OP_ZXB || k == OP_F2I || k == OP_FCMP_SET { : true; }
     k == OP_JCC_RT && op_o[i] == RT_ERROR_INDEX { : true; }
     k == OP_CALL_RT && (op_v[i] == RT_DIV || op_v[i] == RT_MOD) { : true; }
@@ -1173,6 +1173,7 @@ arm_lazy(i = 0) {
     }
     (k == OP_PUSH || k == OP_POP) && n_vs > 0 { vs_flush(); }
     k == OP_PUSH { a_push(srcr(r)); : 1; }
+    k == OP_PREFETCH { a = srcr(r); a_ins("prfm pldl1keep, ["); a_x(a); a_str("]"); a_nl(); : 1; }
     k == OP_POP && lr != 0 { pend_k[r] = 0; a_pop(a_rn(r)); : 1; }
     // a comparison and the jump on it
     k == OP_CMP_SET && fused_jump(i) {
@@ -1758,6 +1759,7 @@ arm_op(i = 0) {
     }
     k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
     k == OP_ALIGN { :; }
+    k == OP_PREFETCH { a_ins("prfm pldl1keep, ["); a_reg(r); a_str("]"); a_nl(); :; }
     k == OP_JCC_RT && arm_native { rt_used[o / 5] = true; a_ins("b."); a_str(a_cond(v)); a_str(" Lrt"); a_num(o); a_nl(); :; }
     k == OP_JCC_RT { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label_rt(o); a_nl(); :; }
     k == OP_EPILOGUE {
