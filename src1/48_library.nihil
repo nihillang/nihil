@@ -602,20 +602,13 @@ model_method_call(t = 0, ns = 0, nl = 0) {
 // hidden locals of the loop: [rbp + d] with d from new_slot() (negative), or a register
 // (d > 0: rbx, r12 … r15, from take_register, inside a method)
 q_load(r = 0, d = 0) {                  // mov rax|rcx|rdx, [rbp + d] / mov rax|rcx|rdx, R  (r: 0, 1, 2)
-    d > 0 {
-        eb(0x48 | rex_r(d), 0x89, 0xC0 | ((d & 7) << 3) | r);
-        :;
-    }
-    r == 0 { eb(0x48, 0x8B, 0x85); }
-    r == 1 { eb(0x48, 0x8B, 0x8D); }
-    r == 2 { eb(0x48, 0x8B, 0x95); }
-    emit_d(d);
+    d > 0 { op_mov(r, d); :; }
+    op_ld(r, R_BP, d, 1);
 }
 
 q_store(d = 0) {                        // mov [rbp + d], rax / mov R, rax
-    d > 0 { eb(0x48 | rex_b(d), 0x89, 0xC0 | (d & 7)); :; }
-    eb(0x48, 0x89, 0x85);
-    emit_d(d);
+    d > 0 { op_mov(d, R_AX); :; }
+    op_st(R_BP, d, R_AX, 1);
 }
 
 q_zero(d = 0) {                         // mov qword [rbp + d], 0 / mov R, 0
@@ -644,8 +637,7 @@ query_field() {
     j = find_field(q_model, tok_start, tok_len);
     j < 0 { : -1; }
     q_load(0, q_elem);
-    eb(0x48, 0x8B, 0x80);                   // mov rax, [rax + disp32]
-    emit_d(j * 8);
+    op_ld(R_AX, R_AX, j * 8, 1);                   // mov rax, [rax + disp32]
     next_token();
     : f_type[m_first[q_model] + j];
 }
@@ -707,7 +699,7 @@ query_call(t = 0) {
         emit_d(d_res);
     }
     kind == 1 || kind == 4 {
-        eb(0x48, 0x8B, 0x48, 0xF8);         // mov rcx, [rax - 8]
+        op_ld(R_CX, R_AX, -8, 0);         // mov rcx, [rax - 8]
         emit_call_rt(RT_ALLOC);            // the result (where) or the keys (sort)
         q_store(d_res);
     }
@@ -720,7 +712,7 @@ query_call(t = 0) {
     eb(0x0F, 0x8D);                         // jge end
     p_end = size_code;
     emit_d(0);
-    eb(0x48, 0x8B, 0x04, 0xC1);             // mov rax, [rcx + rax*8]
+    op_ldx(R_AX, R_CX, R_AX);             // mov rax, [rcx + rax*8]
     q_store(d_el);
     sv_m = q_model; sv_e = q_elem;
     q_model = m; q_elem = d_el;
@@ -740,7 +732,7 @@ query_call(t = 0) {
             q_load(1, d_res);
             q_load(2, d_n);
             q_load(0, d_el);
-            eb(0x48, 0x89, 0x04, 0xD1);     // mov [rcx + rdx*8], rax
+            op_stx(R_CX, R_DX, R_AX);     // mov [rcx + rdx*8], rax
             q_inc(d_n);
         }
         kind == 2 { q_inc(d_n); }
@@ -759,7 +751,7 @@ query_call(t = 0) {
         }
         q_load(1, d_res);
         q_load(2, d_i);
-        eb(0x48, 0x89, 0x04, 0xD1);         // mov [rcx + rdx*8], rax (the key)
+        op_stx(R_CX, R_DX, R_AX);         // mov [rcx + rdx*8], rax (the key)
     }
     kind == 5 {
         u != TYPE_INT && u != TYPE_FLOAT && u != TYPE_UNKNOWN { query_type(ns, nl, u, "an INT or FLOAT", pi, pl, pn, pli); }
@@ -798,7 +790,7 @@ query_call(t = 0) {
     kind == 1 {
         q_load(0, d_res);
         q_load(1, d_n);
-        eb(0x48, 0x89, 0x48, 0xF8);         // mov [rax - 8], rcx: the elements that passed
+        op_st(R_AX, -8, R_CX, 0);         // mov [rax - 8], rcx: the elements that passed
     }
     kind == 2 { q_load(0, d_n); r = TYPE_INT; }
     kind == 3 {

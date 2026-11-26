@@ -233,17 +233,17 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     ix = new_slot();
     emit_store_local(a);
     lst {
-        eb(0x48, 0x8B, 0x00);                // mov rax, [rax]: a list's count, on entry
-        eb(0x48, 0x89, 0xC1);                // mov rcx, rax
+        op_ld(R_AX, R_AX, 0, 0);                // mov rax, [rax]: a list's count, on entry
+        op_mov(R_CX, R_AX);                // mov rcx, rax
     } || {
-        eb(0x48, 0x8B, 0x48, 0xF8);          // mov rcx, [rax - 8]: the size
+        op_ld(R_CX, R_AX, -8, 0);          // mov rcx, [rax - 8]: the size
     }
-    eb(0x48, 0x89, 0x8D); emit_d(n);         // mov [rbp + n], rcx
+    op_st(R_BP, n, R_CX, 1);         // mov [rbp + n], rcx
     eb(0x48, 0xC7, 0x85); emit_d(ix); emit_d(0);    // mov qword [rbp + i], 0
     align_loop();
     top = size_code;
     last_target = size_code;
-    eb(0x48, 0x8B, 0x8D); emit_d(ix);        // mov rcx, [rbp + i]
+    op_ld(R_CX, R_BP, ix, 1);        // mov rcx, [rbp + i]
     eb(0x48, 0x3B, 0x8D); emit_d(n);         // cmp rcx, [rbp + n]
     eb(0x0F, 0x8D);                          // jge end
     leave = size_code;
@@ -262,11 +262,11 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
         il == xl && same_text(ii, xi, il) { restore_pos(ii, il, iln, ili); error("the element and the index need two names"); }
         ki = each_name(ii, il, iln, ili, TYPE_INT);
     }
-    eb(0x48, 0x8B, 0x85); emit_d(a);         // mov rax, [rbp + a]
-    lst { eb(0x48, 0x8B, 0x80); emit_d(16); }   // mov rax, [rax + 16]: a list's items, read again each turn (it may grow)
-    t == TYPE_STR { eb(0x0F, 0xB6, 0x04, 0x08); } || { eb(0x48, 0x8B, 0x04, 0xC8); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
+    op_ld(R_AX, R_BP, a, 1);         // mov rax, [rbp + a]
+    lst { op_ld(R_AX, R_AX, 16, 1); }   // mov rax, [rax + 16]: a list's items, read again each turn (it may grow)
+    t == TYPE_STR { op_ldbx(R_AX, R_AX, R_CX); } || { op_ldx(R_AX, R_AX, R_CX); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
     emit_store_var(kx);
-    has_i { eb(0x48, 0x8B, 0x85); emit_d(ix); emit_store_var(ki); }   // mov rax, [rbp + i]
+    has_i { op_ld(R_AX, R_BP, ix, 1); emit_store_var(ki); }   // mov rax, [rbp + i]
     loop_depth = loop_depth + 1;
     * tok_type != '}' {
         tok_type == T_END {
@@ -700,7 +700,7 @@ cmd_write_file(kind = 0) {
         t = TYPE_STR;
     }
     write_file_arg(t, op, "the text", pi, pl, pn, pli);
-    eb(0x48, 0x89, 0xC1);                   // mov rcx, rax (the text)
+    op_mov(R_CX, R_AX);                   // mov rcx, rax (the text)
     op_pop(R_AX);                            // pop rax (the path)
     kind == T_APPEND_FILE { emit_call_rt(RT_APPEND_FILE); } || { emit_call_rt(RT_WRITE_FILE); }
     expect(';', "';'");
@@ -734,7 +734,7 @@ cmd_exit() {
             put_type(t);
             error_end();
         }
-        eb(0x48, 0x89, 0xC7);               // mov rdi, rax
+        op_mov(R_DI, R_AX);               // mov rdi, rax
     }
     emit_call_rt(RT_EXIT);
     expect(';', "';'");
@@ -837,7 +837,7 @@ cmd_return() {
             put_type(t);
             error_end();
         }
-        eb(0x48, 0x89, 0xC7);               // mov rdi, rax
+        op_mov(R_DI, R_AX);               // mov rdi, rax
     }
     emit_call_rt(RT_EXIT);
     expect(';', "';'");
@@ -1294,9 +1294,9 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
         put_type(v);
         error_end();
     }
-    eb(0x48, 0x89, 0xC2, 0x59);             // mov rdx, rax ; pop rcx
+    op_mov(R_DX, R_AX); op_pop(R_CX);             // mov rdx, rax ; pop rcx
     emit_load_var(k);
     emit_check_limit();
-    eb(0x48, 0x89, 0x14, 0xC8);             // mov [rax + rcx*8], rdx
+    op_stx(R_AX, R_CX, R_DX);             // mov [rax + rcx*8], rdx
     expect(';', "';'");
 }

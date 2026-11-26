@@ -207,7 +207,16 @@ CC_G = 15;
 R_AX = 0;               // the registers, in x86's numbering: rax, the value
 R_CX = 1;               // rcx, the second operand
 R_DX = 2;               // rdx, an optional's presence
+R_BX = 3;
+R_SP = 4;
+R_BP = 5;
 R_SI = 6;
+R_ABS = -1;             // as a base: no register, the address itself (a global)
+OP_LD = 16;             // r ← [base + v] (o = base * 2 + wide: the x86 disp32 form even when a byte fits)
+OP_ST = 17;             // [base + v] ← r (o as OP_LD)
+OP_LDX = 18;            // r ← [base + index * 8] (v = base, o = index)
+OP_STX = 19;            // [base + index * 8] ← r (v = base, o = index)
+OP_LDBX = 20;           // r ← the byte at [base + index] (v = base, o = index)
 R_DI = 7;
 OP_LEA_CONST = 13;      // r ← the address of the constant at offset v
 OP_CALL = 14;           // a call of the method v (its symbol)

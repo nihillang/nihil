@@ -281,14 +281,13 @@ field_access(t = 0) {
     tok_type != T_IDENT { error_expected("a field name after '.'"); }
     t == TYPE_UNKNOWN {
         next_token();
-        eb(0x48, 0x8B, 0x00);               // mov rax, [rax] (the type is not known yet)
+        op_ld(R_AX, R_AX, 0, 0);               // mov rax, [rax] (the type is not known yet)
         : TYPE_UNKNOWN;
     }
     !is_rec(t) { not_a_record(t); }
     e = field_index(t);
     next_token();
-    eb(0x48, 0x8B, 0x80);                   // mov rax, [rax + disp32]
-    emit_d((e - m_first[t >> 8]) * 8);
+    op_ld(R_AX, R_AX, (e - m_first[t >> 8]) * 8, 1);                   // mov rax, [rax + disp32]
     : f_type[e];
 }
 
@@ -391,8 +390,7 @@ emit_alloc_record(m = 0) {
     m_n[m] {
         f_type[m_first[m] + j] == TYPE_STR {
             op_lea_const(R_CX, const_empty);           // lea rcx, [rip + ""]
-            eb(0x48, 0x89, 0x88);           // mov [rax + disp32], rcx
-            emit_d(j * 8);
+            op_st(R_AX, j * 8, R_CX, 1);           // mov [rax + disp32], rcx
         }
         j = j + 1;
     }
@@ -571,7 +569,7 @@ record_at(m = 0, opt = false) {
     model_path(m, "@[i]");
     op_push(R_AX);                            // push rax (path)
     w = line_width(m);
-    eb(0x48, 0x8B, 0x4C, 0x24, 0x08);       // mov rcx, [rsp + 8] (i)
+    op_ld(R_CX, R_SP, 8, 0);       // mov rcx, [rsp + 8] (i)
     eb(0x48, 0x69, 0xC9);                   // imul rcx, rcx, width
     emit_d(w);
     emit(0xBA);                            // mov edx, width
@@ -644,14 +642,14 @@ cmd_write_record() {
             :;
         }
         op_push(R_AX);                        // push rax (the record)
-        eb(0x48, 0x8B, 0x44, 0x24, 0x08);   // mov rax, [rsp + 8] (path)
+        op_ld(R_AX, R_SP, 8, 0);   // mov rax, [rsp + 8] (path)
         eb(0x31, 0xC9, 0x31, 0xD2);         // xor ecx, ecx ; xor edx, edx (only the size)
         emit_call_rt(RT_READ_AT);
         op_push(R_DX);                        // push rdx (size)
         push_model(m);
         call_prelude("__nihil_rec_place", 56);   // rax = the line (with a "\n" before it, if the last line lacks one)
-        eb(0x48, 0x89, 0xC1);               // mov rcx, rax (the text)
-        eb(0x48, 0x8B, 0x54, 0x24, 0x08);   // mov rdx, [rsp + 8] (i)
+        op_mov(R_CX, R_AX);               // mov rcx, rax (the text)
+        op_ld(R_DX, R_SP, 8, 0);   // mov rdx, [rsp + 8] (i)
         eb(0x48, 0xFF, 0xC2);               // inc rdx
         eb(0x48, 0x69, 0xD2);               // imul rdx, rdx, width
         emit_d(w);
@@ -815,7 +813,7 @@ file_intrinsic(kind = 0) {
     kind <= 2 {
         eb(0x31, 0xC9, 0x31, 0xD2);         // xor ecx, ecx ; xor edx, edx
         emit_call_rt(RT_READ_AT);
-        kind == 1 { eb(0x48, 0x89, 0xD0); } || { eb(0x48, 0x89, 0xC8); }   // mov rax, rdx | rcx
+        kind == 1 { op_mov(R_AX, R_DX); } || { op_mov(R_AX, R_CX); }   // mov rax, rdx | rcx
         expect(')', "')'");
         : TYPE_INT;
     }
@@ -823,7 +821,7 @@ file_intrinsic(kind = 0) {
     expect(',', "','");
     expression();
     kind >= 6 {                            // __nihil_truncate(path, size), _ns
-        eb(0x48, 0x89, 0xC2, 0x58);         // mov rdx, rax ; pop rax
+        op_mov(R_DX, R_AX); op_pop(R_AX);         // mov rdx, rax ; pop rax
         kind == 7 { emit_call_rt(RT_TRUNCATE_NS); } || { emit_call_rt(RT_TRUNCATE); }
         call_end = size_code;
         expect(')', "')'");
@@ -833,12 +831,12 @@ file_intrinsic(kind = 0) {
     expect(',', "','");
     expression();
     kind == 3 {
-        eb(0x48, 0x89, 0xC2, 0x59, 0x58);   // mov rdx, rax ; pop rcx ; pop rax
+        op_mov(R_DX, R_AX); op_pop(R_CX); op_pop(R_AX);   // mov rdx, rax ; pop rcx ; pop rax
         emit_call_rt(RT_READ_AT);
         expect(')', "')'");
         : TYPE_INT;
     }
-    eb(0x48, 0x89, 0xC1, 0x5A, 0x58);       // mov rcx, rax ; pop rdx ; pop rax
+    op_mov(R_CX, R_AX); op_pop(R_DX); op_pop(R_AX);       // mov rcx, rax ; pop rdx ; pop rax
     kind == 5 { emit_call_rt(RT_WRITE_AT_NS); } || { emit_call_rt(RT_WRITE_AT); }
     call_end = size_code;                // a command by itself, like a call
     expect(')', "')'");
@@ -862,7 +860,7 @@ net_intrinsic(kind = 0) {
     op_push(R_AX);
     expect(',', "','");
     expression();
-    eb(0x48, 0x89, 0xC1, 0x58);             // mov rcx, rax ; pop rax
+    op_mov(R_CX, R_AX); op_pop(R_AX);             // mov rcx, rax ; pop rax
     kind == 1 { emit_call_rt(RT_NET_LISTEN); }
     kind == 3 { emit_call_rt(RT_FD_READ); }
     kind == 4 { emit_call_rt(RT_FD_SEND); }
@@ -884,7 +882,7 @@ copy_intrinsic(kind = 0) {
     op_push(R_AX);
     expect(',', "','");
     expression();
-    eb(0x48, 0x89, 0xC2, 0x59, 0x58);       // mov rdx, rax ; pop rcx ; pop rax
+    op_mov(R_DX, R_AX); op_pop(R_CX); op_pop(R_AX);       // mov rdx, rax ; pop rcx ; pop rax
     kind == 1 { emit_call_rt(RT_SUB); }
     kind == 2 { emit_call_rt(RT_PUT); }
     kind == 3 { emit_call_rt(RT_REC_PARSE); }
@@ -903,7 +901,7 @@ json_intrinsic(kind = 0) {
     op_push(R_AX);
     expect(',', "','");
     expression();
-    eb(0x48, 0x89, 0xC1, 0x58);             // mov rcx, rax ; pop rax
+    op_mov(R_CX, R_AX); op_pop(R_AX);             // mov rcx, rax ; pop rax
     kind == 1 { emit_call_rt(RT_JSON_END); } || { emit_call_rt(RT_LINES); }
     expect(')', "')'");
     : TYPE_INT;
@@ -926,7 +924,7 @@ syscall_intrinsic() {
             pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
             u = expression();
             u != TYPE_INT && u != TYPE_UNKNOWN { type_wrong(pi, pl, pn, pli, TYPE_INT, u); }
-            eb(0x48, 0x89, 0x44, 0x24, 8 + 8 * n);   // mov [rsp + 8 + 8n], rax
+            op_st(R_SP, 8 + 8 * n, R_AX, 0);   // mov [rsp + 8 + 8n], rax
             n = n + 1;
             tok_type == ',' { next_token(); } || tok_type != ']' { error_expected("',' or ']'"); }
         }

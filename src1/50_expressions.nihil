@@ -259,7 +259,7 @@ binary(nv = 0) {
             // the right side is a simple load: load it straight into rcx
             simple_to_rcx(pos_push + 1, pos_push);
         } || {
-            eb(0x48, 0x89, 0xC1, 0x58);     // mov rcx, rax ; pop rax
+            op_mov(R_CX, R_AX); op_pop(R_AX);     // mov rcx, rax ; pop rax
         }
         mode = mode_op(op);
         r = 0;
@@ -310,7 +310,7 @@ unary() {
         ok = u == TYPE_UNKNOWN;
         t == '#' && u & TYPE_ARR != 0 && !is_opt(u) { ok = true; }
         t == '#' && (is_map(u) || is_list(u)) {
-            eb(0x48, 0x8B, 0x00);           // mov rax, [rax]: the count, first word of the map (or list)
+            op_ld(R_AX, R_AX, 0, 0);           // mov rax, [rax]: the count, first word of the map (or list)
             : TYPE_INT;
         }
         t == T_AT_OPT {
@@ -369,7 +369,7 @@ unary() {
             : TYPE_STR;
         }
         t == '$' && u == TYPE_BOOL {
-            eb(0x48, 0x89, 0xC2);           // mov rdx, rax
+            op_mov(R_DX, R_AX);           // mov rdx, rax
             op_lea_const(R_AX, bool_text(true));           // lea rax, [rip + "true"]
             op_lea_const(R_CX, bool_text(false));           // lea rcx, [rip + "false"]
             eb(0x48, 0x85, 0xD2, 0x48, 0x0F, 0x44, 0xC1);   // test rdx, rdx ; cmovz rax, rcx
@@ -381,7 +381,7 @@ unary() {
             : TYPE_STR;
         }
         !ok && u != TYPE_STR { error_op_types(pi, pl, pn, pli, u, 0); }
-        eb(0x48, 0x8B, 0x40, 0xF8);         // mov rax, [rax-8]
+        op_ld(R_AX, R_AX, -8, 0);         // mov rax, [rax-8]
         : TYPE_INT;
     }
     : postfix();
@@ -476,14 +476,14 @@ index_step(t = 0) {
     load_simple(pos_push + 1) >= 0 {
         simple_to_rcx(pos_push + 1, pos_push);    // a simple index: straight into rcx, no stack
     } || {
-        eb(0x48, 0x89, 0xC1, 0x58);     // mov rcx, rax ; pop rax
+        op_mov(R_CX, R_AX); op_pop(R_AX);     // mov rcx, rax ; pop rax
     }
     emit_check_limit();
     t == TYPE_STR {
-        eb(0x0F, 0xB6, 0x04, 0x08);     // movzx eax, byte [rax + rcx]
+        op_ldbx(R_AX, R_AX, R_CX);     // movzx eax, byte [rax + rcx]
         t = TYPE_INT;
     } || {
-        eb(0x48, 0x8B, 0x04, 0xC8);     // mov rax, [rax + rcx*8]
+        op_ldx(R_AX, R_AX, R_CX);     // mov rax, [rax + rcx*8]
         t = t & ~TYPE_ARR;
     }
     : t;
@@ -674,7 +674,7 @@ primary_array() {
             push_const(m_schema[t >> 8]);
             call_prelude("__nihil_rec_rep", 24);
         } || {
-            eb(0x48, 0x89, 0xC1, 0x5A);     // mov rcx, rax ; pop rdx
+            op_mov(R_CX, R_AX); op_pop(R_DX);     // mov rcx, rax ; pop rdx
             emit_call_rt(RT_ARRAY_REP);
         }
         expect(']', "']' (in [value ; size])");
@@ -790,7 +790,7 @@ call_method(k = 0, pre = 0) {
             emit_call_rt(RT_ALLOC);
             op_push(R_AX);
             emit_default(e);
-            eb(0x48, 0x8B, 0x0C, 0x24, 0x48, 0x89, 0x01, 0x58);   // mov rcx,[rsp] ; mov [rcx],rax ; pop rax
+            op_ld(R_CX, R_SP, 0, 0); op_st(R_CX, 0, R_AX, 0); op_pop(R_AX);   // mov rcx,[rsp] ; mov [rcx],rax ; pop rax
         } || {
             emit_default(e);
         }

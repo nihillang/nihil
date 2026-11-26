@@ -125,7 +125,7 @@ x86_load(k = 0, r = 0, v = 0, o = 0) {
             emit_d(v + 8);
         }
     } || {
-        eb(0x48 | rex_r(v), 0x89, 0xC0 | ((v & 7) << 3) | r);   // mov rax, rV
+        eb(0x48 | rex_r(v) | rex_b(r), 0x89, 0xC0 | ((v & 7) << 3) | (r & 7));   // mov r, rV
     }
 }
 
@@ -157,6 +157,64 @@ op_ret() {
     at = size_code;
     emit(0xC3);
     op_note(OP_RET, 0, 0, at);
+}
+
+// r ← s
+op_mov(r = 0, s = 0) {
+    op_load(OP_REG, r, s);
+}
+
+// opc reg, [base + disp] (base R_ABS: [disp32], a global); wide = 1: disp32 even when a byte fits
+x86_mem(opc = 0, reg = 0, base = 0, disp = 0, wide = 0) {
+    base < 0 {
+        eb(0x48 | rex_r(reg), opc, 0x04 | ((reg & 7) << 3), 0x25);
+        emit_d(disp);
+        :;
+    }
+    eb(0x48 | rex_r(reg) | rex_b(base), opc);
+    md = 0x80;                             // disp32
+    wide == 0 && disp == 0 && base & 7 != 5 {
+        md = 0;
+    } || wide == 0 && disp >= -128 && disp < 128 {
+        md = 0x40;                         // disp8
+    }
+    emit(md | ((reg & 7) << 3) | (base & 7));
+    base & 7 == 4 { emit(0x24); }          // rsp, r12: a SIB byte
+    md == 0x40 { emit(disp & 255); }
+    md == 0x80 { emit_d(disp); }
+}
+
+op_ld(r = 0, base = 0, disp = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x8B, r, base, disp, wide);    // mov r, [base + disp]
+    op_note(OP_LD, r, disp, at, base * 2 + wide);
+}
+
+op_st(base = 0, disp = 0, r = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x89, r, base, disp, wide);    // mov [base + disp], r
+    op_note(OP_ST, r, disp, at, base * 2 + wide);
+}
+
+// r ← [base + index * 8]
+op_ldx(r = 0, base = 0, index = 0) {
+    at = size_code;
+    eb(0x48, 0x8B, 0x04 | (r << 3), 0xC0 | (index << 3) | base);
+    op_note(OP_LDX, r, base, at, index);
+}
+
+// [base + index * 8] ← r
+op_stx(base = 0, index = 0, r = 0) {
+    at = size_code;
+    eb(0x48, 0x89, 0x04 | (r << 3), 0xC0 | (index << 3) | base);
+    op_note(OP_STX, r, base, at, index);
+}
+
+// r ← the byte at [base + index], zero-extended
+op_ldbx(r = 0, base = 0, index = 0) {
+    at = size_code;
+    eb(0x0F, 0xB6, 0x04 | (r << 3), (index << 3) | base);   // movzx r32, byte [base + index]
+    op_note(OP_LDBX, r, base, at, index);
 }
 
 op_push(r = 0) {
@@ -221,13 +279,11 @@ emit_immediate(v = 0) {
 }
 
 emit_store_local(d = 0) {
-    eb(0x48, 0x89, 0x85);                   // mov [rbp + disp32], rax
-    emit_d(d);
+    op_st(R_BP, d, R_AX, 1);               // mov [rbp + disp32], rax
 }
 
 emit_store_global(a = 0) {
-    eb(0x48, 0x89, 0x04, 0x25);             // mov [disp32], rax
-    emit_d(a);
+    op_st(R_ABS, a, R_AX, 1);              // mov [disp32], rax
 }
 
 // a loop's first instruction at an address multiple of 16 (the code is loaded at BASE_CODE, so
@@ -278,14 +334,12 @@ emit_store_var(k = 0) {
     s_flags[k] & FLAG_GLOBAL != 0 && s_flags[k] & FLAG_TOP == 0 {
         emit_store_global(s_end[k]);
         s_flags[k] & FLAG_OPT != 0 {
-            eb(0x48, 0x89, 0x14, 0x25);     // mov [disp32 + 8], rdx
-            emit_d(s_end[k] + 8);
+            op_st(R_ABS, s_end[k] + 8, R_DX, 1);   // mov [disp32 + 8], rdx
         }
     } || {
         emit_store_local(s_end[k]);
         s_flags[k] & FLAG_OPT != 0 {
-            eb(0x48, 0x89, 0x95);           // mov [rbp + disp32 + 8], rdx
-            emit_d(s_end[k] + 8);
+            op_st(R_BP, s_end[k] + 8, R_DX, 1);    // mov [rbp + disp32 + 8], rdx
         }
     }
 }
@@ -319,11 +373,11 @@ rex_b(r = 0) { r >= 8 { : 1; } : 0; }
 rex_r(r = 0) { r >= 8 { : 4; } : 0; }
 
 emit_mov_rax_reg(r = 0) {                  // mov rax, r
-    eb(0x48 | rex_r(r), 0x89, 0xC0 | ((r & 7) << 3));
+    op_mov(R_AX, r);
 }
 
 emit_mov_reg_rax(r = 0) {                  // mov r, rax
-    eb(0x48 | rex_b(r), 0x89, 0xC0 | (r & 7));
+    op_mov(r, R_AX);
 }
 
 // method epilogue: restores the saved registers and returns
