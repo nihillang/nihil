@@ -1579,8 +1579,15 @@ __nihil_rt_lines(s = 0, w = 0) {
     __rest != 0 { __rest != w { : -1; } __lines = __lines + 1; }
     __k = 0;
     * __k < __whole { __nihil_peekb(s + __k * (w + 1) + w) != 10 { : -1; } __k = __k + 1; }
-    __breaks = 0;
-    __i = 0;
+    __breaks = 0;                          // the line breaks, 8 bytes at a time: a byte 10 becomes 0 by
+    __i = 0;                               // xor, and an exact test of zero bytes marks it with its high bit
+    __end = __n & -8;
+    * __i < __end {
+        __x = __nihil_peek(s + __i) ^ 0x0A0A0A0A0A0A0A0A;
+        __y = ~(((__x & 0x7F7F7F7F7F7F7F7F) + 0x7F7F7F7F7F7F7F7F) | __x | 0x7F7F7F7F7F7F7F7F);
+        __breaks = __breaks + (((((__y >> 7) & 0x0101010101010101) * 0x0101010101010101) >> 56) & 255);
+        __i = __i + 8;
+    }
     * __i < __n { __nihil_peekb(s + __i) == 10 { __breaks = __breaks + 1; } __i = __i + 1; }
     __breaks != __whole { : -1; }
     : __lines;
@@ -1594,17 +1601,17 @@ __nihil_rt_pow10_made = false;
 __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
     __nf = __nihil_peek(schema);
     __words = __nf;
-    __a = at;
-    __i = 0;
-    * __i < __nf {                                          // the size: the slots and the texts
-        __w = __nihil_peek(schema + 16 + 16 * __i);
-        __nihil_peek(schema + 8 + 16 * __i) == 3 {
-            __e = __a + __w;
-            * __e > __a && __nihil_peekb(t + __e - 1) == ' ' { __e = __e - 1; }
-            __words = __words + (__e - __a + 16) / 8;
+    __sa = at;                                              // (names of their own in each loop: a slot
+    __si = 0;                                               // no call crosses can stay in a register)
+    * __si < __nf {                                         // the size: the slots and the texts
+        __sw = __nihil_peek(schema + 16 + 16 * __si);
+        __nihil_peek(schema + 8 + 16 * __si) == 3 {
+            __se = __sa + __sw;
+            * __se > __sa && __nihil_peekb(t + __se - 1) == ' ' { __se = __se - 1; }
+            __words = __words + (__se - __sa + 16) / 8;
         }
-        __a = __a + __w;
-        __i = __i + 1;
+        __sa = __sa + __sw;
+        __si = __si + 1;
     }
     __r = [0 ; __words];
     __rec = __nihil_addr(__r);
@@ -1626,7 +1633,8 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
             __a == __b { : -1; }
             * __a < __b {
                 __d = __nihil_peekb(t + __a) - '0';
-                __d < 0 || __d > 9 || __v > (9223372036854775807 - __d) / 10 { : -1; }
+                __d < 0 || __d > 9 { : -1; }
+                __v >= 922337203685477580 && (__v > 922337203685477580 || __d > 7) { : -1; }   // (INT's largest, / 10)
                 __v = __v * 10 + __d;
                 __a = __a + 1;
             }
@@ -1639,7 +1647,9 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
         } || __type == 3 {                                  // STRING, in the record's block
             __m = __b - __a;
             __nihil_poke8(__next, __m);
-            __nihil_c("memcpy", __next + 8, t + __a, __m);
+            __q = 0;                       // (a byte at a time: no call in the loop of the fields)
+            __dst = __nihil_str_at(__next + 8);
+            * __q < __m { __nihil_poke(__dst, __q, __nihil_peekb(t + __a + __q)); __q = __q + 1; }
             __v = __next + 8;
             __next = __next + 8 + ((__m + 8) / 8) * 8;
         } || __a < __b {                                    // FLOAT (any other type): Clinger's fast path

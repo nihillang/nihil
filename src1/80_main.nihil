@@ -205,8 +205,10 @@ want_map {
 }
 arm_native {
     arm_text();
+    arm_out = [0 ; arm_len];                 // the text whole, written at once (not a byte at a time)
     i_arm = 0;
-    arm_len { >>> arm[i_arm]; i_arm = i_arm + 1; }
+    arm_len { arm_out[i_arm] = arm[i_arm]; i_arm = i_arm + 1; }
+    >> $arm_out;
     :: 0;
 }
 want_arm {

@@ -568,8 +568,8 @@ unit_slots(lo = 0, hi = 0, top = false) {
     // first the registers no call keeps, for the slots no call crosses (a parameter: from the start)
     q = 0;
     * q < n_uslot { u = uslot[q]; u >= PBASE && slot_lo[u] >= 0 { slot_lo[u] = lo; } q = q + 1; }
-    reg = 5;                               // x5 … x8: x0 … x4 stay for the values pushed in an expression
-    unit_leaf && unit_n + 1 > reg { reg = unit_n + 1; }
+    reg = 1;
+    unit_leaf { reg = unit_n + 1; }
     top { reg = 9; }                       // (the program's own code calls its globals' start, placed at its end:
                                            // its order is not the order it runs in)
     * reg <= 8 {
@@ -1193,6 +1193,16 @@ arm_lazy(i = 0) {
         : 1 + sk;
     }
     // memory: addresses and values from where they are
+    k == OP_LDBX && pend_k[o] == 2 && pend_v[o] >= 0 && pend_v[o] <= 4095 {   // [base + a small constant]
+        bn = srcr(v);
+        off = pend_v[o];
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        a_ins("ldrb "); a_w(d); a_str(", ["); a_x(bn); off != 0 { a_str(", #"); a_num(off); } a_str("]"); a_nl();
+        dest_done(r, d);
+        : 1 + sk;
+    }
     k == OP_LDX || k == OP_LDBX {
         bn = srcr(v);
         xn = srcr(o);
