@@ -100,14 +100,28 @@ contract with the code the compiler writes:
 - any word that points into an allocated block keeps it (a record's texts are inside its block);
 - a large block is scanned only where it was written (`mincore`): a big array of zeros costs nothing.
 
-`NIHIL_GC_STATS=1` shows each collection; `NIHIL_GC_TORTURE=1` collects every 64 KiB (the battery and
-the compiler's fixed point pass so, with 1558 collections for the compiler).
+How it works:
+- what is in use lives in a map, not in the blocks: a byte for each 32 bytes of the heap. A mark
+  fills a second map with the blocks it reaches; then the two swap. There is no sweep: each size
+  class hands out the next block whose byte is clear, in the pages the mark left with room, and a
+  page with nothing marked goes back to the system without being read;
+- from 64 MB live on, a child process (fork) marks, as in the x86 runtime, while the program goes
+  on; the program marks in the map each block it hands out meanwhile, and waits for the child only
+  after making as many bytes as were live. Since nothing writes the heap's pages but the program,
+  the fork costs only the pages the program itself writes (copy on write);
+- the mark asks for each block ahead of reading it (prefetch), so that the misses overlap.
+  Marking with several threads was tried and was slower: a big array is one block.
 
-Measured on an M4 (`CHECK=1 SIZES=1000000 sh bench/compare/run.sh macos/nihil-native`): the same as
-the translator's path, but making the records and reading the table take about 15 ms more each,
-the collections the x86 runtime marks in a child process (fork) while the program goes on; the
-peak memory is 378–390 MB against 325 MB. Next: that concurrent mark (or fewer collections of
-a large heap), then the code itself: registers for the temporaries, `sp` as the stack.
+`NIHIL_GC_STATS=1` shows each collection (and the program's own peak at its end);
+`NIHIL_GC_TORTURE=1` collects every 64 KiB and forks from 1 MB live (the battery and the
+compiler's fixed point pass so, the compiler with about 100 forks).
+
+Measured on an M4 (`CHECK=1 SIZES=1000000 sh bench/compare/run.sh macos/nihil-native`, three runs),
+against the translator's path: making the records 70–112 ms (60–80), reading the table 61–67 ms
+(74), the first key lookup, which builds the index, 72–78 ms (72–79); peak memory 352 MB (325). The
+program stops for at most 3 ms in a forked collection. The compiler compiles itself in 0.25 s (0.43
+s with the collector before this one). Next: the code itself, registers for the temporaries and
+`sp` as the stack.
 
 ## The original plan (a second backend)
 
