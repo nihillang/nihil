@@ -1,5 +1,0 @@
-// the same, with the child's method written first
-PESSOA = @[nome: STRING(20)];
-ALUNO = @[PESSOA; turma: STRING(4)];
-ALUNO.rotulo(a = ALUNO()) { : a.turma; }
-PESSOA.rotulo(p = PESSOA()) { : p.nome; }

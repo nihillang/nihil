@@ -1200,10 +1200,8 @@ s = STUDENT(1, "Ana", 2008, "3B", 8.5);
 
 - `@[PARENT]` alone is a model with the parent's fields and methods and a table of
   its own. Several levels work (a child of a child).
-- A child cannot declare a field its parent has, a second key, or a method its
-  parent has (`STUDENT.age` would be a compile error): replacing an inherited method
-  needs the call to look at the record's real model, which the language does not do
-  yet.
+- A child cannot declare a field its parent has or a second key. It may declare a
+  method its parent has: it replaces it (§20.10).
 - A parent's private field (§20.7) stays private to the parent: the child's own
   methods use the parent's methods to reach it.
 - A child is a type of its own. It is accepted where its parent is expected only at
@@ -1241,7 +1239,41 @@ by_class["3B"] = s;         // 4. a value of a MAP of the parent
 - The design and what was left out (inferring a common type) are in
   `docs/subtyping.md`.
 
-### 20.10 Implementation
+### 20.10 Replacing an inherited method
+
+A child may declare a method its parent (or an ancestor) declares: it **replaces**
+it. A call through a record of the parent's type runs the method of the record's
+real model, the nearest one, itself included, that declares it:
+
+```text
+PERSON.label(p = PERSON()) { : p.name; }
+TEACHER = @[PERSON; subject: STRING(10)];
+TEACHER.label(t = TEACHER()) { : "prof. " + t.name; }     // replaces PERSON.label
+
+team = [PERSON() ; *];
+team[] = STUDENT(1, "Ana", 2008, "3B", 8.5);
+team[] = TEACHER(2, "Rui", 1980, "physics");
+team : p { >> p.label() + "\n"; }                         // Ana, then prof. Rui
+```
+
+- A replacement takes the **same parameters after the first** (the same number,
+  each of the same type) and returns **the same type** (or nothing, if the method it
+  replaces returns nothing). Anything else is a compile error, the return type checked
+  once the types settle, also for a replacement no call reaches.
+- A child that does not replace a method gets the nearest one above it: a grandchild
+  of PERSON under TEACHER runs `TEACHER.label`.
+- A method of the parent that calls another method on its own record (`p.label()`
+  inside `PERSON.greet`) runs the real model's replacement too.
+- The arguments are evaluated once, before the choice. The defaults of the omitted
+  ones come from the method the static type finds (`PERSON.label` through a PERSON),
+  so the same record may get other defaults through a TEACHER.
+- There is no `super`: a replacement that needs the parent's behaviour calls a
+  method of the parent under another name (`PERSON.base_label`).
+- A call through a model none of whose descendants replaces the method is the plain
+  call it always was; a replaced one tests the model in the record's header (§20.11)
+  and calls directly: no table of methods, a compare per replacing model.
+
+### 20.11 Implementation
 
 A record is a block of 8-byte slots with the ARRAY layout (§3); a STRING field
 holds the address of its text. Its type is a model number, so each model is a
@@ -1260,7 +1292,8 @@ its model in the header of its block: `m + 1` in the top 16 bits, which the size
 record sets it: a constructor, a default, a record global, `[r ; n]` (the static
 model, §20.9), the table readers and `from_json`, which take it from the last word
 of the model's schema constant. The collector masks it off where it reads a block's
-size. It is what a call will look at to run a replacing method (`docs/dispatch.md`).
+size. A call through a model some descendants replace the method in reads it
+(§20.10, `docs/dispatch.md`).
 
 ## 21. The library (stage 1)
 

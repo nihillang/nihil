@@ -1,0 +1,69 @@
+// replacing an inherited method (SPEC §20.11): a call through the parent runs the method of the
+// record's real model, the nearest one (itself included) that declares it
+PESSOA = @[nome: STRING(12); _ano: INT(4)];
+PESSOA.rotulo(p = PESSOA()) { : p.nome; }
+PESSOA.apresenta(p = PESSOA(), prefixo = "> ") { : prefixo + p.rotulo(); }   // dispatches on its own receiver
+PESSOA.idade(p = PESSOA(), ano = 2026) { : ano - p._ano; }
+PESSOA.base_rotulo(p = PESSOA()) { : p.nome; }                            // the parent's version, by another name
+ALUNO = @[PESSOA; turma: STRING(4)];
+ALUNO.rotulo(a = ALUNO()) { : a.nome + " (" + a.turma + ")"; }
+ALUNO.apresenta(a = ALUNO(), prefixo = "* ") { : prefixo + a.nome; }       // its own default
+ALUNO.tipo(a = ALUNO()) { : "aluno"; }                                      // written before the one it replaces
+PESSOA.tipo(p = PESSOA()) { : "pessoa"; }
+PROFESSOR = @[PESSOA; materia: STRING(10)];
+PROFESSOR.rotulo(t = PROFESSOR()) { : "prof. " + t.base_rotulo(); }
+MONITOR = @[ALUNO; horas: INT(3)];                                          // replaces nothing: ALUNO's
+DIRETOR = @[PROFESSOR; escola: STRING(10)];
+DIRETOR.rotulo(d = DIRETOR()) { : "dir. " + d.nome + " / " + d.escola; }
+
+// an optional argument and an optional return; a method with no value
+PESSOA.cargo(p = PESSOA(), detalhe? = "") { detalhe == _ { : _; } : "pessoa " + (detalhe || ""); }
+ALUNO.cargo(a = ALUNO(), detalhe? = "") { detalhe == _ { : _; } : "aluno " + (detalhe || ""); }
+LOG = "";
+PESSOA.marca(p = PESSOA()) { LOG = LOG + "p"; }
+ALUNO.marca(a = ALUNO()) { LOG = LOG + "a"; }
+PESSOA.falha(p = PESSOA()) { : 1; }
+ALUNO.falha(a = ALUNO()) { ?! = "aluno falhou"; : 0; }
+
+N = 0;
+marca_n() { N = N + 1; : $N + ": "; }
+como_pessoa(p = PESSOA()) { : p; }
+mostra(p = PESSOA()) { : p.rotulo(); }
+
+equipe = [PESSOA() ; *];
+equipe[] = PESSOA("Ze", 1990);
+equipe[] = ALUNO("Ana", 2008, "3B");
+equipe[] = PROFESSOR("Rui", 1980, "fisica");
+equipe[] = MONITOR("Bia", 2007, "3A", 10);
+equipe[] = DIRETOR("Ivo", 1970, "mat", "Central");
+equipe : p {
+    >> p.rotulo() + " | " + p.apresenta() + " | " + p.tipo() + " | " + $p.idade() + " | " + p.apresenta(marca_n()) + " | "
+       + (p.cargo("x") || "none") + " " + (p.cargo(_) || "none") + "\n";
+    p.marca();
+}
+>> "arguments evaluated once: " + $N + "; no value: " + LOG + "\n";
+
+// the defaults come from the method the static type finds; the same record seen two ways
+ana = ALUNO("Ana", 2008, "3B");
+>> ana.apresenta() + " / " + como_pessoa(ana).apresenta() + " / " + mostra(DIRETOR("Lia", 1975, "geo", "Norte")) + "\n";
+
+// an ARRAY and a MAP of the parent; a copy through the parent is a parent
+fixo = [PESSOA() ; 2];
+fixo[1] = PROFESSOR("Rui", 1980, "fisica");
+por_nome = {"": PESSOA() ; 8};
+por_nome["a"] = ana;
+copia = [como_pessoa(ana) ; 1];
+>> fixo[1].rotulo() + " / " + (por_nome["a"] || PESSOA()).rotulo() + " / " + copia[0].rotulo() + "\n";
+
+// records read from a table dispatch by their model
+@>> "build/dispatch_alunos.dat", [ana, ALUNO("Caio", 2009, "3C")];
+lidos = [PESSOA() ; *];
+ALUNO @ "build/dispatch_alunos.dat" : a { lidos[] = a; }
+>> lidos[1].rotulo() + "\n";
+
+// protected: an error inside a replacement
+ok = 0;
+caught = "";
+equipe : p { r? = ?p.falha(); r == _ { caught = caught + ?! + "; "; } || { ok = ok + (r || 0); } }
+>> $ok + " ok, " + caught + "\n";
+?{ equipe[1].marca(); z = equipe[1].falha(); } || { >> "block: " + ?! + ", log " + LOG + "\n"; }

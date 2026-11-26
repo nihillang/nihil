@@ -1,1 +1,1 @@
-ALUNO.rotulo would replace PESSOA.rotulo
+ALUNO.rotulo returns nothing (call to a method with no value), but the method it replaces, PESSOA.rotulo, returns STRING

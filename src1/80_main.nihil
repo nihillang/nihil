@@ -247,8 +247,45 @@ one_pass() {
     close_elf();
 }
 
+// once the types settled: a method that replaces an inherited one (SPEC §20.10) returns the same
+// type, so a call through the parent gets what it expects whichever model's runs; checked also for
+// a replacement no call reaches
+check_replacements() {
+    k = 0;
+    * k < n_sym_base {
+        s_flags[k] & FLAG_METHOD != 0 {
+            d = 0;
+            * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
+            km = -1;
+            d < s_len[k] { km = lookup(s_ofs[k], d); }
+            km >= 0 && is_model(km) {
+                ns = s_ofs[k] + d + 1;
+                nl = s_len[k] - d - 1;
+                p = m_parent[s_extra[km]];
+                ko = -1;
+                * ko < 0 && p >= 0 { ko = lookup_model_method(m_sym[p], ns, nl); p = m_parent[p]; }
+                ko >= 0 && s_type[k] != s_type[ko] {
+                    msg_len = 0;
+                    put_str("nihilc: ");
+                    put_source(s_ofs[k], s_len[k]);
+                    put_str(" returns ");
+                    put_type(s_type[k]);
+                    put_str(", but the method it replaces, ");
+                    put_source(s_ofs[ko], s_len[ko]);
+                    put_str(", returns ");
+                    put_type(s_type[ko]);
+                    put_str(": a replacement returns the same type");
+                    error_end();
+                }
+            }
+        }
+        k = k + 1;
+    }
+}
+
 load_program();
 compile();
+check_replacements();
 // -map: the runtime ends after the header and its block, the program's code at code_end, the
 // constants follow (8-aligned) up to the end of the file
 // (written with the message buffer: stage 0, which builds this compiler, has no $ for INT)

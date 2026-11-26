@@ -1,0 +1,7 @@
+// … also when the type comes from a method compiled later
+PESSOA = @[nome: STRING(12)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+PESSOA.valor(p = PESSOA()) { : 1; }
+ALUNO.valor(a = ALUNO()) { : depois(); }
+depois() { : "um"; }
+>> PESSOA("x").valor();

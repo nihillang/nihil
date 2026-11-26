@@ -454,6 +454,52 @@ fail_intrinsic() {
     : TYPE_NONE;
 }
 
+// record.name(…) through a model some descendants replace name in (SPEC §20.10): the receiver,
+// pushed first, is read back from under the arguments; the model in its block header (m + 1, the
+// top 16 bits) picks the call; anything else (k's own models, a record with no model) calls k.
+// Only compares, direct calls and jumps (what the macOS translator takes); every branch ends at
+// one place, where the caller removes the arguments.
+emit_dispatch(k = 0, base = 0, np = 0, dn = 0, dm = [0], dt = [0]) {
+    a = 0;
+    j = 1;
+    np { j < np { a = a + size_param(base + j); } j = j + 1; }
+    eb(0x48, 0x8B, 0x84, 0x24);             // mov rax, [rsp + a]: the receiver
+    emit_d(a);
+    eb(0x48, 0x8B, 0x48, 0xF0);             // mov rcx, [rax - 16]
+    eb(0x48, 0xC1, 0xE9, 48);               // shr rcx, 48: its model + 1
+    jumps = [0 ; dn];
+    j = 0;
+    * j < dn {
+        eb(0x48, 0x81, 0xF9);               // cmp rcx, model + 1
+        emit_d(dm[j] + 1);
+        eb(0x0F, 0x84);                     // je its call
+        jumps[j] = size_code;
+        emit_d(0);
+        j = j + 1;
+    }
+    emit(0xE8);                            // call k: every other model
+    register_fixup(size_code, k, true);
+    emit_d(0);
+    emit(0xE9);                            // jmp done
+    ends = [0 ; dn + 1];
+    ends[0] = size_code;
+    emit_d(0);
+    j = 0;
+    * j < dn {
+        patch_here(jumps[j]);
+        note_call(dt[j]);
+        emit(0xE8);                        // call the method of model dm[j]
+        register_fixup(size_code, dt[j], true);
+        emit_d(0);
+        emit(0xE9);
+        ends[j + 1] = size_code;
+        emit_d(0);
+        j = j + 1;
+    }
+    j = 0;
+    * j <= dn { patch_here(ends[j]); j = j + 1; }
+}
+
 // postfix ::= primary ( "[" expression "]" | "." field )*
 postfix() {
     : postfix_rest(primary(), false);
@@ -748,6 +794,13 @@ primary_array() {
 // default), calls and removes the arguments. Returns the return type.
 call_method(k = 0, pre = 0) {
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+    // a dispatch table from model_method_call, taken now: the arguments may hold calls of their own
+    dn = disp_n;
+    disp_n = 0;
+    dm = [0 ; dn];
+    dt = [0 ; dn];
+    j = 0;
+    * j < dn { dm[j] = disp_model[j]; dt[j] = disp_target[j]; j = j + 1; }
     k < 0 {
         restore_pos(pi, pl, pn, pli);
         error_start();
@@ -832,9 +885,13 @@ call_method(k = 0, pre = 0) {
     }
     next_token();                        // consome ")"
     note_call(k);
-    emit(0xE8);                            // call method (patched at the end of the pass)
-    register_fixup(size_code, k, true);
-    emit_d(0);
+    dn == 0 {
+        emit(0xE8);                        // call method (patched at the end of the pass)
+        register_fixup(size_code, k, true);
+        emit_d(0);
+    } || {
+        emit_dispatch(k, base, np, dn, dm, dt);
+    }
     np > 0 {
         total = 0;
         j = 0;

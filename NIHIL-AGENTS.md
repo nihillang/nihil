@@ -84,7 +84,8 @@ pos = find([4, 8, 15], 8) || -1;
   A field named `_x` is private: only `P.method(p = P(), …) { … }` reads or changes `p._x`.
   `C = @[P; extra: INT(3)];` starts from P's fields and methods (P declared before). A C is accepted where a P is expected
   only as an argument (`f(p = P())` takes a C) or as an element stored into an ARRAY/LIST/MAP of P; never `x = c;` into a P
-  variable, a mixed literal, or a collection of C as a collection of P.
+  variable, a mixed literal, or a collection of C as a collection of P. `C.m(c = C(), …)` may replace `P.m` (same parameters
+  after the first, same return): a call through a P runs the real model's `m`.
 
 ## Library (method calls on values; each returns a new value)
 

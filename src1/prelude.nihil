@@ -270,7 +270,7 @@ __nihil_rec_rep(r = 0, n = 0, schema = [0]) {
     __i = 0;
     n {
         __b = [0 ; schema[0]];
-        __nihil_set_model(__b, schema[1 + 2 * schema[0]]);     // the static model's (SPEC §20.10)
+        __nihil_set_model(__b, schema[1 + 2 * schema[0]]);     // the static model's (SPEC §20.11)
         __j = 0;
         schema[0] { __b[__j] = __src[__j]; __j = __j + 1; }
         __rows[__i] = __nihil_addr(__b);

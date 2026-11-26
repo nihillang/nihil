@@ -220,7 +220,7 @@ model_method_check(k = 0, ns = 0, nl = 0) {
         put_str("()");
         error_end();
     }
-    is_model(km) { no_replacement(s_extra[km], ns + d + 1, nl - d - 1, ns, nl); }
+    is_model(km) { no_replacement(s_extra[km], ns + d + 1, nl - d - 1, ns, nl, k); }
 }
 
 // m descends from a (a parent, its parent, …)?
@@ -230,28 +230,37 @@ descends(m = 0, a = 0) {
     : false;
 }
 
-// MODEL.name may not replace a method a parent declared, nor be replaced by a child's: that
-// needs dispatch by the record's real model, which the language does not have yet (SPEC §20.8).
-// Both orders are checked, since methods are registered in the order they are written.
-no_replacement(m = 0, start = 0, n = 0, ns = 0, nl = 0) {
+// MODEL.name may replace a method its parent (or an ancestor) declares, and be replaced by a
+// child's, when they take the same parameters after the first (the receiver, each declaration's own
+// model): a call through the parent then runs the record's real model's (SPEC §20.10). The return
+// types are compared once they settle (check_replacements). Both orders are checked, since methods
+// are registered in the order they are written. k: the method being registered.
+no_replacement(m = 0, start = 0, n = 0, ns = 0, nl = 0, k = 0) {
     o = 0;
     * o < n_models {
-        (descends(m, o) || descends(o, m)) && lookup_model_method(m_sym[o], start, n) >= 0 {
-            a = m; b = o;
-            descends(o, m) { a = o; b = m; }       // a: the child, b: the parent
-            error_start();
-            put_source(s_ofs[m_sym[a]], s_len[m_sym[a]]);
-            put_str(".");
-            put_source(start, n);
-            put_str(" would replace ");
-            put_source(s_ofs[m_sym[b]], s_len[m_sym[b]]);
-            put_str(".");
-            put_source(start, n);
-            put_str(", which it inherits: a model does not replace an inherited method yet (give it another name)");
-            error_end();
+        (descends(m, o) || descends(o, m)) {
+            ko = lookup_model_method(m_sym[o], start, n);
+            ko >= 0 && ko != k && !same_parameters(k, ko) {
+                child = k; parent = ko;
+                descends(o, m) { child = ko; parent = k; }     // the child's method was written first
+                error_start();
+                put_source(s_ofs[child], s_len[child]);
+                put_str(" replaces ");
+                put_source(s_ofs[parent], s_len[parent]);
+                put_str(", so it takes the same parameters after the first (the same number, each of the same type)");
+                error_end();
+            }
         }
         o = o + 1;
     }
+}
+
+// two model methods with the same parameters after the first
+same_parameters(a = 0, b = 0) {
+    s_nparam[a] != s_nparam[b] { : false; }
+    i = 1;
+    * i < s_nparam[a] { p_type[s_extra[a] + i] != p_type[s_extra[b] + i] { : false; } i = i + 1; }
+    : true;
 }
 
 // default literal: tok = start → lit_type, lit_value; the lexer stays on the

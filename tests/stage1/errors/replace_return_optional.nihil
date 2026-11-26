@@ -1,0 +1,5 @@
+// an optional return is another type
+PESSOA = @[nome: STRING(12)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+PESSOA.valor(p = PESSOA(), b = true) { b { : _; } : 1; }
+ALUNO.valor(a = ALUNO(), b = true) { : 2; }

@@ -2297,7 +2297,7 @@ gc_mark:
 .drain_block:
     mov rbx, [r15]
     mov rcx, [rbx]
-    shl rcx, 16                     ; without the model in the top 16 bits (a record's, SPEC §20.10)
+    shl rcx, 16                     ; without the model in the top 16 bits (a record's, SPEC §20.11)
     shr rcx, 24                     ; n
     lea rsi, [rbx + 16]
     lea rdi, [rsi + rcx * 8]
