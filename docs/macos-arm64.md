@@ -100,9 +100,11 @@ otherwise. It reaches the system with intrinsics the compiler knows only with `-
 
 All of src/runtime.asm's routines are there, with their messages. The tests pass (optimized, `-O0`,
 and with the collector every 64 KiB), the compiler built this way gives the same output (its fixed
-point), and the planogram server serves the same pages. Written in Nihil, the hottest routines are
-slower than they were in C (reading a table of a million records: 60 → 120 ms): `-native` gives a
-method 8 registers and passes its arguments on the stack — the next work on the code it writes.
+point), and the planogram server serves the same pages. Written in Nihil, the hottest routines
+were slower than in C at first (reading a table of a million records: 60 → 120 ms); the code the
+compiler writes then learned registers for arguments and more of them for locals (below), and the
+routines their own fast ways: 86–93 ms now. What is left is mostly `rec_parse`, whose loop has more
+values than registers.
 
 The collector (in `src1/native.nihil`) is conservative mark and sweep, like the x86 runtime's. Its
 memory is its own (mmap, calloc): it never makes a block of the heap it collects. Its contract with
@@ -123,9 +125,12 @@ How it works:
   on; the program marks in the map each block it hands out meanwhile, and waits for the child only
   after making as many bytes as were live. Since nothing writes the heap's pages but the program,
   the fork costs only the pages the program itself writes (copy on write);
-- the C collector asked for each block ahead of reading it (prefetch), so that the misses
-  overlapped; the Nihil one does not yet. Marking with several threads was tried and was slower: a
-  big array is one block.
+- an allocation of a small block is done inside `__nihil_rt_alloc` when its class's page has room
+  and no collection is due (the class from a table; the block zeroed 8 bytes at a time);
+- the C collector asked for each block ahead of reading it (prefetch); in the Nihil one it made the
+  child's mark slower (22 → 38 ms), at the push or 16 blocks ahead, and it is not used
+  (`__nihil_prefetch` is there). Marking with several threads was tried and was slower: a big array
+  is one block.
 
 `NIHIL_GC_STATS=1` shows each collection (and the program's own peak at its end);
 `NIHIL_GC_TORTURE=1` collects every 64 KiB and forks from 1 MB live (the battery and the
@@ -152,8 +157,17 @@ The code (`src1/42_arm.nihil`, `-native` optimized) keeps x86's operations but n
 Calls and methods:
 - a method call reads no register and leaves none (liveness); a method's start and end are one
   `stp`/`ldp` of x29 and x30; an empty frame costs nothing;
-- a method's parameters, when used enough (in loops), are loaded once into a register of x19 …
-  x26, as its locals are;
+- a method whose arguments take 8 slots or fewer gets them in x1 … x8: the caller pushes nothing and
+  drops nothing; a leaf (it calls nothing) whose frame does not escape keeps its parameters there,
+  another method pushes them at its start, where its body reads them;
+- a slot no call crosses while it is live (from its first operation to its last, widened to the
+  loops around it) may live in x1 … x8, with no save; the others in x19 … x26 (saved by a method);
+  the program's own code keeps to x19 … x26 (it calls its globals' start, placed at its end);
+- a constant of more than one instruction used in a loop gets a register of x19 … x26 still free,
+  loaded once;
+- a jump on which rax is known to be 0 or not, to the join of `&&` or `||`, goes on past the join's
+  own test (`Lt<n>`); a join no jump reaches any more is no label, so `d < 0 || d > 9` is
+  `cmp ; b.lt ; cmp ; b.le`;
 - a value computed and pushed in the middle of an expression (`a[i] * b[i]`) waits in a free
   register of x0 … x7, not on the stack, when nothing before its pop calls C or a method;
 - each method has a local symbol `_m_<name>_<k>`, so profilers and backtraces name it
@@ -167,8 +181,8 @@ Measured (best of 3, M4; C with `cc -O2`): a double loop of `+`, `^` and `%`, 0.
 0.142); Collatz up to 3 000 000, 1.45 → 0.69 s (C 0.32); a dot product in a method called 100 000
 times, 0.083 → 0.056 s (C without vectorizing 0.052). A sieve and `fib(35)` do not change: a BOOL
 array takes 8 bytes an element, and `fib` is about 7 cycles a call already (clang transforms the
-recursion). A calling convention with arguments in registers was left out: calls are not where the
-time goes (the compiler's profile: its symbol lookup, a linear search, 22%).
+recursion). The compiler compiles itself in 0.157 s (its own profile: the symbol lookup, a linear
+search, is the largest part).
 
 ## The original plan (a second backend)
 
