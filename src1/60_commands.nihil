@@ -565,6 +565,7 @@ cmd_method(k = 0) {
     }
     limit_regs = 0;
     base_frame = 0;
+    a_method_end();
     patch_here(jump);
 }
 

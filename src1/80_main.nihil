@@ -115,6 +115,7 @@ one_pass() {
     n_labs = 0;
     lab_free = -1;
     n_binds = 0;
+    n_meths = 0;
     n_frames = 0;
     n_fix = 0;
     last_target = -1;

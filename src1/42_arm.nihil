@@ -29,6 +29,8 @@ arm_setup() {
     lab_op = [0 ; LABELS_ARM];
     lab_next = [0 ; LABELS_ARM];
     binds = [0 ; LABELS_ARM];
+    meth_lo = [0 ; METHS];
+    meth_hi = [0 ; METHS];
 }
 
 a_byte(b = 0) {
@@ -162,6 +164,11 @@ a_ldst(store = false, t = 0, size = 8, base = 0, disp = 0) {
     a_str("]"); a_nl();
 }
 
+// x<t> to or from [x29 + off] (a register saved in the frame)
+a_ldst_x(store = false, t = 0, off = 0) {
+    a_ldst(store, t, 8, R_BP, off);
+}
+
 a_push(n = 0) { a_ins("str "); a_x(n); a_str(", [x28, #-8]!"); a_nl(); }
 a_pop(n = 0) { a_ins("ldr "); a_x(n); a_str(", [x28], #8"); a_nl(); }
 
@@ -173,9 +180,20 @@ a_label_l(pos = 0) { a_str("L_"); a_hex(BASE_CODE + pos); }
 a_label(l = 0) { a_str("Lj"); a_num(l); }
 a_label_rt(rt = 0) { a_str("L_"); a_hex(BASE_CODE + SIZE_HEADER + rt); }
 
-// a method k starts here (cmd_method): a label for the text
+// a method k starts here (cmd_method): a label for the text, and where its operations start
+METHS = 1 << 16;
 a_method(k = 0) {
-    want_arm { label_bind(label_new(LAB_METHOD, k)); }
+    !want_arm { :; }
+    label_bind(label_new(LAB_METHOD, k));
+    n_meths >= METHS { error("too many methods for -arm"); }
+    meth_lo[n_meths] = n_ops;
+}
+
+// the method's operations end here
+a_method_end() {
+    !want_arm { :; }
+    meth_hi[n_meths] = n_ops;
+    n_meths = n_meths + 1;
 }
 
 // the label l, where it was bound; a method's start, or a place called, keeps its return address on
@@ -191,14 +209,162 @@ arm_bind(l = 0) {
 arm_text() {
     arm_len = 0;
     arm_native { native_start(); } || { a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl(); }
+    promote = arm_native && optimize;
+    promote {
+        loop_depths();
+        unit_slots(0, n_ops, true);        // the program's own code: all but the methods
+        u = 0;
+        SLOTS { top_slot[u] = unit_reg[u]; u = u + 1; }
+        top_saved = 0;
+    }
     j = 0;
     i = 0;
+    m = 0;                                 // the next method
     * i <= n_ops {
+        promote && m < n_meths && i == meth_lo[m] { unit_slots(meth_lo[m], meth_hi[m], false); }
+        promote && m < n_meths && i == meth_hi[m] {
+            u = 0;
+            SLOTS { unit_reg[u] = top_slot[u]; u = u + 1; }
+            n_saved = top_saved;
+            m = m + 1;
+        }
         * j < n_binds && lab_op[binds[j]] <= i { arm_bind(binds[j]); j = j + 1; }
         i < n_ops { arm_op(i); }
         i = i + 1;
     }
     arm_native { native_end(); }
+}
+
+// ---- -native: frame slots in registers ----
+// A unit (the program's code, or a method) may keep its most used frame slots (rbp - 8s) in the
+// registers x19 … x26 that its operations leave free: each one is weighed by its uses, 8 times
+// more for each loop around them. A unit that takes an address in its frame (lea, mov from rbp,
+// rbp as an index's base) keeps them all in memory; an optional's two slots stay in memory. A
+// method saves the registers it takes below its frame and restores them at each return (x86's
+// methods save only rbx, r12 … r15 they use); protected calls keep x19 … x26.
+SLOTS = 4096;
+unit_reg = [0 ; SLOTS];        // slot → its register (0: in memory)
+top_slot = [0 ; SLOTS];        // the program's own
+slot_w = [0 ; SLOTS];
+op_dep = [0 ; 1];
+promote = false;
+n_saved = 0;                   // registers the current method saves, and where (below its frame)
+saved_reg = [0 ; 8];
+top_saved = 0;
+saved_at = 0;
+unit_limit = 0;                // the method's x86 registers (its prologue's pushes)
+
+// how many loops around each operation (a jump back closes one)
+loop_depths() {
+    op_dep = [0 ; n_ops + 1];
+    i = 0;
+    * i < n_ops {
+        op_k[i] == OP_JMP && lab_op[op_o[i]] <= i {
+            op_dep[lab_op[op_o[i]]] = op_dep[lab_op[op_o[i]]] + 1;
+            op_dep[i + 1] = op_dep[i + 1] - 1;
+        }
+        i = i + 1;
+    }
+    d = 0;
+    i = 0;
+    * i <= n_ops { d = d + op_dep[i]; op_dep[i] = d; i = i + 1; }
+}
+
+// an x86 register a local may be in (rbx, r12 … r15) → its ARM one's bit (x19 … x23), or 0
+reg_bit(r = 0) {
+    r == 3 { : 1 << 19; }
+    r >= 12 && r <= 15 { : 1 << (r + 8); }
+    : 0;
+}
+
+// the slot's weight grows by w; base is a register, disp an offset (-1 is "not a slot": bad)
+slot_use(base = 0, disp = 0, w = 0) {
+    base != R_BP || disp >= 0 { :; }
+    s = -disp / 8;
+    disp % 8 != 0 || s >= SLOTS { promote_off = true; :; }
+    slot_w[s] >= 0 { slot_w[s] = slot_w[s] + w; }
+}
+
+slot_bad(disp = 0) {
+    disp >= 0 { :; }
+    s = -disp / 8;
+    s < SLOTS { slot_w[s] = -1; }
+}
+promote_off = false;
+
+// the unit's choice: unit_reg for each slot; lo … hi - 1 its operations (top: those of no method)
+unit_slots(lo = 0, hi = 0, top = false) {
+    u = 0;
+    SLOTS { slot_w[u] = 0; unit_reg[u] = 0; u = u + 1; }
+    promote_off = false;
+    used = 0;
+    m = 0;
+    i = lo;
+    * i < hi {
+        top && m < n_meths && i == meth_lo[m] { i = meth_hi[m]; m = m + 1; }
+        i < hi && !(top && m < n_meths && i == meth_lo[m]) {
+            k = op_k[i];
+            r = op_r[i];
+            v = op_v[i];
+            o = op_o[i];
+            d = op_dep[i];
+            d > 6 { d = 6; }
+            w = 1 << (3 * d);
+            k != OP_XMOV && k != OP_XLD && k != OP_XOP && k != OP_I2F { used = used | reg_bit(r); }
+            k == OP_REG { used = used | reg_bit(v); v == R_BP { promote_off = true; } }
+            k == OP_ALU || k == OP_MULI || k == OP_MUL || k == OP_CMOV || k == OP_XMOV || k == OP_I2F { used = used | reg_bit(o); }
+            k == OP_LDX || k == OP_STX || k == OP_LDBX || k == OP_STBX {
+                used = used | reg_bit(v) | reg_bit(o);
+                v == R_BP || o == R_BP { promote_off = true; }
+            }
+            k == OP_LOCAL && o == 0 { slot_use(R_BP, v, w); }
+            k == OP_LOCAL && o != 0 { slot_bad(v); slot_bad(v + 8); }
+            k == OP_XLD { slot_use(R_BP, v, w); }
+            k == OP_LD || k == OP_ST || k == OP_CMPM || k == OP_SUBM || k == OP_ADDTOM || k == OP_PUSHM {
+                used = used | reg_bit(o >> 1);
+                slot_use(o >> 1, v, w);
+            }
+            k == OP_LEA { used = used | reg_bit(o >> 1); o >> 1 == R_BP { promote_off = true; } }
+            k == OP_STI || k == OP_ADDIM || k == OP_CMPIM {
+                mb = (o >> 32) >> 1;
+                used = used | reg_bit(mb);
+                slot_use(mb, ((o & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000, w);
+            }
+            i = i + 1;
+        }
+    }
+    // the method's prologue: push rbp ; mov rbp, rsp ; push r … (its x86 registers) ; sub rsp, N
+    unit_limit = 0;
+    !top {
+        j = lo + 2;
+        * j < hi && op_k[j] == OP_PUSH { j = j + 1; unit_limit = unit_limit + 1; }
+    }
+    n_saved = 0;
+    promote_off { :; }
+    // the registers free, the heaviest slots first (weight 3 or more: a register saved costs two)
+    reg = 19;
+    * reg <= 26 {
+        used & (1 << reg) == 0 {
+            best = -1;
+            bw = 2;
+            u = 1;
+            * u < SLOTS { slot_w[u] > bw { best = u; bw = slot_w[u]; } u = u + 1; }
+            best >= 0 {
+                unit_reg[best] = reg;
+                slot_w[best] = -1;
+                !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
+            }
+        }
+        reg = reg + 1;
+    }
+}
+
+// the register of the slot at [base + disp], or 0
+pslot(base = 0, disp = 0) {
+    !promote || base != R_BP || disp >= 0 || disp % 8 != 0 { : 0; }
+    s = -disp / 8;
+    s >= SLOTS { : 0; }
+    : unit_reg[s];
 }
 
 // ---- -native: a whole program for the C runtime (macos/native/rt.c) ----
@@ -221,7 +387,7 @@ native_start() {
     a_line("add x27, x27, _nh_globals@PAGEOFF");
     a_line("b Lprogram");
     // nh_resume(record, sp): back where a protected call resumes, after a runtime error in it
-    // (rt.c: x28, x29, where, x19 … x23 as the call had them), with rax and rdx 0
+    // (rt.c: x28, x29, where, x19 … x26 as the call had them), with rax and rdx 0
     a_line(".globl _nh_resume");
     a_str("_nh_resume:"); a_nl();
     a_line("mov sp, x1");
@@ -229,7 +395,8 @@ native_start() {
     a_line("ldr x16, [x0, #16]");
     a_line("ldp x19, x20, [x0, #24]");
     a_line("ldp x21, x22, [x0, #40]");
-    a_line("ldr x23, [x0, #56]");
+    a_line("ldp x23, x24, [x0, #56]");
+    a_line("ldp x25, x26, [x0, #72]");
     a_line("mov x9, #0");
     a_line("mov x11, #0");
     a_line("br x16");
@@ -251,14 +418,14 @@ native_end() {
                 a_line("str x13, [sp, #16]");
             }
             n == RT_PROTECT {
-                a_line("mov x0, x9");             // where to resume, and what to restore
-                a_line("mov x1, x28");
-                a_line("mov x2, x29");
-                a_line("mov x3, x19");
-                a_line("mov x4, x20");
-                a_line("mov x5, x21");
-                a_line("mov x6, x22");
-                a_line("mov x7, x23");
+                a_line("sub sp, sp, #80");        // what to restore: x28, x29, x19 … x26
+                a_line("stp x28, x29, [sp]");
+                a_line("stp x19, x20, [sp, #16]");
+                a_line("stp x21, x22, [sp, #32]");
+                a_line("stp x23, x24, [sp, #48]");
+                a_line("stp x25, x26, [sp, #64]");
+                a_line("mov x0, x9");             // where to resume
+                a_line("mov x1, sp");
             } || {
                 a_line("mov x0, x9");
                 a_line("mov x1, x10");
@@ -270,6 +437,7 @@ native_end() {
             a_ins("bl _nh_"); a_str(rt_name(n)); a_nl();
             a_line("mov x9, x0");
             a_line("mov x11, x1");
+            n == RT_PROTECT { a_line("add sp, sp, #80"); }
             n == RT_ALLOC {
                 a_line("ldr x13, [sp, #16]");
                 a_line("ldp x10, x12, [sp], #32");
@@ -371,6 +539,7 @@ arm_op(i = 0) {
     r = op_r[i];
     v = op_v[i];
     o = op_o[i];
+    k == OP_LOCAL && o == 0 && pslot(R_BP, v) > 0 { a_ins("mov "); a_reg(r); a_str(", "); a_x(pslot(R_BP, v)); a_nl(); :; }
     k >= OP_IMM && k <= OP_REG { arm_load(k, r, v, o); :; }
     k == OP_CMP_SET { arm_cmp_set(v); :; }
     k == OP_CMP { a_line("cmp x9, x10"); :; }
@@ -385,6 +554,24 @@ arm_op(i = 0) {
     k == OP_RET { a_pop(30); a_line("ret"); :; }
     // [base + disp]: o = base * 2 + wide, v = disp
     b = o >> 1;
+    p = 0;
+    k == OP_LOCAL && o == 0 || k == OP_XLD { p = pslot(R_BP, v); }
+    k == OP_LD || k == OP_ST || k == OP_CMPM || k == OP_SUBM || k == OP_ADDTOM || k == OP_PUSHM { p = pslot(b, v); }
+    mb = (o >> 32) >> 1;
+    md = ((o & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000;
+    k == OP_STI || k == OP_ADDIM || k == OP_CMPIM { p = pslot(mb, md); }
+    p > 0 {
+        k == OP_LOCAL || k == OP_LD { a_ins("mov "); a_reg(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_ST { a_ins("mov "); a_x(p); a_str(", "); a_reg(r); a_nl(); :; }
+        k == OP_CMPM { a_ins("cmp "); a_reg(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_SUBM { a_ins("sub "); a_reg(r); a_str(", "); a_reg(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_ADDTOM { a_ins("add "); a_x(p); a_str(", "); a_x(p); a_str(", "); a_reg(r); a_nl(); :; }
+        k == OP_PUSHM { a_push(p); :; }
+        k == OP_XLD { a_ins("fmov d"); a_num(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_STI { a_imm(p, v); :; }
+        k == OP_ADDIM { a_add_imm(p, p, v); :; }
+        k == OP_CMPIM { a_imm(17, v); a_ins("cmp "); a_x(p); a_str(", x17"); a_nl(); :; }
+    }
     k == OP_LD { a_ldst(false, a_rn(r), 8, b, v); :; }
     k == OP_ST { a_ldst(true, a_rn(r), 8, b, v); :; }
     k == OP_LEA { a_add_imm(a_rn(r), a_rn(b), v); :; }
@@ -397,9 +584,7 @@ arm_op(i = 0) {
     k == OP_STX { a_ins("str "); a_reg(r); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str(", lsl #3]"); a_nl(); :; }
     k == OP_LDBX { a_ins("ldrb "); a_w(a_rn(r)); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str("]"); a_nl(); :; }
     k == OP_STBX { a_ins("strb "); a_w(a_rn(r)); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str("]"); a_nl(); :; }
-    // qword [base + disp] with a constant v: o = mem_o(base, disp, wide)
-    mb = (o >> 32) >> 1;
-    md = ((o & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000;
+    // qword [base + disp] with a constant v: o = mem_o(base, disp, wide) (mb, md)
     k == OP_STI { a_imm(16, v); a_ldst(true, 16, 8, mb, md); :; }
     k == OP_ADDIM { a_ldst(false, 16, 8, mb, md); a_add_imm(16, 16, v); a_ldst(true, 16, 8, mb, md); :; }
     k == OP_CMPIM { a_ldst(false, 16, 8, mb, md); a_imm(17, v); a_line("cmp x16, x17"); :; }
@@ -434,12 +619,23 @@ arm_op(i = 0) {
         a_ins("add "); a_reg(r); a_str(", "); a_reg(r); a_str(", "); a_label(v); a_str("@PAGEOFF"); a_nl();
         :;
     }
-    k == OP_FRAME { arm_stack(-v); :; }
+    k == OP_FRAME {
+        arm_stack(-v - 8 * n_saved);
+        saved_at = -8 * unit_limit - v;    // below the frame: x29 + saved_at - 8 (j + 1)
+        j = 0;
+        * j < n_saved { a_ldst_x(true, saved_reg[j], saved_at - 8 * (j + 1)); j = j + 1; }
+        :;
+    }
     k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
     k == OP_ALIGN { :; }
     k == OP_JCC_RT && arm_native { rt_used[o / 5] = true; a_ins("b."); a_str(a_cond(v)); a_str(" Lrt"); a_num(o); a_nl(); :; }
     k == OP_JCC_RT { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label_rt(o); a_nl(); :; }
-    k == OP_EPILOGUE { arm_epilogue(v); :; }
+    k == OP_EPILOGUE {
+        j = 0;
+        * j < n_saved { a_ldst_x(false, saved_reg[j], saved_at - 8 * (j + 1)); j = j + 1; }
+        arm_epilogue(v);
+        :;
+    }
     error("internal error: an operation with no ARM64 text");
 }
 

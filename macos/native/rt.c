@@ -103,7 +103,7 @@ static I len_of(I s) { return ((I *)s)[-1]; }
 
 // ---- errors, and the protected calls (SPEC §25) ----
 #define PROT_MAX 64
-static I prot[PROT_MAX + 1][8];              // x28, x29, where to resume, x19 … x23
+static I prot[PROT_MAX + 1][11];             // x28, x29, where to resume, x19 … x26
 static I prot_depth;
 static int err_capture;
 static char err_buf[4000];
@@ -138,11 +138,12 @@ static __attribute__((noreturn)) void err_end(void) {
 
 static __attribute__((noreturn)) void fail(const char *m) { err_begin(); err_str(m); err_str("\n"); err_end(); }
 
-R nh_protect(I resume, I x28, I x29, I x19, I x20, I x21, I x22, I x23) {
+// regs: x28, x29, x19 … x26 as the protected call has them (its adapter)
+R nh_protect(I resume, I *regs) {
     if (prot_depth >= PROT_MAX) fail("more than 64 protected calls inside each other");
     I *p = prot[prot_depth++];
-    p[0] = x28; p[1] = x29; p[2] = resume;
-    p[3] = x19; p[4] = x20; p[5] = x21; p[6] = x22; p[7] = x23;
+    p[0] = regs[0]; p[1] = regs[1]; p[2] = resume;
+    for (int i = 0; i < 8; i++) p[3 + i] = regs[2 + i];
     return ret(resume);
 }
 
