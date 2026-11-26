@@ -7,6 +7,7 @@
 # stderr. This script saves the output and makes it executable.
 #   NIHILC1=path   chooses another stage 1 binary (e.g. build/nihilc2)
 #   NIHIL_O0=1     no optimizations (the same bytes as stage 0)
+#   NIHIL_PROFILE=1  the executable samples itself (docs/profiling.md; Linux)
 # On macOS (Apple silicon) it builds a native executable with macos/nihil (docs/macos-arm64.md),
 # unless NIHILC1 names a compiler (then the Linux output, as on Linux).
 set -u
@@ -24,6 +25,7 @@ out=${2:-a.out}
 tmp=$(mktemp) || exit 1
 trap 'rm -f "$tmp"' EXIT
 option=""; [ "${NIHIL_O0:-0}" = 1 ] && option="-O0 "
+[ "${NIHIL_PROFILE:-0}" = 1 ] && option="$option-profile "
 printf '%s%s\n' "$option" "$src" | "$bin" > "$tmp" || exit 1
 if cat "$tmp" 2>/dev/null > "$out" && chmod 755 "$out" 2>/dev/null; then
     exit 0

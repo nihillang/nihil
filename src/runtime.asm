@@ -75,6 +75,7 @@ t_unprotect:    jmp strict near rt_unprotect       ; RT_UNPROTECT
 t_err_text:     jmp strict near rt_err_text        ; RT_ERR_TEXT
 t_fail:         jmp strict near rt_fail            ; RT_FAIL
 t_concat_int:   jmp strict near rt_concat_int      ; RT_CONCAT_INT
+t_prof_start:   jmp strict near rt_prof_start      ; RT_PROF_START
 
 ; ---- arithmetic -------------------------------------------------------------
 ; Division truncated toward zero (as in C). MIN / -1 gives MIN (idiv
@@ -1101,6 +1102,7 @@ rt_err_begin:
 rt_err_end:
     cmp qword [ERR_CAPTURE], 0
     jne .resume
+    call rt_prof_write
     call gc_stop_child
     mov eax, 60
     mov edi, 2
@@ -1209,10 +1211,240 @@ rt_fail:
 rt_exit:                            ; rdi = exit code
     push rdi
     call rt_flush
+    call rt_prof_write
     call gc_stop_child
     pop rdi
     mov eax, 60                     ; sys_exit
     syscall
+
+; ---- profiler (nihil -profile; Linux) ---------------------------------------------------
+; rt_prof_start: rax = STRING with the program's symbols ("start end name" a line, decimal
+; addresses). From here, every 10 ms of CPU time (ITIMER_PROF → SIGPROF), prof_signal writes a
+; sample into a buffer: the address being run, the return addresses on the stack, then 0. At the
+; exit, rt_prof_write writes the symbols, "--\n" and the samples (qwords) to nihil-profile.PID.
+; A child made by fork has no timer (the collector's marking child is not sampled).
+%define PROF_CAP    (64 << 20)      ; the buffer: 64 MiB (about 4 hours at 100 samples a second)
+%define PROF_DEPTH  48              ; return addresses at most in a sample
+rt_prof_start:
+    mov [PROF_SYMS], rax
+    xor edi, edi
+    mov esi, PROF_CAP
+    mov edx, 3                      ; PROT_READ | PROT_WRITE
+    mov r10d, 0x22                  ; MAP_PRIVATE | MAP_ANONYMOUS
+    mov r8, -1
+    xor r9d, r9d
+    mov eax, 9                      ; sys_mmap
+    syscall
+    cmp rax, -4096
+    ja .finish                      ; no memory: no samples
+    mov [PROF_BUF], rax
+    mov [PROF_POS], rax
+    add rax, PROF_CAP - 8 * (PROF_DEPTH + 2)
+    mov [PROF_END], rax
+    mov rax, BASE_CODE              ; the code: from the start of the image up to the symbols,
+    mov [PROF_LO], rax              ; which are among the constants after it
+    mov rax, [PROF_SYMS]
+    mov [PROF_HI], rax
+    lea rax, [rel rt_image_end]
+    mov [PROF_MID], rax
+    sub rsp, 32
+    lea rax, [rel prof_signal]      ; sigaction: handler, flags, restorer, mask
+    mov [rsp], rax
+    mov rax, 0x14000004             ; SA_RESTART | SA_RESTORER | SA_SIGINFO
+    mov [rsp + 8], rax
+    lea rax, [rel prof_restorer]
+    mov [rsp + 16], rax
+    mov qword [rsp + 24], 0
+    mov edi, 27                     ; SIGPROF
+    mov rsi, rsp
+    xor edx, edx
+    mov r10d, 8
+    mov eax, 13                     ; sys_rt_sigaction
+    syscall
+    test rax, rax
+    jnz .unarmed
+    mov qword [rsp], 0              ; itimerval: interval 10 ms, first one in 10 ms
+    mov qword [rsp + 8], 10000
+    mov qword [rsp + 16], 0
+    mov qword [rsp + 24], 10000
+    mov edi, 2                      ; ITIMER_PROF
+    mov rsi, rsp
+    xor edx, edx
+    mov eax, 38                     ; sys_setitimer
+    syscall
+    test rax, rax
+    jnz .unarmed                    ; (macOS: not translated; the program runs without samples)
+    mov rax, [GC_STACK_TOP]         ; the top of the stack: known once the heap is, else found now
+    test rax, rax
+    jnz .top
+    call gc_stack_top
+.top:
+    mov [PROF_TOP], rax
+    mov qword [PROF_ON], 1
+.unarmed:
+    add rsp, 32
+.finish:
+    ret
+
+prof_restorer:
+    mov eax, 15                     ; sys_rt_sigreturn
+    syscall
+
+; prof_signal: rdi = SIGPROF, rsi = siginfo, rdx = ucontext (its registers at 40 + 8 × REG_*:
+; rbp 10, rsp 15, rip 16). Touches only what the kernel restores.
+prof_signal:
+    cmp qword [PROF_ON], 0
+    je .finish
+    mov r8, [PROF_POS]
+    cmp r8, [PROF_END]
+    jae .finish                     ; full: the last samples are dropped
+    mov rax, [rdx + 40 + 16 * 8]    ; rip
+    mov [r8], rax
+    add r8, 8
+    mov esi, PROF_DEPTH
+    mov rcx, [rdx + 40 + 15 * 8]    ; rsp
+    mov r9, [rdx + 40 + 10 * 8]     ; rbp
+    ; inside the runtime, whose routines make no frame: the return addresses between rsp and the
+    ; frame (a call right before each), up to the first one into the program's code
+    cmp rax, [PROF_MID]
+    jae .chain
+    lea rdi, [rcx + 4096]
+    cmp r9, rcx
+    jb .scan
+    cmp r9, rdi
+    jae .scan
+    mov rdi, r9
+.scan:
+    cmp rcx, rdi
+    jae .chain
+    mov rax, [rcx]
+    add rcx, 8
+    cmp rax, [PROF_LO]
+    jb .scan
+    cmp rax, [PROF_HI]
+    jae .scan
+    cmp byte [rax - 5], 0xE8        ; call rel32
+    jne .scan
+    mov [r8], rax
+    add r8, 8
+    dec esi
+    jz .end
+    cmp rax, [PROF_MID]
+    jb .scan
+.chain:
+    ; the frames: [rbp] = the caller's rbp, [rbp + 8] = the return address; each one above the
+    ; last and below the top of the stack
+    mov rcx, [rdx + 40 + 15 * 8]
+    mov rdi, [PROF_TOP]
+    test rdi, rdi
+    jz .end
+.link:
+    cmp r9, rcx
+    jb .end
+    test r9, 7
+    jnz .end
+    lea rax, [r9 + 16]
+    cmp rax, rdi
+    ja .end
+    mov rax, [r9 + 8]
+    cmp rax, [PROF_LO]
+    jb .end
+    cmp rax, [PROF_HI]
+    jae .end
+    mov [r8], rax
+    add r8, 8
+    lea rcx, [r9 + 8]
+    mov r9, [r9]
+    dec esi
+    jnz .link
+.end:
+    mov qword [r8], 0
+    add r8, 8
+    mov [PROF_POS], r8
+.finish:
+    ret
+
+; rt_prof_write: at the exit, the samples to nihil-profile.PID (and where, on stderr)
+rt_prof_write:
+    cmp qword [PROF_ON], 0
+    je .finish
+    mov qword [PROF_ON], 0
+    push rbx
+    sub rsp, 96
+    xor eax, eax
+    mov [rsp], rax
+    mov [rsp + 8], rax
+    mov [rsp + 16], rax
+    mov [rsp + 24], rax
+    mov edi, 2                      ; the timer off
+    mov rsi, rsp
+    xor edx, edx
+    mov eax, 38
+    syscall
+    mov eax, 39                     ; sys_getpid
+    syscall
+    lea rdi, [rsp + 94]
+    mov byte [rdi], 0
+    call rt_decimal                 ; rsi = the digits
+    sub rsi, s_prof_name_len
+    mov rbx, rsi                    ; the path: "nihil-profile." + pid
+    lea rdx, [rel s_prof_name]
+    xor ecx, ecx
+.name:
+    mov al, [rdx + rcx]
+    mov [rsi + rcx], al
+    inc ecx
+    cmp ecx, s_prof_name_len
+    jb .name
+    mov edi, -100                   ; openat(AT_FDCWD, path, O_WRONLY | O_CREAT | O_TRUNC, 0644)
+    mov rsi, rbx
+    mov edx, 0x241
+    mov r10d, 420
+    mov eax, 257
+    syscall
+    test eax, eax
+    js .done
+    mov [rsp], rbx                  ; the path, for the message
+    mov ebx, eax                    ; the fd
+    mov rsi, [PROF_SYMS]
+    mov rdx, [rsi - 8]
+    mov edi, ebx
+    call rt_write_fd
+    lea rsi, [rel s_prof_sep]
+    mov edx, 3
+    mov edi, ebx
+    call rt_write_fd
+    mov rsi, [PROF_BUF]
+    mov rdx, [PROF_POS]
+    sub rdx, rsi
+    mov edi, ebx
+    call rt_write_fd
+    mov edi, ebx
+    mov eax, 3                      ; sys_close
+    syscall
+    mov edi, 2                      ; "nihil: profile in nihil-profile.PID\n"
+    lea rsi, [rel s_prof_msg]
+    mov edx, s_prof_msg_len
+    call rt_write_fd
+    mov rsi, [rsp]
+    xor edx, edx
+.len:
+    cmp byte [rsi + rdx], 0
+    je .say
+    inc rdx
+    jmp .len
+.say:
+    mov edi, 2
+    call rt_write_fd
+    mov edi, 2
+    lea rsi, [rel s_nl]
+    mov edx, 1
+    call rt_write_fd
+.done:
+    add rsp, 96
+    pop rbx
+.finish:
+    ret
 
 ; rt_error: rsi = message (0-terminated). Writes "nihil: <msg>\n" to stderr
 ; and exits with code 2 (SPEC §8.3).
@@ -3892,6 +4124,11 @@ s_write:     db "could not write '"
 s_write_len  equ $ - s_write
 s_quote_colon: db "': "
 s_tmp_suffix: db ".nihil-tmp."
+s_prof_name: db "nihil-profile."
+s_prof_name_len equ $ - s_prof_name
+s_prof_sep: db "--", 10
+s_prof_msg: db "nihil: profile in "
+s_prof_msg_len equ $ - s_prof_msg
 s_tmp_suffix_len equ $ - s_tmp_suffix
 s_errno:     db "error "
 s_errno_len  equ $ - s_errno
@@ -4002,7 +4239,9 @@ ASSERT_AT t_rec_parse,    RT_REC_PARSE
 ASSERT_AT t_lines,        RT_LINES
 ASSERT_AT t_net_connect,  RT_NET_CONNECT
 ASSERT_AT t_concat_int,   RT_CONCAT_INT
+ASSERT_AT t_prof_start,   RT_PROF_START
 
 ; the last 4 bytes: where the data starts (rt_data, from the start of the runtime), for the Mac's
 ; translator, which turns only the code before it into ARM64
     dd rt_data - $$
+rt_image_end:                       ; the end of the runtime (the profiler tells it from the program)

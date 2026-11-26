@@ -580,6 +580,7 @@ cmd_method(k = 0) {
     }
     limit_regs = 0;
     base_frame = 0;
+    s_mend[k] = size_code;
     patch_here(jump);
 }
 

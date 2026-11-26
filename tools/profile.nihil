@@ -1,0 +1,144 @@
+// tools/profile.nihil — the report of a profile written by an executable built with -profile
+// (`nihil profile PROGRAM.nihil [ARG…]` builds it, runs it and calls this; docs/profiling.md).
+//
+// Standard input: the path of the profile (nihil-profile.PID). The file holds the program's symbols,
+// a line each ("start end name", decimal addresses), then "--\n", then the samples: qwords, each
+// sample the address being run, the return addresses found on the stack (innermost first), then 0.
+// A sample is 10 ms of CPU time (user and system) of the process.
+
+SYM = @[start: INT(20); stop: INT(20); name: STRING(200)];
+ROW = @[name: STRING(200); n: INT(20)];
+
+path = "";
+<< path;
+data? = @? path;
+data == _ { !>> "profile: could not read '" + path + "'\n"; :: 2; }
+d = data || "";
+sep? = d.find("\n--\n");
+sep == _ { !>> "profile: '" + path + "' is not a profile\n"; :: 2; }
+cut = (sep || 0) + 1;
+
+// the symbols: the runtime's routines and the methods do not overlap; the top level surrounds the methods
+syms = [SYM() ; 0];
+top = SYM();
+runtime_end = 0;
+d.slice(0, cut).split("\n") : line {
+    p = line.split(" ");
+    #p >= 3 {
+        s = SYM(p[0].int() || 0, p[1].int() || 0, line.slice(#p[0] + #p[1] + 2));
+        s.name == "(top level)" { top = s; runtime_end = s.start; } || { syms = syms + [s]; }
+    }
+}
+syms = syms.sort(start);
+starts = [0 ; #syms];
+i = 0;
+* i < #syms { starts[i] = syms[i].start; i = i + 1; }
+
+// the symbol of an address: an index into syms, -1 the top level, -2 none
+cache = {0: 0 ; 4096};
+find(a = 0) {
+    c? = cache[a];
+    c != _ { : c || 0; }
+    lo = 0;
+    hi = #starts;
+    * lo < hi {                                  // the first start above a
+        mid = (lo + hi) / 2;
+        starts[mid] <= a { lo = mid + 1; } || { hi = mid; }
+    }
+    r = -2;
+    lo > 0 && a < syms[lo - 1].stop { r = lo - 1; }
+    r == -2 && a >= top.start && a < top.stop { r = -1; }
+    cache[a] = r;
+    : r;
+}
+
+sym_name(k = 0) {
+    k >= 0 { : syms[k].name; }
+    k == -1 { : "(top level)"; }
+    : "(elsewhere)";
+}
+
+// the samples
+body = d.slice(cut + 3);
+word(at = 0) {
+    v = 0;
+    j = 7;
+    * j >= 0 { v = v * 256 + body[at + j]; j = j - 1; }
+    : v;
+}
+
+self = {"": 0 ; 1024};                         // where the CPU was
+total = {"": 0 ; 1024};                        // the method or what it called (once a sample)
+caller = {"": 0 ; 1024};                       // runtime time, by the method of the program that called it
+samples = 0;
+seen = [0 ; 64];
+pos = 0;
+* pos + 8 <= #body {
+    n_seen = 0;
+    depth = 0;
+    in_runtime = false;
+    blamed = false;
+    going = true;
+    * going && pos + 8 <= #body {
+        a = word(pos);
+        pos = pos + 8;
+        a == 0 {
+            going = false;
+        } || {
+            at = a;
+            depth > 0 { at = a - 1; }            // a return address: the call is just before it
+            k = find(at);
+            nm = sym_name(k);
+            depth == 0 {
+                self[nm] = (self[nm] || 0) + 1;
+                in_runtime = k >= 0 && syms[k].start < runtime_end;
+            }
+            depth > 0 && in_runtime && !blamed && a >= runtime_end {
+                caller[nm] = (caller[nm] || 0) + 1;
+                blamed = true;
+            }
+            dup = false;
+            j = 0;
+            * j < n_seen { seen[j] == k { dup = true; } j = j + 1; }
+            !dup && n_seen < 64 {
+                seen[n_seen] = k;
+                n_seen = n_seen + 1;
+                total[nm] = (total[nm] || 0) + 1;
+            }
+            depth = depth + 1;
+        }
+    }
+    samples = samples + 1;
+}
+
+// 1234 samples → "12.34 s"; n of samples → "12.3%"
+seconds(n = 0) {
+    cents = $(n % 100);
+    #cents < 2 { cents = "0" + cents; }
+    : $(n / 100) + "." + cents + " s";
+}
+percent(n = 0) {
+    samples == 0 { : "  0.0%"; }
+    t = (n * 1000 + samples / 2) / samples;
+    s = $(t / 10) + "." + $(t % 10) + "%";
+    : " ".repeat(6 - #s) + s;
+}
+
+table(title = "", m = {"": 0}, limit = 0) {
+    rows = [ROW() ; 0];
+    m.keys() : k { rows = rows + [ROW(k, m[k] || 0)]; }
+    rows = rows.sort(-n);
+    >> "\n" + title + "\n";
+    i = 0;
+    * i < #rows && i < limit {
+        >> percent(rows[i].n) + "  " + seconds(rows[i].n) + "  " + rows[i].name + "\n";
+        i = i + 1;
+    }
+    #rows > limit { >> "   … " + $(#rows - limit) + " more\n"; }
+}
+
+>> "profile: " + $samples + " samples, " + seconds(samples) + " of CPU (a sample every 10 ms)\n";
+samples == 0 { >> "(none: the program ran for less than 10 ms of CPU, or not on Linux)\n"; ::; }
+table("where the CPU was (self):", self, 30);
+table("the runtime's time, by the method that called it:", caller, 20);
+table("in the method or in what it called (total):", total, 30);

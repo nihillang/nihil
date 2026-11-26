@@ -96,6 +96,7 @@ Xcode Command Line Tools (`xcode-select --install`). On Windows, use WSL.
 printf '%s\n' '>> "Hello, Nihil!\n";' > hello.nihil
 nihil run hello.nihil        # compile and run: Hello, Nihil!
 nihil hello.nihil            # or compile into ./hello, a native executable
+nihil profile hello.nihil    # run it and report where the time went (Linux; docs/profiling.md)
 nihil version
 nihil ide                    # the IDE, in an app window (your workspace: ~/Nihil)
 nihil ide stop               # stop the IDE's server, which runs in the background
