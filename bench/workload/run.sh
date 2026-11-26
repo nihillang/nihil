@@ -26,6 +26,7 @@ echo "$machine"
 echo "$("$compiler" version 2>/dev/null || echo nihil) · $(cc --version | head -1) · $(go version | cut -d' ' -f3)"
 for n in ${SIZES:-100000 1000000}; do
     : > "$work/results"
+    rm -f "$work/first.json" "$work/first.dat" "$work/first.out"   # each size compared with its own first run
     r=1
     while [ "$r" -le "$rounds" ]; do
         for lang in nihil c go; do
