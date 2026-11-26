@@ -1633,11 +1633,11 @@ gc_init:
     mov [GC_BUMP], rax
     add rax, rbx
     mov [GC_HEAP_LIMIT], rax
-    mov rdi, [GC_HEAP_BASE]         ; huge pages for the heap (2 MiB) where the kernel has them: a fork
-    mov rsi, rbx                    ; copies far fewer page entries (2.9 → 0.3 ms with 200 MB of heap),
-    mov eax, 28                     ; and the benchmark ran 9% faster with a little less memory
-    mov edx, 14                     ; sys_madvise(heap, bytes, MADV_HUGEPAGE); refused: no matter
-    syscall
+    ; no MADV_HUGEPAGE for the heap: where the kernel's defrag is "madvise" (a common default), a
+    ; machine short of free memory compacts it on the spot for every 2 MiB page asked for, and a
+    ; program spent seconds in the kernel (the planogram's generate: 14 to 68 s with it, 12 to 14 s
+    ; without; its server started in 3 to 6 s with it, 1.5 s without). The kernel still gives huge
+    ; pages where its setting is "always".
     mov rsi, rbx
     shr rsi, GC_PAGE_SHIFT - 3      ; 8 bytes per page
     call gc_mmap
