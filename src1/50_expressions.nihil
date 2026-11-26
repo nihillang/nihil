@@ -23,16 +23,14 @@ expr_or() {
         is_opt(t) {
             // fallback: the value of t if present, otherwise the right one
             next_token();
-            eb(0x48, 0x85, 0xD2, 0x0F, 0x85);   // test rdx, rdx ; jnz end
-            pos = size_code;
-            emit_d(0);
+            op_test(R_DX); pos = op_jcc(CC_NE);   // test rdx, rdx ; jnz end
             u = expr_and();
             b = base_opt(t);
             r = 0;
             u == b && load_simple(pos + 4) >= 0 {
                 // no jump: mov rcx, fallback ; cmovz rax, rcx
                 simple_to_rcx(pos + 4, pos - 2);
-                eb(0x48, 0x0F, 0x44, 0xC1);     // cmovz rax, rcx
+                op_cmov(CC_E, R_AX, R_CX);     // cmovz rax, rcx
                 pos = -1;
                 r = b;
             } || u == b || u == TYPE_UNKNOWN {
@@ -58,9 +56,7 @@ expr_or() {
             // logical OR, with short-circuit
             !is_bool(t) { error_op_types(pi, pl, pn, pli, t, 0); }
             next_token();
-            eb(0x48, 0x85, 0xC0, 0x0F, 0x85);   // test rax, rax ; jnz end
-            pos = size_code;
-            emit_d(0);
+            op_test(R_AX); pos = op_jcc(CC_NE);   // test rax, rax ; jnz end
             u = expr_and();
             or_unknown = t == TYPE_UNKNOWN && !is_bool(u);
             or_unknown {
@@ -82,9 +78,7 @@ expr_and() {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         !is_bool(t) { error_op_types(pi, pl, pn, pli, t, 0); }
         next_token();
-        eb(0x48, 0x85, 0xC0, 0x0F, 0x84);   // test rax, rax ; jz end
-        pos = size_code;
-        emit_d(0);
+        op_test(R_AX); pos = op_jcc(CC_E);   // test rax, rax ; jz end
         u = binary(0);
         !is_bool(u) { error_op_types(pi, pl, pn, pli, t, u); }
         t = TYPE_BOOL;
@@ -125,11 +119,11 @@ emit_op(t = 0) {
     || t == '|' { op_alu(ALU_OR, R_AX, R_CX); }
     || t == '^' { op_alu(ALU_XOR, R_AX, R_CX); }
     || t == '&' { op_alu(ALU_AND, R_AX, R_CX); }
-    || t == T_SHL { eb(0x48, 0xD3, 0xE0); }
-    || t == T_SHR { eb(0x48, 0xD3, 0xF8); }
+    || t == T_SHL { op_shl(R_AX); }
+    || t == T_SHR { op_sar(R_AX); }
     || t == '+' { op_alu(ALU_ADD, R_AX, R_CX); }
     || t == '-' { op_alu(ALU_SUB, R_AX, R_CX); }
-    || t == '*' { eb(0x48, 0x0F, 0xAF, 0xC1); }
+    || t == '*' { op_mul(R_AX, R_CX); }
     || t == '/' { emit_call_rt(RT_DIV); }
     || t == '%' { emit_call_rt(RT_MOD); }
 }
@@ -139,14 +133,14 @@ emit_op_float(op = 0, pi = 0, pl = 0, pn = 0, pli = 0) {
     op == '%' || op == '|' || op == '^' || op == '&' || op == T_SHL || op == T_SHR {
         error_op_types(pi, pl, pn, pli, TYPE_FLOAT, TYPE_FLOAT);
     }
-    eb(0x66, 0x48, 0x0F, 0x6E, 0xC0);       // movq xmm0, rax
-    eb(0x66, 0x48, 0x0F, 0x6E, 0xC9);       // movq xmm1, rcx
+    op_xmov(0, R_AX);       // movq xmm0, rax
+    op_xmov(1, R_CX);       // movq xmm1, rcx
     op == '+' || op == '-' || op == '*' || op == '/' {
-        op == '+' { eb(0xF2, 0x0F, 0x58, 0xC1); }       // addsd
-        || op == '-' { eb(0xF2, 0x0F, 0x5C, 0xC1); }    // subsd
-        || op == '*' { eb(0xF2, 0x0F, 0x59, 0xC1); }    // mulsd
-        || { eb(0xF2, 0x0F, 0x5E, 0xC1); }              // divsd
-        eb(0x66, 0x48, 0x0F, 0x7E, 0xC0);   // movq rax, xmm0
+        op == '+' { op_xop(XOP_ADD, 0, 1); }       // addsd
+        || op == '-' { op_xop(XOP_SUB, 0, 1); }    // subsd
+        || op == '*' { op_xop(XOP_MUL, 0, 1); }    // mulsd
+        || { op_xop(XOP_DIV, 0, 1); }              // divsd
+        op_rmovx(R_AX, 0);   // movq rax, xmm0
         : TYPE_FLOAT;
     }
     // comparisons (NaN: only != is true)
@@ -207,7 +201,7 @@ binary(nv = 0) {
             }
             next_token();
             next_token();
-            eb(0x48, 0x85, 0xD2);               // test rdx, rdx
+            op_test(R_DX);               // test rdx, rdx
             op == T_EQ {
                 eb(0x0F, 0x94, 0xC0, 0x0F, 0xB6, 0xC0);   // sete al ; movzx eax, al
             } || {
@@ -283,7 +277,7 @@ binary(nv = 0) {
             r = TYPE_BOOL;
             t == TYPE_STR {
                 emit_call_rt(RT_STR_EQUAL);        // STRING: compares the contents
-                op == T_NE { eb(0x83, 0xF0, 0x01); }
+                op == T_NE { op_notb(R_AX); }
             } || {
                 emit_op(op);
             }
@@ -316,37 +310,37 @@ unary() {
         t == T_AT_OPT {
             !ok && u != TYPE_STR { error_op_types(pi, pl, pn, pli, u, 0); }
             emit_call_rt(RT_READ_FILE_OPT);   // @? path → STRING? (_ if it does not open)
-            eb(0x31, 0xD2, 0x48, 0x85, 0xC0, 0x0F, 0x95, 0xC2);   // xor edx,edx ; test rax,rax ; setne dl
+            op_zero(R_DX); op_test(R_AX); op_setcc(CC_NE, R_DX);   // xor edx,edx ; test rax,rax ; setne dl
             : TYPE_STR | TYPE_OPT;
         }
         t == '-' && u == TYPE_FLOAT {
-            eb(0x48, 0x0F, 0xBA, 0xF8, 0x3F);   // btc rax, 63 (flips the sign)
+            op_fneg(R_AX);   // btc rax, 63 (flips the sign)
             : TYPE_FLOAT;
         }
         t == '.' {
             !ok && u != TYPE_INT { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0xF2, 0x48, 0x0F, 0x2A, 0xC0);   // cvtsi2sd xmm0, rax
-            eb(0x66, 0x48, 0x0F, 0x7E, 0xC0);   // movq rax, xmm0
+            op_i2f(0, R_AX);   // cvtsi2sd xmm0, rax
+            op_rmovx(R_AX, 0);   // movq rax, xmm0
             : TYPE_FLOAT;
         }
         t == '#' && u == TYPE_FLOAT {
-            eb(0x66, 0x48, 0x0F, 0x6E, 0xC0);   // movq xmm0, rax
-            eb(0xF2, 0x48, 0x0F, 0x2C, 0xC0);   // cvttsd2si rax, xmm0 (trunca)
+            op_xmov(0, R_AX);   // movq xmm0, rax
+            op_f2i(R_AX, 0);   // cvttsd2si rax, xmm0 (trunca)
             : TYPE_INT;
         }
         t == '-' {
             !ok && u != TYPE_INT { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0x48, 0xF7, 0xD8);           // neg rax
+            op_neg(R_AX);           // neg rax
             : TYPE_INT;
         }
         t == '!' {
             !ok && u != TYPE_BOOL { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0x83, 0xF0, 0x01);           // xor eax, 1
+            op_notb(R_AX);           // xor eax, 1
             : TYPE_BOOL;
         }
         t == '~' {
             !ok && u != TYPE_INT { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0x48, 0xF7, 0xD0);           // not rax
+            op_not(R_AX);           // not rax
             : TYPE_INT;
         }
         t == '@' {
@@ -372,7 +366,7 @@ unary() {
             op_mov(R_DX, R_AX);           // mov rdx, rax
             op_lea_const(R_AX, bool_text(true));           // lea rax, [rip + "true"]
             op_lea_const(R_CX, bool_text(false));           // lea rcx, [rip + "false"]
-            eb(0x48, 0x85, 0xD2, 0x48, 0x0F, 0x44, 0xC1);   // test rdx, rdx ; cmovz rax, rcx
+            op_test(R_DX); op_cmov(CC_E, R_AX, R_CX);   // test rdx, rdx ; cmovz rax, rcx
             : TYPE_STR;
         }
         t == '$' {
@@ -525,7 +519,7 @@ primary() {
         : u;
     }
     t == T_UNDERSCORE {
-        eb(0x31, 0xC0, 0x31, 0xD2);         // xor eax, eax ; xor edx, edx
+        op_zero(R_AX); op_zero(R_DX);         // xor eax, eax ; xor edx, edx
         next_token();
         : TYPE_ABSENT;
     }
@@ -705,8 +699,7 @@ primary_array() {
         r = n;
         * r > 0 {
             r = r - 1;
-            eb(0x59, 0x48, 0x89, 0x88);     // pop rcx ; mov [rax + disp32], rcx
-            emit_d(r * 8);
+            op_pop(R_CX); op_st(R_AX, r * 8, R_CX, 1);     // pop rcx ; mov [rax + disp32], rcx
         }
     }
     t == TYPE_UNKNOWN { : t; }

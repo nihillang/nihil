@@ -217,6 +217,300 @@ op_ldbx(r = 0, base = 0, index = 0) {
     op_note(OP_LDBX, r, base, at, index);
 }
 
+// ---- more operations: each one's x86 form, and a note of it ----
+
+// opc reg, [base + disp] with no REX.W (push, movzx …): x86_mem's ModRM rules
+x86_mem_now(opc = 0, reg = 0, base = 0, disp = 0, wide = 0) {
+    base >= 8 { emit(0x41); }
+    emit(opc);
+    md = 0x80;
+    wide == 0 && disp == 0 && base & 7 != 5 {
+        md = 0;
+    } || wide == 0 && disp >= -128 && disp < 128 {
+        md = 0x40;
+    }
+    emit(md | ((reg & 7) << 3) | (base & 7));
+    base & 7 == 4 { emit(0x24); }
+    md == 0x40 { emit(disp & 255); }
+    md == 0x80 { emit_d(disp); }
+}
+
+// [base + index] ← r's low byte
+op_stbx(base = 0, index = 0, r = 0) {
+    at = size_code;
+    eb(0x88, 0x04 | (r << 3), (index << 3) | base);   // mov [base + index], r8
+    op_note(OP_STBX, r, base, at, index);
+}
+
+op_lea(r = 0, base = 0, disp = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x8D, r, base, disp, wide);    // lea r, [base + disp]
+    op_note(OP_LEA, r, disp, at, base * 2 + wide);
+}
+
+op_cmpm(r = 0, base = 0, disp = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x3B, r, base, disp, wide);    // cmp r, [base + disp]
+    op_note(OP_CMPM, r, disp, at, base * 2 + wide);
+}
+
+op_subm(r = 0, base = 0, disp = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x2B, r, base, disp, wide);    // sub r, [base + disp]
+    op_note(OP_SUBM, r, disp, at, base * 2 + wide);
+}
+
+op_addtom(base = 0, disp = 0, r = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x01, r, base, disp, wide);    // add [base + disp], r
+    op_note(OP_ADDTOM, r, disp, at, base * 2 + wide);
+}
+
+// the place of a memory operand and the disp, in one o: (base * 2 + wide) * 2^32 + disp (disp
+// is 32 bits, kept as unsigned)
+mem_o(base = 0, disp = 0, wide = 0) { : ((base * 2 + wide) << 32) | (disp & 0xFFFFFFFF); }
+
+// qword [base + disp] ← v (imm32, sign-extended)
+op_sti(base = 0, disp = 0, v = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0xC7, 0, base, disp, wide);    // mov qword [base + disp], imm32
+    emit_d(v);
+    op_note(OP_STI, 0, v, at, mem_o(base, disp, wide));
+}
+
+op_pushm(base = 0, disp = 0, wide = 0) {
+    at = size_code;
+    x86_mem_now(0xFF, 6, base, disp, wide);   // push qword [base + disp]
+    op_note(OP_PUSHM, 0, disp, at, base * 2 + wide);
+}
+
+op_pushi(v = 0) {
+    at = size_code;
+    eb(0x6A, v & 255);                      // push imm8
+    op_note(OP_PUSHI, 0, v, at);
+}
+
+// r ← r + v: inc, dec, or add imm32
+op_addi(r = 0, v = 0) {
+    at = size_code;
+    v == 1 || v == -1 {
+        eb(0x48 | rex_b(r), 0xFF);
+        v == 1 { emit(0xC0 | (r & 7)); } || { emit(0xC8 | (r & 7)); }       // inc / dec r
+    } || {
+        eb(0x48 | rex_b(r), 0x81, 0xC0 | (r & 7));                         // add r, imm32
+        emit_d(v);
+    }
+    op_note(OP_ADDI, r, v, at);
+}
+
+// qword [base + disp] += v: inc, dec, or add imm32
+op_addim(base = 0, disp = 0, v = 0, wide = 0) {
+    at = size_code;
+    v == 1 || v == -1 {
+        ext = 0;
+        v == -1 { ext = 1; }
+        x86_mem(0xFF, ext, base, disp, wide);   // inc / dec qword [base + disp]
+    } || {
+        x86_mem(0x81, 0, base, disp, wide);     // add qword [base + disp], imm32
+        emit_d(v);
+    }
+    op_note(OP_ADDIM, 0, v, at, mem_o(base, disp, wide));
+}
+
+op_cmpi(r = 0, v = 0) {
+    at = size_code;
+    r == R_AX {
+        eb(0x48, 0x3D);                     // cmp rax, imm32
+    } || {
+        eb(0x48 | rex_b(r), 0x81, 0xF8 | (r & 7));   // cmp r, imm32
+    }
+    emit_d(v);
+    op_note(OP_CMPI, r, v, at);
+}
+
+// cmp qword [base + disp], imm8
+op_cmpim(base = 0, disp = 0, v = 0, wide = 0) {
+    at = size_code;
+    x86_mem(0x83, 7, base, disp, wide);
+    emit(v & 255);
+    op_note(OP_CMPIM, 0, v, at, mem_o(base, disp, wide));
+}
+
+op_muli(r = 0, s = 0, v = 0) {
+    at = size_code;
+    eb(0x48 | rex_r(r) | rex_b(s), 0x69, 0xC0 | ((r & 7) << 3) | (s & 7));   // imul r, s, imm32
+    emit_d(v);
+    op_note(OP_MULI, r, v, at, s);
+}
+
+op_mul(r = 0, s = 0) {
+    at = size_code;
+    eb(0x48 | rex_r(r) | rex_b(s), 0x0F, 0xAF, 0xC0 | ((r & 7) << 3) | (s & 7));   // imul r, s
+    op_note(OP_MUL, r, 0, at, s);
+}
+
+op_shri(r = 0, n = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xC1, 0xE8 | (r & 7), n);   // shr r, n
+    op_note(OP_SHRI, r, n, at);
+}
+
+op_shl(r = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xD3, 0xE0 | (r & 7));   // shl r, cl
+    op_note(OP_SHL, r, 0, at);
+}
+
+op_sar(r = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xD3, 0xF8 | (r & 7));   // sar r, cl
+    op_note(OP_SAR, r, 0, at);
+}
+
+op_neg(r = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xF7, 0xD8 | (r & 7));   // neg r
+    op_note(OP_NEG, r, 0, at);
+}
+
+op_not(r = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xF7, 0xD0 | (r & 7));   // not r
+    op_note(OP_NOT, r, 0, at);
+}
+
+op_notb(r = 0) {
+    at = size_code;
+    eb(0x83, 0xF0 | r, 0x01);               // xor eR, 1
+    op_note(OP_NOTB, r, 0, at);
+}
+
+op_fneg(r = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0x0F, 0xBA, 0xF8 | (r & 7), 0x3F);   // btc r, 63
+    op_note(OP_FNEG, r, 0, at);
+}
+
+op_test(r = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r) | rex_r(r), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
+    op_note(OP_TEST, r, 0, at);
+}
+
+op_setcc(cc = 0, r = 0) {
+    at = size_code;
+    eb(0x0F, 0x90 | cc, 0xC0 | r);          // setcc r8 (al, cl, dl, bl)
+    op_note(OP_SETCC, r, cc, at);
+}
+
+// r ← s if cc
+op_cmov(cc = 0, r = 0, s = 0) {
+    at = size_code;
+    eb(0x48 | rex_r(r) | rex_b(s), 0x0F, 0x40 | cc, 0xC0 | ((r & 7) << 3) | (s & 7));   // cmovcc r, s
+    op_note(OP_CMOV, r, cc, at, s);
+}
+
+// a forward jump on cc → the position to patch (patch_here)
+op_jcc(cc = 0) {
+    at = size_code;
+    eb(0x0F, 0x80 | cc);
+    pos = size_code;
+    emit_d(0);
+    op_note(OP_JCC, 0, cc, at, -1);
+    : pos;
+}
+
+// a forward jump → the position to patch (patch_here)
+op_jmp() {
+    at = size_code;
+    emit(0xE9);
+    pos = size_code;
+    emit_d(0);
+    op_note(OP_JMP, 0, 0, at, -1);
+    : pos;
+}
+
+op_imm64(r = 0, v = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xB8 | (r & 7));    // mov r, imm64
+    emit_q(v);
+    op_note(OP_IMM64, r, v, at);
+}
+
+op_imms(r = 0, v = 0) {
+    at = size_code;
+    eb(0x48 | rex_b(r), 0xC7, 0xC0 | (r & 7));   // mov r, simm32
+    emit_d(v);
+    op_note(OP_IMMS, r, v, at);
+}
+
+// xmm x ← the bits of r
+op_xmov(x = 0, r = 0) {
+    at = size_code;
+    eb(0x66, 0x48 | rex_r(x) | rex_b(r), 0x0F, 0x6E, 0xC0 | ((x & 7) << 3) | (r & 7));   // movq xmm, r
+    op_note(OP_XMOV, x, 0, at, r);
+}
+
+// r ← the bits of xmm x
+op_rmovx(r = 0, x = 0) {
+    at = size_code;
+    eb(0x66, 0x48 | rex_r(x) | rex_b(r), 0x0F, 0x7E, 0xC0 | ((x & 7) << 3) | (r & 7));   // movq r, xmm
+    op_note(OP_RMOVX, r, 0, at, x);
+}
+
+// xmm x ← [rbp + d]
+op_xld(x = 0, d = 0) {
+    at = size_code;
+    emit(0xF3);
+    x >= 8 { emit(0x44); }
+    eb(0x0F, 0x7E, 0x85 | ((x & 7) << 3));  // movq xmm, [rbp + disp32]
+    emit_d(d);
+    op_note(OP_XLD, x, d, at);
+}
+
+// xmm x ← xmm x op xmm y
+op_xop(xop = 0, x = 0, y = 0) {
+    at = size_code;
+    emit(0xF2);
+    x >= 8 || y >= 8 { emit(0x40 | rex_r(x) | rex_b(y)); }
+    eb(0x0F, xop, 0xC0 | ((x & 7) << 3) | (y & 7));   // addsd / subsd / mulsd / divsd
+    op_note(OP_XOP, x, xop, at, y);
+}
+
+op_i2f(x = 0, r = 0) {
+    at = size_code;
+    eb(0xF2, 0x48 | rex_r(x) | rex_b(r), 0x0F, 0x2A, 0xC0 | ((x & 7) << 3) | (r & 7));   // cvtsi2sd xmm, r
+    op_note(OP_I2F, x, 0, at, r);
+}
+
+op_f2i(r = 0, x = 0) {
+    at = size_code;
+    eb(0xF2, 0x48 | rex_r(r) | rex_b(x), 0x0F, 0x2C, 0xC0 | ((r & 7) << 3) | (x & 7));   // cvttsd2si r, xmm
+    op_note(OP_F2I, r, 0, at, x);
+}
+
+// rax ← xmm0 ?t xmm1 (t: '>' T_GE '<' T_LE T_EQ T_NE); NaN: only != is true
+op_fcmp_set(t = 0) {
+    at = size_code;
+    t == '>' {
+        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x97, 0xC0);   // ucomisd xmm0, xmm1 ; seta al
+    } || t == T_GE {
+        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x93, 0xC0);   // ucomisd xmm0, xmm1 ; setae al
+    } || t == '<' {
+        eb(0x66, 0x0F, 0x2E, 0xC8, 0x0F, 0x97, 0xC0);   // ucomisd xmm1, xmm0 ; seta al
+    } || t == T_LE {
+        eb(0x66, 0x0F, 0x2E, 0xC8, 0x0F, 0x93, 0xC0);   // ucomisd xmm1, xmm0 ; setae al
+    } || t == T_EQ {
+        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x94, 0xC0);   // ucomisd ; sete al
+        eb(0x0F, 0x9B, 0xC1, 0x20, 0xC8);               // setnp cl ; and al, cl
+    } || {
+        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x95, 0xC0);   // ucomisd ; setne al
+        eb(0x0F, 0x9A, 0xC1, 0x08, 0xC8);               // setp cl ; or al, cl
+    }
+    eb(0x0F, 0xB6, 0xC0);                   // movzx eax, al
+    op_note(OP_FCMP_SET, R_AX, t, at);
+}
+
 op_push(r = 0) {
     at = size_code;
     r >= 8 { emit(0x41); }

@@ -169,7 +169,7 @@ to_json_call(t = 0) {
 // the value of type t in rax (rdx) → its JSON text in rax
 emit_to_json(t = 0) {
     t == TYPE_UNKNOWN { : TYPE_STR; }
-    is_opt(t) { eb(0x50, 0x52); } || { eb(0x50, 0x6A, 1); }   // push rax ; push rdx (or push 1)
+    is_opt(t) { op_push(R_AX); op_push(R_DX); } || { op_push(R_AX); op_pushi(1); }   // push rax ; push rdx (or push 1)
     b = base_opt(t);
     m = -1;
     const_init();
@@ -416,7 +416,7 @@ call_tool_call() {
     }
     tool_names = const_close();
     push_const(tool_names);
-    eb(0xFF, 0xB4, 0x24); emit_d(16);    // push qword [rsp + 16]: the name
+    op_pushm(R_SP, 16, 1);    // push qword [rsp + 16]: the name
     call_prelude("__nihil_tool_index", 16);
     dones = [0 ; count + 1];
     nd = 0;
@@ -424,15 +424,13 @@ call_tool_call() {
     k = 0;
     * k < n_sym {
         tool_named(k, pv, pn) {
-            eb(0x48, 0x3D); emit_d(i);   // cmp rax, i
-            eb(0x0F, 0x85);              // jne the next tool
-            next_pos = size_code;
-            emit_d(0);
+            op_cmpi(R_AX, i);   // cmp rax, i
+            next_pos = op_jcc(CC_NE);              // jne the next tool
             j = 0;
             * j < s_nparam[k] {
                 e = s_extra[k] + j;
                 ty = tool_param_type(k, e);
-                eb(0xFF, 0xB4, 0x24); emit_d(8 * j);     // push qword [rsp + 8j]: the arguments
+                op_pushm(R_SP, 8 * j, 1);     // push qword [rsp + 8j]: the arguments
                 const_init();
                 const_put_source(p_start[e], p_len[e]);
                 push_const(const_close());
@@ -441,7 +439,7 @@ call_tool_call() {
                     push_const(p_default[e]);
                     call_prelude("__nihil_tool_str", 24);
                 } || {
-                    eb(0x48, 0xB8); emit_q(p_default[e]);   // mov rax, default ; push rax
+                    op_imm64(R_AX, p_default[e]);   // mov rax, default ; push rax
                     op_push(R_AX);
                     t == TYPE_INT { call_prelude("__nihil_tool_int", 24); }
                     t == TYPE_FLOAT { call_prelude("__nihil_tool_float", 24); }
@@ -471,16 +469,14 @@ call_tool_call() {
                 emit_to_json(r);
             }
             op_load(OP_IMM, R_DX, 1);        // mov edx, 1
-            emit(0xE9);                  // jmp the end
-            dones[nd] = size_code;
+            dones[nd] = op_jmp();        // jmp the end
             nd = nd + 1;
-            emit_d(0);
             patch_here(next_pos);
             i = i + 1;
         }
         k = k + 1;
     }
-    eb(0x31, 0xC0, 0x31, 0xD2);          // xor eax, eax ; xor edx, edx: no such tool
+    op_zero(R_AX); op_zero(R_DX);          // xor eax, eax ; xor edx, edx: no such tool
     d = 0;
     * d < nd { patch_here(dones[d]); d = d + 1; }
     op_stack(16);            // add rsp, 16
@@ -612,16 +608,13 @@ q_store(d = 0) {                        // mov [rbp + d], rax / mov R, rax
 }
 
 q_zero(d = 0) {                         // mov qword [rbp + d], 0 / mov R, 0
-    d > 0 { eb(0x48 | rex_b(d), 0xC7, 0xC0 | (d & 7)); emit_d(0); :; }
-    eb(0x48, 0xC7, 0x85);
-    emit_d(d);
-    emit_d(0);
+    d > 0 { op_imms(d, 0); :; }
+    op_sti(R_BP, d, 0, 1);
 }
 
 q_inc(d = 0) {                          // inc qword [rbp + d] / inc R
-    d > 0 { eb(0x48 | rex_b(d), 0xFF, 0xC0 | (d & 7)); :; }
-    eb(0x48, 0xFF, 0x85);
-    emit_d(d);
+    d > 0 { op_addi(d, 1); :; }
+    op_addim(R_BP, d, 1, 1);
 }
 
 // a hidden local of a query: a register if the method has one free, else a frame slot
@@ -695,8 +688,7 @@ query_call(t = 0) {
     q_zero(d_n);
     q_zero(d_res);
     xs > 0 {
-        eb(0xF3, 0x44, 0x0F, 0x7E, 0x85 | ((xs & 7) << 3));   // movq xmm8|9, [rbp + d_res] (0.0)
-        emit_d(d_res);
+        op_xld(xs, d_res);   // movq xmm8|9, [rbp + d_res] (0.0)
     }
     kind == 1 || kind == 4 {
         op_ld(R_CX, R_AX, -8, 0);         // mov rcx, [rax - 8]
@@ -708,10 +700,8 @@ query_call(t = 0) {
     last_target = size_code;               // the loop comes back here
     q_load(0, d_i);
     q_load(1, d_arr);
-    eb(0x48, 0x3B, 0x41, 0xF8);             // cmp rax, [rcx - 8]
-    eb(0x0F, 0x8D);                         // jge end
-    p_end = size_code;
-    emit_d(0);
+    op_cmpm(R_AX, R_CX, -8, 0);             // cmp rax, [rcx - 8]
+    p_end = op_jcc(CC_GE);                         // jge end
     op_ldx(R_AX, R_CX, R_AX);             // mov rax, [rcx + rax*8]
     q_store(d_el);
     sv_m = q_model; sv_e = q_elem;
@@ -725,9 +715,7 @@ query_call(t = 0) {
     p_break = -1;
     kind <= 3 {
         u != TYPE_BOOL && u != TYPE_UNKNOWN { query_type(ns, nl, u, "a BOOL condition", pi, pl, pn, pli); }
-        eb(0x48, 0x85, 0xC0, 0x0F, 0x84);   // test rax, rax ; jz next
-        p_next = size_code;
-        emit_d(0);
+        op_test(R_AX); p_next = op_jcc(CC_E);   // test rax, rax ; jz next
         kind == 1 {
             q_load(1, d_res);
             q_load(2, d_n);
@@ -740,9 +728,7 @@ query_call(t = 0) {
             q_load(0, d_el);
             q_store(d_res);
             q_inc(d_n);
-            emit(0xE9);                    // jmp end: the first one is enough
-            p_break = size_code;
-            emit_d(0);
+            p_break = op_jmp();                    // jmp end: the first one is enough
         }
     }
     kind == 4 {
@@ -756,28 +742,26 @@ query_call(t = 0) {
     kind == 5 {
         u != TYPE_INT && u != TYPE_FLOAT && u != TYPE_UNKNOWN { query_type(ns, nl, u, "an INT or FLOAT", pi, pl, pn, pli); }
         u == TYPE_FLOAT && xs > 0 && n_calls == calls0 {
-            eb(0x66, 0x48, 0x0F, 0x6E, 0xC8);   // movq xmm1, rax
-            eb(0xF2, 0x44, 0x0F, 0x58, 0xC1 | ((xs & 7) << 3));   // addsd xmm8|9, xmm1
+            op_xmov(1, R_AX);   // movq xmm1, rax
+            op_xop(XOP_ADD, xs, 1);   // addsd xmm8|9, xmm1
         } || u == TYPE_FLOAT {
             xs = 0;                         // (the expression calls a method: in memory)
             d_n > 0 {
                 q_load(0, d_n);
-                eb(0x66, 0x48, 0x0F, 0x6E, 0xC0);   // movq xmm0, rax
+                op_xmov(0, R_AX);   // movq xmm0, rax
             } || {
-                eb(0xF3, 0x0F, 0x7E, 0x85);     // movq xmm0, [rbp + d_n]
-                emit_d(d_n);
+                op_xld(0, d_n);     // movq xmm0, [rbp + d_n]
             }
-            eb(0x66, 0x48, 0x0F, 0x6E, 0xC8);   // movq xmm1, rax
-            eb(0xF2, 0x0F, 0x58, 0xC1);     // addsd xmm0, xmm1
-            eb(0x66, 0x48, 0x0F, 0x7E, 0xC0);   // movq rax, xmm0
+            op_xmov(1, R_AX);   // movq xmm1, rax
+            op_xop(XOP_ADD, 0, 1);     // addsd xmm0, xmm1
+            op_rmovx(R_AX, 0);   // movq rax, xmm0
             q_store(d_n);
         } || d_n > 0 {
             xs = 0;
-            eb(0x48 | rex_b(d_n), 0x01, 0xC0 | (d_n & 7));   // add R, rax
+            op_alu(ALU_ADD, d_n, R_AX);   // add R, rax
         } || {
             xs = 0;
-            eb(0x48, 0x01, 0x85);           // add [rbp + d_n], rax
-            emit_d(d_n);
+            op_addtom(R_BP, d_n, R_AX, 1);           // add [rbp + d_n], rax
         }
     }
     p_next >= 0 { patch_here(p_next); }
@@ -811,7 +795,7 @@ query_call(t = 0) {
     }
     kind == 5 {
         xs > 0 {
-            eb(0x66, 0x4C, 0x0F, 0x7E, 0xC0 | ((xs & 7) << 3));   // movq rax, xmm8|9
+            op_rmovx(R_AX, xs);   // movq rax, xmm8|9
         } || {
             q_load(0, d_n);
         }

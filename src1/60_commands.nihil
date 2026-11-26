@@ -245,9 +245,7 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     last_target = size_code;
     op_ld(R_CX, R_BP, ix, 1);        // mov rcx, [rbp + i]
     eb(0x48, 0x3B, 0x8D); emit_d(n);         // cmp rcx, [rbp + n]
-    eb(0x0F, 0x8D);                          // jge end
-    leave = size_code;
-    emit_d(0);
+    leave = op_jcc(CC_GE);                          // jge end
     // the block, with x (and i) as its first locals
     line = tok_line;
     next_token();
@@ -339,9 +337,7 @@ counted_loop(with_block = true) {
         align_loop();
         top = size_code;
         eb(0x48 | (rex_b(r) * 5), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
-        eb(0x0F, 0x8E);                     // jle rel32
-        leave = size_code;
-        emit_d(0);
+        leave = op_jcc(CC_LE);                     // jle rel32
         loop_depth = loop_depth + 1;
         with_block { block(); } || { cmd_call(); }
         loop_depth = loop_depth - 1;
@@ -465,9 +461,7 @@ skip_method() {
 
 cmd_method(k = 0) {
     s_skip[k] != 0 { skip_method(); :; }   // a prelude method the program does not reach
-    emit(0xE9);                            // jmp over the body
-    jump = size_code;
-    emit_d(0);
+    jump = op_jmp();                            // jmp over the body
     s_end[k] = size_code;
     limit_regs = 0;
     optimize { limit_regs = s_regs[k]; }    // how many registers the previous pass asked for
@@ -799,7 +793,7 @@ cmd_read_line() {
     }
     !is_opt(tt) && s_flags[k] & FLAG_OPT == 0 {
         // end of input into an ordinary variable: the type's "zero" value
-        eb(0x48, 0x85, 0xD2);               // test rdx, rdx
+        op_test(R_DX);               // test rdx, rdx
         b == TYPE_STR {
             eb(0x75, 7);                    // jnz +7
             op_lea_const(R_AX, const_empty);           // lea rax, [rip + ""]
