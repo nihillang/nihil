@@ -1115,15 +1115,58 @@ native_start() {
     a_str("_main:"); a_nl();
     a_line("stp x29, x30, [sp, #-16]!");
     a_line("mov x29, sp");
-    a_line("mov x2, sp");                 // the sp of the program's code (protected calls restore it)
-    a_line("bl _nh_start");               // (argc, argv, sp) → x0: the top of the program's stack
+    a_line("adrp x16, Lbase_sp@PAGE");    // the sp of the program's code (protected calls restore it)
+    a_line("mov x17, sp");
+    a_line("str x17, [x16, Lbase_sp@PAGEOFF]");
+    a_line("mov x0, #0");                 // the program's stack: 256 MiB (pages come when touched)
+    a_line("mov x1, #268435456");
+    a_line("mov x2, #3");
+    a_line("mov x3, #4098");              // MAP_PRIVATE | MAP_ANON
+    a_line("mov x4, #-1");
+    a_line("mov x5, #0");
+    a_line("bl _mmap");
+    a_line("cmn x0, #1");
+    a_line("b.eq Lno_stack");
+    a_line("mov x16, #268435456");
+    a_line("add x0, x0, x16");
+    a_line("sub x0, x0, #64");
+    a_line("adrp x16, Lstack_top@PAGE");
+    a_line("str x0, [x16, Lstack_top@PAGEOFF]");
     a_line("mov x28, x0");
     a_line("mov x29, x0");
     a_line("adrp x27, _nh_globals@PAGE");
     a_line("add x27, x27, _nh_globals@PAGEOFF");
     a_line("b Lprogram");
+    a_str("Lno_stack:"); a_nl();
+    a_line("mov x0, #2");
+    a_line("bl __exit");
+    // for the runtime (src1/native.nihil), as C functions: the sp of the program's code, its stack's
+    // top, the globals, and x19 … x28 (the collector's roots)
+    a_str("_nh_base_sp:"); a_nl();
+    a_line("adrp x0, Lbase_sp@PAGE");
+    a_line("ldr x0, [x0, Lbase_sp@PAGEOFF]");
+    a_line("ret");
+    a_str("_nh_stack_top:"); a_nl();
+    a_line("adrp x0, Lstack_top@PAGE");
+    a_line("ldr x0, [x0, Lstack_top@PAGEOFF]");
+    a_line("ret");
+    a_str("_nh_globals_start:"); a_nl();
+    a_line("adrp x0, _nh_globals@PAGE");
+    a_line("add x0, x0, _nh_globals@PAGEOFF");
+    a_line("ret");
+    a_str("_nh_globals_bytes:"); a_nl();
+    a_line("adrp x0, _nh_globals_size@PAGE");
+    a_line("ldr x0, [x0, _nh_globals_size@PAGEOFF]");
+    a_line("ret");
+    a_str("_nh_regs:"); a_nl();
+    a_line("stp x19, x20, [x0]");
+    a_line("stp x21, x22, [x0, #16]");
+    a_line("stp x23, x24, [x0, #32]");
+    a_line("stp x25, x26, [x0, #48]");
+    a_line("stp x27, x28, [x0, #64]");
+    a_line("ret");
     // nh_resume(record, sp): back where a protected call resumes, after a runtime error in it
-    // (rt.c: x28, x29, where, x19 … x26 as the call had them), with rax and rdx 0
+    // (native.nihil: x28, x29, where, x19 … x26 as the call had them), with rax and rdx 0
     a_line(".globl _nh_resume");
     a_str("_nh_resume:"); a_nl();
     a_line("mov sp, x1");
@@ -1140,46 +1183,23 @@ native_start() {
 }
 
 native_end() {
-    // the routines called: the registers into C's arguments, the result back
+    // the routines reached by a jump (an error: index, division by zero): their registers pushed as
+    // the arguments of their methods (src1/native.nihil)
     rt = 0;
     * rt < 64 {
-        rt_used[rt] {
+        rt_used[rt] && rt_meth[rt] >= 0 {    // reached by a jump (an error): its method, which does not return
             n = rt * 5;
             a_str("Lrt"); a_num(n); a_str(":"); a_nl();
-            a_line("stp x29, x30, [sp, #-16]!");
-            a_line("adrp x16, _nh_sp@PAGE");      // the program's stack, for the collector
-            a_line("str x28, [x16, _nh_sp@PAGEOFF]");
-            a_line("stp x10, x12, [sp, #-32]!");   // rcx, rsi, rdi kept (C may change them; they are
-            a_line("str x13, [sp, #16]");          // roots for alloc, on C's stack)
-            n == RT_PROTECT {
-                a_line("sub sp, sp, #80");        // what to restore: x28, x29, x19 … x26
-                a_line("stp x28, x29, [sp]");
-                a_line("stp x19, x20, [sp, #16]");
-                a_line("stp x21, x22, [sp, #32]");
-                a_line("stp x23, x24, [sp, #48]");
-                a_line("stp x25, x26, [sp, #64]");
-                a_line("mov x0, x9");             // where to resume
-                a_line("mov x1, sp");
-            } || {
-                a_line("mov x0, x9");
-                a_line("mov x1, x10");
-                a_line("mov x2, x11");
-                a_line("mov x3, x12");
-                a_line("mov x4, x13");
-                a_line("mov x5, x28");
-            }
-            a_ins("bl _nh_"); a_str(rt_name(n)); a_nl();
-            a_line("mov x9, x0");
-            a_line("mov x11, x1");
-            n == RT_PROTECT { a_line("add sp, sp, #80"); }
-            a_line("ldr x13, [sp, #16]");
-            a_line("ldp x10, x12, [sp], #32");
-            n == RT_READ_AT {
-                a_line("adrp x16, _nh_ret_rcx@PAGE");
-                a_line("ldr x10, [x16, _nh_ret_rcx@PAGEOFF]");
-            }
-            a_line("ldp x29, x30, [sp], #16");
-            a_line("ret");
+            rd = rt_reads(n);
+            rd & L_AX != 0 { a_push(9); }
+            rd & L_CX != 0 { a_push(10); }
+            rd & L_DX != 0 { a_push(11); }
+            rd & L_SI != 0 { a_push(12); }
+            rd & L_DI != 0 { a_push(13); }
+            a_ins("bl Lm"); a_num(rt_meth[rt]); a_nl();
+            a_line("brk #1");
+        } || rt_used[rt] {
+            error("internal error: -native: a routine of the runtime with no method in src1/native.nihil");
         }
         rt = rt + 1;
     }
@@ -1199,6 +1219,11 @@ native_end() {
         }
         a_nl();
     }
+    a_line(".p2align 3");
+    a_str("Lbase_sp:"); a_nl();
+    a_line(".quad 0");
+    a_str("Lstack_top:"); a_nl();
+    a_line(".quad 0");
     a_line(".globl _nh_globals");
     a_line(".globl _nh_globals_size");
     a_line(".p2align 3");
@@ -1296,8 +1321,6 @@ arm_op(i = 0) {
             j = 0;
             * j < nv { a_ins("str "); a_x(fixed + j); a_str(", [sp, #"); a_num(8 * j); a_str("]"); a_nl(); j = j + 1; }
         }
-        a_line("adrp x16, _nh_sp@PAGE");      // (the C runtime's collector: where the program's stack is)
-        a_line("str x28, [x16, _nh_sp@PAGEOFF]");
         a_ins("bl _"); q = 0; * q < o { a_byte(source[v + q]); q = q + 1; } a_nl();
         room > 0 { a_ins("add sp, sp, #"); a_num(room); a_nl(); }
         k == OP_CCALL32 { a_line("sxtw x9, w0"); } || { a_line("mov x9, x0"); }
@@ -1451,6 +1474,7 @@ rt_method(rt = 0) {
 }
 
 arm_call_nihil(rt = 0, k = 0, i = 0) {
+    rt == RT_PROTECT { a_line("mov x16, x28"); }   // the stack as the protected call has it
     keep = L_CX | L_SI | L_DI;
     lazy { keep = keep & live_out_of(i); }
     rt == RT_READ_AT { keep = keep & (L_ALL ^ L_CX); }
@@ -1459,6 +1483,13 @@ arm_call_nihil(rt = 0, k = 0, i = 0) {
     keep & L_DI != 0 { a_push(13); }
     rd = rt_reads(rt);
     n = 0;
+    rt == RT_PROTECT {                     // where to resume, x28, x29, x19 … x26
+        a_push(9); a_push(16); a_push(29);
+        j = 19;
+        * j <= 26 { a_push(j); j = j + 1; }
+        n = 11;
+        rd = 0;
+    }
     rd & L_AX != 0 { a_push(9); n = n + 1; }
     rd & L_CX != 0 { a_push(10); n = n + 1; }
     rd & L_DX != 0 { a_push(11); n = n + 1; }
@@ -1469,14 +1500,14 @@ arm_call_nihil(rt = 0, k = 0, i = 0) {
     keep & L_DI != 0 { a_pop(13); }
     keep & L_SI != 0 { a_pop(12); }
     keep & L_CX != 0 { a_pop(10); }
-    rt == RT_READ_AT {                     // its other results, in globals of native.nihil
+    rt == RT_READ_AT || rt == RT_UNPROTECT {   // its other results, in globals of native.nihil
         a_ldst(false, 11, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_dx")]);
-        a_ldst(false, 10, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_cx")]);
     }
+    rt == RT_READ_AT { a_ldst(false, 10, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_cx")]); }
 }
 
 arm_call_rt(rt = 0) {
-    arm_native { rt_used[rt / 5] = true; a_ins("bl Lrt"); a_num(rt); a_nl(); :; }
+    arm_native { error("internal error: -native: a routine of the runtime with no method in src1/native.nihil"); }
     a_ins("bl "); a_label_rt(rt); a_str("_c"); a_nl();
 }
 

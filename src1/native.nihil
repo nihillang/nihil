@@ -54,6 +54,13 @@ __nihil_gc_scap = 0;
 __nihil_gc_regs = 0;                       // x19 … x28 at a mark (nh_regs)
 __nihil_gc_line = 0;                       // a line of statistics being made
 __nihil_rt_high_fd = 2;                    // the highest descriptor a call made: a marking child closes them
+__nihil_out = 0;                           // the output not written yet (64 KiB of its own) and its length
+__nihil_out_n = 0;
+__nihil_err_buf = 0;                       // inside a protected call: the error's text, kept for ?! (4000 bytes)
+__nihil_err_n = 0;
+__nihil_err_capture = false;
+__nihil_prot = 0;                          // the protected calls' records: x28, x29, where to resume, x19 … x26
+__nihil_prot_depth = 0;
 
 // 64 GiB of address space, 2 GiB for each map: only what is used becomes memory
 __nihil_gc_init() {
@@ -142,7 +149,7 @@ __nihil_gc_pages(n = 0) {
             __p = __p + 1;
         }
     }
-    __nihil_gc_high + n > (1 << 20) { __nihil_rt_fail("out of memory"); }
+    __nihil_gc_high + n > (1 << 20) { __nihil_rt_failed("out of memory"); }
     __p = __nihil_gc_high;
     __nihil_gc_high = __nihil_gc_high + n;
     : __p;
@@ -163,8 +170,8 @@ __nihil_rt_array_rep(n = 0, fill = 0) {
 // a block for n words → its words (zeroed; its length n). lazy: the caller may write only part of a
 // large one (a big array of zeros): its pages count when written, not now
 __nihil_gc_alloc(n = 0, lazy = false) {
-    n < 0 { __nihil_rt_fail("negative array size"); }
-    n >= 1 << 40 { __nihil_rt_fail("array too large"); }
+    n < 0 { __nihil_rt_failed("negative array size"); }
+    n >= 1 << 40 { __nihil_rt_failed("array too large"); }
     __nihil_gc_arena == 0 { __nihil_gc_init(); }
     __bytes = n * 8 + 16;
     lazy && __bytes > 32768 { __nihil_gc_allocated = __nihil_gc_allocated + 65536; }
@@ -324,7 +331,7 @@ __nihil_gc_mark_all() {
     __g = __nihil_c("nh_globals_start");
     __nihil_gc_mark_range(__g, __g + __nihil_c("nh_globals_bytes"));
     __nihil_gc_mark_range(__nihil_peek(__nihil_gc_regs + 72), __nihil_c("nh_stack_top"));   // x28 …
-    __nihil_gc_mark_range(__nihil_c("nh_prot_start"), __nihil_c("nh_prot_end"));
+    __nihil_prot != 0 { __nihil_gc_mark_range(__nihil_prot, __nihil_prot + 88 * __nihil_prot_depth); }
     * __nihil_gc_sn > 0 {
         __nihil_gc_sn = __nihil_gc_sn - 1;
         __nihil_gc_mark_block(__nihil_peek(__nihil_gc_stack + 8 * __nihil_gc_sn));
@@ -494,7 +501,7 @@ __nihil_gc_collect() {
 // ---- the program's end, the error's text ----
 
 __nihil_rt_exit(code = 0) {
-    __nihil_c("nh_flush_out");
+    __nihil_rt_flush();
     __nihil_gc_child != 0 { __nihil_c32("kill", __nihil_gc_child, 9); }
     __nihil_gc_stats {                     // the program's own peak (not a marking child's)
         __u = __nihil_c("calloc", 1, 160);
@@ -506,12 +513,176 @@ __nihil_rt_exit(code = 0) {
     __nihil_c("_exit", code);
 }
 
-// the text of the last error caught by ?! (kept by the C runtime's errors)
+// the text of the last error caught by ?!
 __nihil_rt_err_text() {
-    __n = __nihil_c("nh_err_len");
-    __t = __nihil_rt_new_text(__n);
-    __nihil_c("memcpy", __t, __nihil_c("nh_err_buf"), __n);
+    __t = __nihil_rt_new_text(__nihil_err_n);
+    __nihil_c("memcpy", __t, __nihil_err_buf, __nihil_err_n);
     : __nihil_str_at(__t);
+}
+
+// ---- output, errors and the protected calls (SPEC §25) ----
+
+// n bytes at p to the descriptor fd, all of them (EINTR: again)
+__nihil_rt_write_all(fd = 0, p = 0, n = 0) {
+    * n > 0 {
+        __k = __nihil_c("write", fd, p, n);
+        __k < 0 && __nihil_rt_peek4(__nihil_c("__error")) == 4 { __k = 0; } || __k <= 0 { : 0; }
+        p = p + __k;
+        n = n - __k;
+    }
+    : 0;
+}
+
+__nihil_rt_flush() {
+    __nihil_out_n > 0 { __nihil_rt_write_all(1, __nihil_out, __nihil_out_n); }
+    __nihil_out_n = 0;
+}
+
+// n bytes at p to the output (64 KiB kept before they are written)
+__nihil_rt_out(p = 0, n = 0) {
+    __nihil_out == 0 { __nihil_out = __nihil_c("malloc", 65536); }
+    * n > 0 {
+        __nihil_out_n == 65536 { __nihil_rt_flush(); }
+        __k = 65536 - __nihil_out_n;
+        __k > n { __k = n; }
+        __nihil_c("memcpy", __nihil_out + __nihil_out_n, p, __k);
+        __nihil_out_n = __nihil_out_n + __k;
+        p = p + __k;
+        n = n - __k;
+    }
+}
+
+__nihil_rt_out_text(s = "") { __nihil_rt_out(__nihil_addr(s), #s); }
+
+// v in decimal into the 24 bytes at b → where its digits start (they end at b + 24)
+__nihil_rt_digits(b = 0, v = 0) {
+    __n = __nihil_rt_width(v);
+    __nihil_rt_put_int(b + 24 - __n, __n, v);
+    : b + 24 - __n;
+}
+
+__nihil_rt_print_int(v = 0) {
+    __b = __nihil_c("malloc", 24);
+    __p = __nihil_rt_digits(__b, v);
+    __nihil_rt_out(__p, __b + 24 - __p);
+    __nihil_c("free", __b);
+    : 0;
+}
+__nihil_rt_print_bool(v = 0) { v != 0 { __nihil_rt_out_text("true"); : 0; } __nihil_rt_out_text("false"); : 0; }
+__nihil_rt_print_str(s = 0) { __nihil_rt_out(s, __nihil_peek(s - 8)); : 0; }
+__nihil_rt_print_int_opt(v = 0, d = 0) { d == 0 { __nihil_rt_out_text("_"); : 0; } : __nihil_rt_print_int(v); }
+__nihil_rt_print_bool_opt(v = 0, d = 0) { d == 0 { __nihil_rt_out_text("_"); : 0; } : __nihil_rt_print_bool(v); }
+__nihil_rt_print_str_opt(v = 0, d = 0) { d == 0 { __nihil_rt_out_text("_"); : 0; } : __nihil_rt_print_str(v); }
+__nihil_rt_write_byte(b = 0) {
+    __nihil_out == 0 { __nihil_out = __nihil_c("malloc", 65536); }
+    __nihil_out_n == 65536 { __nihil_rt_flush(); }
+    __nihil_rt_pokeb(__nihil_out, __nihil_out_n, b);
+    __nihil_out_n = __nihil_out_n + 1;
+    : 0;
+}
+
+// what goes to stderr: written, or kept for ?! inside a protected call (4000 bytes at most)
+__nihil_rt_err_write(p = 0, n = 0) {
+    __nihil_err_capture {
+        n > 4000 - __nihil_err_n { n = 4000 - __nihil_err_n; }
+        __nihil_c("memcpy", __nihil_err_buf + __nihil_err_n, p, n);
+        __nihil_err_n = __nihil_err_n + n;
+        :;
+    }
+    __nihil_rt_write_all(2, p, n);
+}
+
+__nihil_rt_err_text_put(s = "") { __nihil_rt_err_write(__nihil_addr(s), #s); }
+
+__nihil_rt_err_num(v = 0) {
+    __b = __nihil_c("malloc", 24);
+    __p = __nihil_rt_digits(__b, v);
+    __nihil_rt_err_write(__p, __b + 24 - __p);
+    __nihil_c("free", __b);
+}
+
+__nihil_rt_err_begin() {
+    __nihil_err_buf == 0 { __nihil_err_buf = __nihil_c("malloc", 4000); }
+    __nihil_prot_depth > 0 { __nihil_err_n = 0; __nihil_err_capture = true; :; }
+    __nihil_rt_flush();
+    __nihil_rt_err_text_put("nihil: ");
+}
+
+// the error is said: out of the program (2), or back where the protected call around it resumes
+__nihil_rt_err_end() {
+    !__nihil_err_capture { __nihil_c("_exit", 2); }
+    __nihil_err_capture = false;
+    __nihil_err_n > 0 && __nihil_peekb(__nihil_err_buf + __nihil_err_n - 1) == 10 { __nihil_err_n = __nihil_err_n - 1; }
+    __nihil_prot_depth = __nihil_prot_depth - 1;
+    __nihil_c("nh_resume", __nihil_prot + 88 * __nihil_prot_depth, __nihil_c("nh_base_sp"));
+}
+
+// an error: its text (n bytes at p), then a line break
+__nihil_rt_fail_at(p = 0, n = 0) {
+    __nihil_rt_err_begin();
+    __nihil_rt_err_write(p, n);
+    __nihil_rt_err_text_put("\n");
+    __nihil_rt_err_end();
+}
+
+__nihil_rt_error_int(v = 0) { __nihil_rt_flush(); __nihil_rt_err_num(v); : 0; }
+__nihil_rt_error_bool(v = 0) { __nihil_rt_flush(); v != 0 { __nihil_rt_err_text_put("true"); : 0; } __nihil_rt_err_text_put("false"); : 0; }
+__nihil_rt_error_str(s = 0) { __nihil_rt_flush(); __nihil_rt_err_write(s, __nihil_peek(s - 8)); : 0; }
+__nihil_rt_error_int_opt(v = 0, d = 0) { d == 0 { __nihil_rt_flush(); __nihil_rt_err_text_put("_"); : 0; } : __nihil_rt_error_int(v); }
+__nihil_rt_error_bool_opt(v = 0, d = 0) { d == 0 { __nihil_rt_flush(); __nihil_rt_err_text_put("_"); : 0; } : __nihil_rt_error_bool(v); }
+__nihil_rt_error_str_opt(v = 0, d = 0) { d == 0 { __nihil_rt_flush(); __nihil_rt_err_text_put("_"); : 0; } : __nihil_rt_error_str(v); }
+
+// error(rsi): an error whose text is the C text at m ("out of memory" is never caught: the heap may
+// be inconsistent)
+__nihil_rt_error(m = 0) {
+    __nihil_rt_is(m, "out of memory") == true { __nihil_prot_depth = 0; }
+    __nihil_rt_fail_at(m, __nihil_c("strlen", m));
+    : 0;
+}
+
+__nihil_rt_fail(s = 0) { __nihil_rt_fail_at(s, __nihil_peek(s - 8)); : 0; }
+
+__nihil_rt_error_index(a = 0, i = 0) {
+    __nihil_rt_err_begin();
+    __nihil_rt_err_text_put("index ");
+    __nihil_rt_err_num(i);
+    __nihil_rt_err_text_put(" out of bounds (size ");
+    __nihil_rt_err_num(__nihil_peek(a - 8));
+    __nihil_rt_err_text_put(")\n");
+    __nihil_rt_err_end();
+    : 0;
+}
+
+// by zero only (the division itself is sdiv in the code)
+__nihil_rt_div(a = 0, b = 0) { __nihil_rt_fail_at(__nihil_addr("division by zero"), 16); : 0; }
+__nihil_rt_mod(a = 0, b = 0) { __nihil_rt_fail_at(__nihil_addr("division by zero"), 16); : 0; }
+
+// a protected call starts: where it resumes after an error, and the registers it has then
+__nihil_rt_protect(resume = 0, sp = 0, fp = 0, r19 = 0, r20 = 0, r21 = 0, r22 = 0, r23 = 0, r24 = 0, r25 = 0, r26 = 0) {
+    __nihil_prot == 0 { __nihil_prot = __nihil_c("calloc", 88, 65); }
+    __nihil_prot_depth >= 64 { __nihil_rt_fail_at(__nihil_addr("more than 64 protected calls inside each other"), 46); }
+    __r = __nihil_prot + 88 * __nihil_prot_depth;
+    __nihil_prot_depth = __nihil_prot_depth + 1;
+    __nihil_poke8(__r, sp);
+    __nihil_poke8(__r + 8, fp);
+    __nihil_poke8(__r + 16, resume);
+    __nihil_poke8(__r + 24, r19);
+    __nihil_poke8(__r + 32, r20);
+    __nihil_poke8(__r + 40, r21);
+    __nihil_poke8(__r + 48, r22);
+    __nihil_poke8(__r + 56, r23);
+    __nihil_poke8(__r + 64, r24);
+    __nihil_poke8(__r + 72, r25);
+    __nihil_poke8(__r + 80, r26);
+    : resume;
+}
+
+// it ended without an error: its result (rax, rdx) stays
+__nihil_rt_unprotect(v = 0, d = 0) {
+    __nihil_prot_depth = __nihil_prot_depth - 1;
+    __nihil_err_n = 0;
+    __nihil_rt_ret_dx = d;
+    : v;
 }
 
 // a new text of n bytes (and the 0 after them), zeroed; the collector does not look inside it
@@ -1006,14 +1177,13 @@ __nihil_rt_sys(__n = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0) {
 }
 
 // ---- texts made from arrays, files, the network, the input ----
-// Output and errors are still the C runtime's: nh_flush_out (what was printed, written before
-// waiting or reading), nh_fail_bytes (an error: its text; it does not return).
+// Before waiting or reading, what was printed is written (__nihil_rt_flush).
 
 // what read_at gives besides its text (rdx, rcx: 42_arm.nihil, arm_call_nihil)
 __nihil_rt_ret_dx = 0;
 __nihil_rt_ret_cx = 0;
 
-__nihil_rt_fail(m = "") { __nihil_c("nh_fail_bytes", __nihil_addr(m), #m); }
+__nihil_rt_failed(m = "") { __nihil_rt_fail_at(__nihil_addr(m), #m); }
 
 // the characters of an array of INTs → a text
 __nihil_rt_text(a = 0) {
@@ -1046,7 +1216,7 @@ __nihil_rt_read(path = 0, optional = false) {
     __nihil_rt_path_ok { __fd = __nihil_rt_sys(257, -100, __p, 0, 0); }
     __fd < 0 {
         optional { __nihil_c("free", __p); : 0; }
-        __nihil_rt_fail("could not read '" + __nihil_rt_from_c(__p) + "'");
+        __nihil_rt_failed("could not read '" + __nihil_rt_from_c(__p) + "'");
     }
     __size = __nihil_rt_sys(8, __fd, 0, 2);
     __cap = __size;
@@ -1066,7 +1236,7 @@ __nihil_rt_read(path = 0, optional = false) {
         __k < 0 && __k != -4 {
             __nihil_rt_sys(3, __fd);
             optional { __nihil_c("free", __p); : 0; }
-            __nihil_rt_fail("could not read '" + __nihil_rt_from_c(__p) + "'");
+            __nihil_rt_failed("could not read '" + __nihil_rt_from_c(__p) + "'");
         }
         __k == 0 { __nihil_rt_finish(__t, __got); __nihil_rt_sys(3, __fd); __nihil_c("free", __p); : __t; }
         __k > 0 { __got = __got + __k; }
@@ -1151,7 +1321,7 @@ __nihil_rt_write(path = 0, text = 0, offset = 0, flag = 0) {
     }
     __tmp != 0 { __nihil_c("free", __tmp); }
     __e == 0 { __nihil_c("free", __p); : 0; }
-    __nihil_rt_fail("could not write '" + __nihil_rt_from_c(__p) + "': " + __nihil_rt_reason(__e));
+    __nihil_rt_failed("could not write '" + __nihil_rt_from_c(__p) + "': " + __nihil_rt_reason(__e));
     : 0;
 }
 
@@ -1242,7 +1412,7 @@ __nihil_rt_read_at(path = 0, offset = 0, want = 0) {
 
 __nihil_rt_sleep(ms = 0) {
     ms <= 0 { : 0; }
-    __nihil_c("nh_flush_out");
+    __nihil_rt_flush();
     __ts = __nihil_c("calloc", 1, 16);
     __nihil_poke8(__ts, ms / 1000);
     __nihil_poke8(__ts + 8, (ms % 1000) * 1000000);
@@ -1293,7 +1463,7 @@ __nihil_rt_net_connect(addr = 0, port = 0) {
 }
 
 __nihil_rt_net_accept(fd = 0) {
-    __nihil_c("nh_flush_out");
+    __nihil_rt_flush();
     __c = __nihil_rt_sys(288, fd, 0, 0, 0x80000);
     * __c == -4 { __c = __nihil_rt_sys(288, fd, 0, 0, 0x80000); }
     __c >= 0 {
@@ -1340,7 +1510,7 @@ __nihil_rt_read_byte() {
         : __b;
     }
     __nihil_rt_in_end { : -1; }
-    __nihil_c("nh_flush_out");
+    __nihil_rt_flush();
     __nihil_rt_in_buf == 0 { __nihil_rt_in_buf = __nihil_c("malloc", 65536); }
     __n = __nihil_rt_sys(0, 0, __nihil_rt_in_buf, 65536);
     * __n == -4 { __n = __nihil_rt_sys(0, 0, __nihil_rt_in_buf, 65536); }

@@ -732,6 +732,7 @@ emit_check_limit() {
 
 // a jump on cc to the runtime's routine rt
 op_jcc_rt(cc = 0, rt = 0) {
+    arm_native { rt_method(rt); }          // (-native: its method is kept)
     at = size_code;
     eb(0x0F, 0x80 | cc);
     emit_d(rt + SIZE_HEADER - size_code - 4);

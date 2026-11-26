@@ -1,6 +1,7 @@
 #!/bin/bash
 # nihil-native PROGRAM.nihil [OUT] — compiles a Nihil program straight into ARM64 (the compiler's
-# -native): no x86 code, no translator; linked with the C runtime (macos/native/rt.c).
+# -native): no x86 code, no translator. Its runtime is Nihil (src1/native.nihil), in the same text;
+# clang assembles it and links it with the system's library (libSystem) alone.
 #   NIHIL_O0=1   no optimizations
 #   NIHILC1_NATIVE=path   another native compiler (e.g. build/macos/nihilc1-cand)
 #   NIHIL_KEEP_S=path     keeps the assembly there
@@ -15,6 +16,4 @@ compiler=${NIHILC1_NATIVE:-$here/build/macos/nihilc1-native}
 printf '%s\n' "$option-native $abs" | "$compiler" > "$w/p.s" 2> "$w/msg" || { cat "$w/msg" >&2; exit 1; }
 cat "$w/msg" >&2
 [ -n "${NIHIL_KEEP_S:-}" ] && cp "$w/p.s" "$NIHIL_KEEP_S"
-rt=$here/build/macos/native-rt.o
-[ -f "$rt" ] && [ "$rt" -nt "$here/macos/native/rt.c" ] && [ "$rt" -nt "$here/arm64/rt.c" ] || { clang -O2 -arch arm64 -Wno-unused-result -c "$here/macos/native/rt.c" -o "$rt.a.o" && clang -O2 -arch arm64 -Wno-unused-result -c "$here/arm64/rt.c" -o "$rt.b.o" && ld -r "$rt.a.o" "$rt.b.o" -o "$rt"; }
-clang -arch arm64 -o "$out" "$w/p.s" "$rt"
+clang -arch arm64 -o "$out" "$w/p.s"

@@ -74,29 +74,43 @@ The first step keeps the translator's conventions (rax → x9, the x86 stack emu
 runtime serves as it is; the speed is the translator's. The gains come next, operation by operation:
 the native stack and more registers for locals inside methods, then a native runtime.
 
-### -native: no translator
+### -native: no translator, and a runtime in Nihil
 
-`-native` writes the whole program as ARM64 assembly on stdout (`_main`, the program, the constants,
-the globals) for a runtime in C, `macos/native/rt.c`: no x86 code, no translator. A routine
-`RT_<NAME>` is `nh_<name>(rax, rcx, rdx, rsi, rdi, stack) → {rax, rdx}`, reached through a small
-adapter `Lrt<n>` in the text. The program's stack stays a stack of 8-byte slots in x28 (the code
-builds arrays on it, with 8-byte elements), allocated by the runtime; `sp` is only C's.
+`-native` writes the whole program as ARM64 assembly on stdout (`_main`, the program, its runtime,
+the constants, the globals); clang links it with the system's library (libSystem) alone: no x86
+code, no translator, no C of ours. The program's stack stays a stack of 8-byte slots in x28 (the
+code builds arrays on it, with 8-byte elements), mapped by `_main`; `sp` is only the system's.
 
     macos/nihil-native prog.nihil [out]
-    macos/test-native-c.sh                    the battery; lists the routines the C runtime lacks
+    macos/test-native-c.sh                    the battery (NIHIL_O0=1, NIHIL_GC_TORTURE=1)
 
-The runtime is complete: every routine of src/runtime.asm, with its messages; the system calls go
-through `nh_linux_syscall` (`arm64/rt.c`), with Linux's numbers, as the prelude speaks them. The 127
-tests pass (optimized and `-O0`), the compiler built this way gives the same output (its fixed
-point), and the planogram server serves the same pages.
+The runtime is Nihil: `src1/native.nihil`, embedded in the compiler like the prelude (`make
+build/native_text.nihil`) and put before it in every `-native` program. A routine `RT_<NAME>` is the
+method `__nihil_rt_<name>`: the registers it reads (rax, rcx, rdx, rsi, rdi, in that order) are its
+arguments; a second result (read_at's size and stamp, unprotect's rdx) comes back through globals;
+a routine reached by a jump (an index out of bounds, a division by zero) through a label `Lrt<n>`
+that pushes them. Its locals are named `__…`: a program's global of the same name would be used
+otherwise. It reaches the system with intrinsics the compiler knows only with `-native`:
+- `__nihil_c("name", a1 … a8)`, `__nihil_c32` (an `int` result) and `__nihil_cvar("name", F, …)`
+  (F fixed arguments, the others on C's stack: `openat`'s mode, `fcntl`'s) call a function of
+  libSystem; `__nihil_peek`, `__nihil_peekb` and `__nihil_poke8` read and write memory;
+- the prelude speaks Linux's system calls (it is the same on both systems): `__nihil_rt_sys` makes
+  them with macOS's functions, with Linux's numbers, flags, layouts (stat, dirent, sockaddr) and
+  errno values, and the files of /proc programs read (environ, uptime, a random uuid).
 
-The collector (`macos/native/rt.c`) is conservative mark and sweep, like the x86 runtime's. Its
-contract with the code the compiler writes:
+All of src/runtime.asm's routines are there, with their messages. The tests pass (optimized, `-O0`,
+and with the collector every 64 KiB), the compiler built this way gives the same output (its fixed
+point), and the planogram server serves the same pages. Written in Nihil, the hottest routines are
+slower than they were in C (reading a table of a million records: 60 → 120 ms): `-native` gives a
+method 8 registers and passes its arguments on the stack — the next work on the code it writes.
+
+The collector (in `src1/native.nihil`) is conservative mark and sweep, like the x86 runtime's. Its
+memory is its own (mmap, calloc): it never makes a block of the heap it collects. Its contract with
+the code the compiler writes:
 - it runs only inside a call of the runtime (alloc): every call of the runtime is a safepoint;
-- roots: the globals, the program's stack (x28, saved by each adapter in `nh_sp`, to its top), C's
-  stack from the collection up to `nh_start` (where the adapters keep x29, x30 and alloc's rcx, rsi,
-  rdi, and where C keeps x19 … x23, callee-saved; `setjmp` writes the registers there), and the
-  registers each protected call saved;
+- roots: the globals, the program's stack (from x28 to its top: the methods keep there the
+  registers they save, and the calls the rcx, rsi, rdi that stay live), the registers x19 … x28
+  (`_nh_regs`), and the records of the protected calls;
 - any word that points into an allocated block keeps it (a record's texts are inside its block);
 - a large block is scanned only where it was written (`mincore`): a big array of zeros costs nothing.
 
@@ -109,8 +123,9 @@ How it works:
   on; the program marks in the map each block it hands out meanwhile, and waits for the child only
   after making as many bytes as were live. Since nothing writes the heap's pages but the program,
   the fork costs only the pages the program itself writes (copy on write);
-- the mark asks for each block ahead of reading it (prefetch), so that the misses overlap.
-  Marking with several threads was tried and was slower: a big array is one block.
+- the C collector asked for each block ahead of reading it (prefetch), so that the misses
+  overlapped; the Nihil one does not yet. Marking with several threads was tried and was slower: a
+  big array is one block.
 
 `NIHIL_GC_STATS=1` shows each collection (and the program's own peak at its end);
 `NIHIL_GC_TORTURE=1` collects every 64 KiB and forks from 1 MB live (the battery and the
