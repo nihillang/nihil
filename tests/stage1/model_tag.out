@@ -1,0 +1,7 @@
+constructors: 1 2 0
+defaults: 2 2; global: 2
+copies: 2 (a STUDENT), 1 (through a PESSOA)
+table: 2 2 2 AnaBia
+prelude reader: 2 Caio 150.0
+json: 2 2 Edu
+collector: 300000 44999850000 600000 a299999

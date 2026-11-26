@@ -1,0 +1,51 @@
+// a record of a model in a hierarchy carries its model in its block header (SPEC §20.10), from
+// every path that makes one; __nihil_model_of gives the model + 1 (0: a model with no hierarchy)
+PESSOA = @[#id: INT(4); nome: STRING(12)];
+ALUNO = @[PESSOA; turma: STRING(4); nota: FLOAT(8)];
+SOLO = @[x: INT(3)];
+
+como_pessoa(p = PESSOA()) { : p; }
+de_padrao(a = ALUNO()) { : __nihil_model_of(a); }
+de_array(as = [ALUNO()]) { : __nihil_model_of(as[0]); }
+da_global() { : __nihil_model_of(G); }
+
+a = ALUNO(1, "Ana", "3B", 8.5);
+>> "constructors: " + $__nihil_model_of(PESSOA(1, "Rui")) + " " + $__nihil_model_of(a) + " "
+   + $__nihil_model_of(SOLO(1)) + "\n";
+>> "defaults: " + $de_padrao() + " " + $de_array() + "; global: " + $da_global() + "\n";
+c = [a ; 2];
+p = como_pessoa(a);
+d = [p ; 2];
+>> "copies: " + $__nihil_model_of(c[1]) + " (a STUDENT), " + $__nihil_model_of(d[1]) + " (through a PESSOA)\n";
+
+// tables: the native reader (strings inside the record's block), by number, by key, and the
+// prelude's reader (a FLOAT with an exponent, which the native one leaves to it)
+@>> "build/model_tag.dat", [a, ALUNO(2, "Bia", "3A", 9.0)];
+rows = ALUNO @ "build/model_tag.dat";
+um = ALUNO @[1] "build/model_tag.dat";
+k? = ALUNO @?{2} "build/model_tag.dat";
+>> "table: " + $__nihil_model_of(rows[0]) + " " + $__nihil_model_of(um) + " " + $__nihil_model_of(k || ALUNO())
+   + " " + rows[0].nome + rows[1].nome + "\n";
+@>> "build/model_tag_exp.dat", "   3Caio        3C     1.5e2\n";
+e = ALUNO @ "build/model_tag_exp.dat";
+>> "prelude reader: " + $__nihil_model_of(e[0]) + " " + e[0].nome + " " + $e[0].nota + "\n";
+
+// JSON
+j = ALUNO.from_json("{\"id\": 5, \"nome\": \"Duda\", \"turma\": \"1A\", \"nota\": 7.0}");
+js = ALUNO.from_json_items("[{\"id\": 6, \"nome\": \"Edu\"}]");
+>> "json: " + $__nihil_model_of(j) + " " + $__nihil_model_of(js[0]) + " " + js[0].nome + "\n";
+
+// the collector over many records with a model: the tags and the fields survive collections
+equipe = [PESSOA() ; *];
+i = 0;
+* i < 300000 {
+    equipe[] = ALUNO(i, "a" + $i, "x", 1.0);
+    i % 3 == 0 { equipe[i] = como_pessoa(ALUNO(i, "b", "y", 2.0)); }
+    i = i + 1;
+}
+soma = 0;
+tags = 0;
+equipe : q { soma = soma + q.id; tags = tags + __nihil_model_of(q); }
+>> "collector: " + $#equipe + " " + $soma + " " + $tags + " " + equipe[299999].nome + "\n";
+
+G = ALUNO(9, "Gil", "2B", 6.0);

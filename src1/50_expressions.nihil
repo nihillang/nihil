@@ -596,6 +596,8 @@ primary_name() {
         k < 0 && name_is(pi, pl, "__nihil_bytes") { : bytes_intrinsic(1); }
         k < 0 && name_is(pi, pl, "__nihil_poke") { : bytes_intrinsic(2); }
         k < 0 && name_is(pi, pl, "__nihil_fail_rt") { : fail_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_set_model") { : model_intrinsic(1); }
+        k < 0 && name_is(pi, pl, "__nihil_model_of") { : model_intrinsic(2); }
         k < 0 && name_is(pi, pl, "tools") { : tools_text(); }
         k < 0 && name_is(pi, pl, "call_tool") { : call_tool_call(); }
         is_model(k) { : new_record(k); }

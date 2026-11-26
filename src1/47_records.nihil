@@ -73,7 +73,30 @@ prescan_models() {
     }
     size_const = sc;
     m = 0;
+    n_models {
+        m_parent[m] >= 0 { m_tagged[m] = true; m_tagged[m_parent[m]] = true; }
+        m = m + 1;
+    }
+    m = 0;
     n_models { model_constants(m); m = m + 1; }
+}
+
+// the model's tag: (m + 1) in the top 16 bits of a record's block header, for a model in a
+// hierarchy; 0 for the others, whose records carry no model (nothing dispatches on them)
+model_tag(m = 0) {
+    !m_tagged[m] { : 0; }
+    : (m + 1) << 48;
+}
+
+// rax = a record just allocated: its model into the header (mov r64, imm64 and or between
+// registers: a 64-bit or takes no 64-bit immediate, and the macOS translator takes no or into memory)
+emit_model_tag(m = 0) {
+    !m_tagged[m] { :; }
+    eb(0x48, 0x8B, 0x48, 0xF0);             // mov rcx, [rax - 16]
+    eb(0x48, 0xBA);                         // mov rdx, tag
+    emit_q(model_tag(m));
+    eb(0x48, 0x09, 0xD1);                   // or rcx, rdx
+    eb(0x48, 0x89, 0x48, 0xF0);             // mov [rax - 16], rcx
 }
 
 // tok = name: is it followed by "= @ ["?
@@ -245,7 +268,8 @@ model_constants(m = 0) {
         const_put_q(f_width[m_first[m] + j]);
         j = j + 1;
     }
-    put_qword_cst(const_head, 1 + 2 * m_n[m]);
+    const_put_q(model_tag(m));             // schema[1 + 2n]: what the prelude and rt_rec_parse put in the header
+    put_qword_cst(const_head, 2 + 2 * m_n[m]);
     m_schema[m] = const_head + 8;
     const_init();
     j = 0;
@@ -442,6 +466,7 @@ emit_alloc_record(m = 0) {
     emit(0xB9);                            // mov ecx, n
     emit_d(m_n[m]);
     emit_call_rt(RT_ALLOC);
+    emit_model_tag(m);
     j = 0;
     m_n[m] {
         f_type[m_first[m] + j] == TYPE_STR {
@@ -1032,6 +1057,30 @@ bytes_intrinsic(kind = 0) {
     call_end = size_code;
     expect(')', "')'");
     : TYPE_NONE;
+}
+
+// a record's model (SPEC §20.10): __nihil_set_model(r, tag) ORs tag (a schema's last word) into the
+// header of r, a block just made; __nihil_model_of(r) → the model + 1 its header holds, 0 for none
+model_intrinsic(kind = 0) {
+    next_token();                        // name → "("
+    next_token();
+    expression();
+    kind == 1 {
+        emit(0x50);                        // push rax (the record)
+        expect(',', "','");
+        expression();
+        eb(0x48, 0x89, 0xC2, 0x58);         // mov rdx, rax ; pop rax
+        eb(0x48, 0x8B, 0x48, 0xF0);         // mov rcx, [rax - 16]
+        eb(0x48, 0x09, 0xD1);               // or rcx, rdx
+        eb(0x48, 0x89, 0x48, 0xF0);         // mov [rax - 16], rcx
+        call_end = size_code;
+        expect(')', "')'");
+        : TYPE_NONE;
+    }
+    eb(0x48, 0x8B, 0x40, 0xF0);             // mov rax, [rax - 16]
+    eb(0x48, 0xC1, 0xE8, 48);               // shr rax, 48
+    expect(')', "')'");
+    : TYPE_INT;
 }
 
 // ---- casts for the prelude (no code): __nihil_addr(x) → INT,

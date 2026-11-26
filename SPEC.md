@@ -1254,6 +1254,14 @@ STRING it has just allocated (`__nihil_bytes(n)`, `__nihil_poke(s, i, b)`), and
 the FLOAT conversion reuses one buffer: writing or reading a table costs about
 two to three times the size of the file in memory at its peak.
 
+A record of a model in a hierarchy (one with a parent or a child, §20.8) carries
+its model in the header of its block: `m + 1` in the top 16 bits, which the size
+(under 2^40 slots) never reaches; other records carry 0. Every way of making a
+record sets it: a constructor, a default, a record global, `[r ; n]` (the static
+model, §20.9), the table readers and `from_json`, which take it from the last word
+of the model's schema constant. The collector masks it off where it reads a block's
+size. It is what a call will look at to run a replacing method (`docs/dispatch.md`).
+
 ## 21. The library (stage 1)
 
 The library is called **on a value**: `value.name(arguments)`. The names exist
