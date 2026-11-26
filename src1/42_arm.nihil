@@ -333,7 +333,8 @@ arm_text() {
     i = 0;
     m = 0;                                 // the next method
     * i <= n_ops {
-        lazy && at_lab[i] != 0 { vs_flush(); pend_flush(live_in[i]); }   // (before a unit's registers change)
+        lazy && (lab_live(i) || thr_lab[i]) { vs_flush(); pend_flush(live_in[i]); }   // (a way in: before a unit's registers change too)
+        lazy && thr_lab[i] { a_str("Lt"); a_num(i); a_str(":"); a_nl(); }
         arm_native && m < n_meths && i == meth_lo[m] { unit_k = meth_k[m]; unit_n = meth_slots(unit_k); unit_leaf = false; }
         promote && m < n_meths && i == meth_lo[m] { unit_slots(meth_lo[m], meth_hi[m], false); }
         (promote || arm_native) && m < n_meths && i == meth_hi[m] {
@@ -773,6 +774,21 @@ live_calc() {
     * j < n_binds { at_lab[lab_op[binds[j]]] = 1; j = j + 1; }
     m = 0;
     * m < n_meths { at_lab[meth_lo[m]] = 1; at_lab[meth_hi[m]] = 1; m = m + 1; }
+    // the jumps to each operation's labels (a label of another kind, or an address taken, for good)
+    refs_at = [0 ; n_ops + 1];
+    threaded_at = [0 ; n_ops + 1];
+    thr_lab = [false ; n_ops + 1];
+    i = 0;
+    * i < n_ops {
+        k = op_k[i];
+        k == OP_JMP || k == OP_JCC || k == OP_JCC8 { refs_at[lab_op[op_o[i]]] = refs_at[lab_op[op_o[i]]] + 1; }
+        k == OP_LEA_FWD || k == OP_CALL_FWD { refs_at[lab_op[op_v[i]]] = refs_at[lab_op[op_v[i]]] + 1000; }
+        i = i + 1;
+    }
+    j = 0;
+    * j < n_binds { lab_kind[binds[j]] == LAB_METHOD || lab_kind[binds[j]] == LAB_CALLED { refs_at[lab_op[binds[j]]] = refs_at[lab_op[binds[j]]] + 1000; } j = j + 1; }
+    m = 0;
+    * m < n_meths { refs_at[meth_lo[m]] = refs_at[meth_lo[m]] + 1000; refs_at[meth_hi[m]] = refs_at[meth_hi[m]] + 1000; m = m + 1; }
     stub_rt = [0 ; STUBS];
     stub_k = [0 ; STUBS * 8];
     stub_v = [0 ; STUBS * 8];
@@ -864,7 +880,7 @@ vs_safe(i = 0) {
 skip = 0;
 dest_of(i = 0, r = 0) {
     skip = 0;
-    lbit(r) == 0 || i + 1 >= n_ops || at_lab[i + 1] != 0 { : a_rn(r); }
+    lbit(r) == 0 || i + 1 >= n_ops || lab_live(i + 1) { : a_rn(r); }
     op_k[i + 1] != OP_ST || op_r[i + 1] != r { : a_rn(r); }
     p = pslot(op_o[i + 1] >> 1, op_v[i + 1]);
     p == 0 { : a_rn(r); }
@@ -940,15 +956,65 @@ a_ldst_n(store = false, t = 0, size = 8, b = 0, off = 0) {
     a_str("]"); a_nl();
 }
 
+// a label some jump still reaches is bound before operation j (one whose every jump was threaded,
+// below, is not: only the way before it gets there)
+refs_at = [0 ; 1];
+threaded_at = [0 ; 1];
+thr_lab = [false ; 1];         // a jump threaded to operation j: its label Lt<j>
+lab_live(j = 0) { : at_lab[j] != 0 && refs_at[j] > threaded_at[j]; }
+
+// A jump to label l on which rax is known to be 0 or not (the jump of `cmp ; cset ; test ; jcc`, or
+// of `test ; jcc`) where l is `test rax ; jcc M` (the end of && or ||) need not test it again: it goes
+// on to M, or past that jump (Lt<j+2>). → whether it can (thread_ok), and then thread() its target
+thread_to = -1;                // the label to jump to (-1: Lt<thread_op>)
+thread_op = 0;
+thread_ok(l = 0, i = 0) {
+    j = lab_op[l];
+    j <= i + 2 || j + 2 > n_ops { : false; }
+    op_k[j] != OP_TEST || op_r[j] != R_AX { : false; }
+    op_k[j + 1] != OP_JCC && op_k[j + 1] != OP_JCC8 { : false; }
+    op_v[j + 1] != CC_E && op_v[j + 1] != CC_NE { : false; }
+    lab_live(j + 1) { : false; }
+    : (live_out_of(j + 1) & (L_AX | L_CX | L_FL)) == 0;
+}
+
+thread(l = 0, nonzero = false) {
+    j = lab_op[l];
+    threaded_at[j] = threaded_at[j] + 1;
+    (op_v[j + 1] == CC_NE) == nonzero {
+        thread_to = op_o[j + 1];
+        thread_op = lab_op[thread_to];
+    } || {
+        thread_to = -1;
+        thread_op = j + 2;
+        thr_lab[j + 2] = true;
+    }
+}
+
+// b.<cc> to label l, on which rax is (nonzero) or not 0: threaded when it can be
+a_jump_known(cc = "", l = 0, i = 0, nonzero = false) {
+    !thread_ok(l, i) { a_jump(cc, l); :; }
+    thread(l, nonzero);
+    pend_to(thread_op);
+    a_ins("b."); a_str(cc); a_str(" "); a_thread_target(); a_nl();
+}
+
+a_thread_target() {
+    thread_to >= 0 { a_label(thread_to); :; }
+    a_str("Lt"); a_num(thread_op);
+}
+
 // operation i at the end of a comparison whose 0 or 1 a test and a jump only look at: i + 1 tests
-// rax, i + 2 jumps if it is 0 or not, no label between, and rax and the flags dead after
+// rax, i + 2 jumps if it is 0 or not, no label between, and rax and the flags dead after — or dead
+// on the way on, the jump threaded past its target's own test
 fused_jump(i = 0) {
     i + 2 >= n_ops { : false; }
     op_k[i + 1] != OP_TEST || op_r[i + 1] != R_AX { : false; }
     op_k[i + 2] != OP_JCC && op_k[i + 2] != OP_JCC8 { : false; }
     op_v[i + 2] != CC_E && op_v[i + 2] != CC_NE { : false; }
-    at_lab[i + 1] != 0 || at_lab[i + 2] != 0 { : false; }
-    : (live_out_of(i + 2) & (L_AX | L_CX | L_FL)) == 0;
+    lab_live(i + 1) || lab_live(i + 2) { : false; }
+    (live_out_of(i + 2) & (L_AX | L_CX | L_FL)) == 0 { : true; }
+    : (live_in[i + 3] & (L_AX | L_CX | L_FL)) == 0 && thread_ok(op_o[i + 2], i);
 }
 
 // b.<cc> to label l (the values live there into their registers first)
@@ -1044,7 +1110,7 @@ arm_lazy(i = 0) {
         pend_k[R_AX] = 0;
         cc = v;
         op_v[i + 2] == CC_E { cc = cc ^ 1; }
-        a_jump(a_cond(cc), op_o[i + 2]);
+        a_jump_known(a_cond(cc), op_o[i + 2], i, op_v[i + 2] == CC_NE);
         : 3;
     }
     k == OP_FCMP_SET && (v == '<' || v == '>' || v == T_LE || v == T_GE) && fused_jump(i) {
@@ -1054,7 +1120,7 @@ arm_lazy(i = 0) {
         op_v[i + 2] == CC_E { c = a_not_cond(c); }
         pend_k[R_AX] = 0;
         pend_k[R_CX] = 0;
-        a_jump(c, op_o[i + 2]);
+        a_jump_known(c, op_o[i + 2], i, op_v[i + 2] == CC_NE);
         : 3;
     }
     k == OP_CMP_SET {
@@ -1065,13 +1131,16 @@ arm_lazy(i = 0) {
     }
     k == OP_CMP { a_cmp_ax_cx(); : 1; }
     k == OP_CMPI { a_cmp_imm(srcr(r), v); : 1; }
-    k == OP_TEST && i + 1 < n_ops && at_lab[i + 1] == 0 && (op_k[i + 1] == OP_JCC || op_k[i + 1] == OP_JCC8)
+    k == OP_TEST && i + 1 < n_ops && !lab_live(i + 1) && (op_k[i + 1] == OP_JCC || op_k[i + 1] == OP_JCC8)
             && (op_v[i + 1] == CC_E || op_v[i + 1] == CC_NE) && (live_out_of(i + 1) & L_FL) == 0 {
         a = srcr(r);
         vs_flush();
-        pend_to(lab_op[op_o[i + 1]]);
+        th = r == R_AX && thread_ok(op_o[i + 1], i - 1);
+        th { thread(op_o[i + 1], op_v[i + 1] == CC_NE); pend_to(thread_op); } || { pend_to(lab_op[op_o[i + 1]]); }
         op_v[i + 1] == CC_E { a_ins("cbz "); } || { a_ins("cbnz "); }
-        a_x(a); a_str(", "); a_label(op_o[i + 1]); a_nl();
+        a_x(a); a_str(", ");
+        th { a_thread_target(); } || { a_label(op_o[i + 1]); }
+        a_nl();
         : 2;
     }
     k == OP_TEST { a = srcr(r); a_ins("tst "); a_x(a); a_str(", "); a_x(a); a_nl(); : 1; }
