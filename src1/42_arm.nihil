@@ -1278,9 +1278,22 @@ arm_op(i = 0) {
     k == OP_CALL_RT && o > 0 { arm_call_nihil(v, o - 1, i); :; }
     k == OP_CALL_RT { arm_call_rt(v); :; }
     k == OP_CCALL || k == OP_CCALL32 {
-        j = r;
+        n = r & 255;
+        fixed = (r >> 8) - 1;              // -1: no variable arguments
+        j = n;
         * j > 0 { j = j - 1; a_pop(j); }   // the last argument is on top
+        nv = 0;
+        fixed >= 0 { nv = n - fixed; }
+        room = 16 * ((nv + 1) / 2);
+        room > 0 {
+            a_ins("sub sp, sp, #"); a_num(room); a_nl();
+            j = 0;
+            * j < nv { a_ins("str "); a_x(fixed + j); a_str(", [sp, #"); a_num(8 * j); a_str("]"); a_nl(); j = j + 1; }
+        }
+        a_line("adrp x16, _nh_sp@PAGE");      // (the C runtime's collector: where the program's stack is)
+        a_line("str x28, [x16, _nh_sp@PAGEOFF]");
         a_ins("bl _"); q = 0; * q < o { a_byte(source[v + q]); q = q + 1; } a_nl();
+        room > 0 { a_ins("add sp, sp, #"); a_num(room); a_nl(); }
         k == OP_CCALL32 { a_line("sxtw x9, w0"); } || { a_line("mov x9, x0"); }
         :;
     }

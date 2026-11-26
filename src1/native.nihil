@@ -101,3 +101,395 @@ __nihil_rt_array_concat(a = 0, b = 0) {
     __nihil_c("memcpy", __t + 8 * __na, b, 8 * __nb);
     : __r;
 }
+
+// ---- the system: Linux's calls (their numbers, flags, layouts and errno values), made with macOS's ----
+// The prelude speaks Linux (it is the same on both systems): __nihil_syscall([n, a1 … a6]) comes
+// here (RT_SYSCALL) and is made with the functions of macOS's C library.
+
+__nihil_rt_dirs = [0 ; 256];               // a directory read by getdents64: its DIR (opendir)
+
+// the byte b at the address a + i
+__nihil_rt_pokeb(a = 0, i = 0, b = 0) { __nihil_poke(__nihil_str_at(a), i, b); }
+
+// the 4 bytes at a, as an unsigned number / v's 4 bytes there
+__nihil_rt_peek4(a = 0) { : __nihil_peek(a) & 0xFFFFFFFF; }
+__nihil_rt_poke4(a = 0, v = 0) {
+    __i = 0;
+    * __i < 4 { __nihil_rt_pokeb(a, __i, (v >> (8 * __i)) & 255); __i = __i + 1; }
+}
+
+// macOS's errno → Linux's (1 … 34 are the same)
+__nihil_rt_errno() {
+    __e = __nihil_rt_peek4(__nihil_c("__error"));
+    __e == 35 { : 11; } __e == 11 { : 35; } __e == 63 { : 36; } __e == 77 { : 37; } __e == 78 { : 38; }
+    __e == 66 { : 39; } __e == 62 { : 40; } __e == 91 { : 42; } __e == 90 { : 43; } __e == 99 { : 60; }
+    __e == 96 { : 61; } __e == 101 { : 62; } __e == 98 { : 63; } __e == 97 { : 67; } __e == 100 { : 71; }
+    __e == 95 { : 72; } __e == 94 { : 74; } __e == 84 { : 75; } __e == 92 { : 84; } __e == 68 { : 87; }
+    __e == 38 { : 88; } __e == 39 { : 89; } __e == 40 { : 90; } __e == 41 { : 91; } __e == 42 { : 92; }
+    __e == 43 { : 93; } __e == 44 { : 94; } __e == 102 { : 95; } __e == 46 { : 96; } __e == 47 { : 97; }
+    __e == 48 { : 98; } __e == 49 { : 99; } __e == 50 { : 100; } __e == 51 { : 101; } __e == 52 { : 102; }
+    __e == 53 { : 103; } __e == 54 { : 104; } __e == 55 { : 105; } __e == 56 { : 106; } __e == 57 { : 107; }
+    __e == 58 { : 108; } __e == 59 { : 109; } __e == 60 { : 110; } __e == 61 { : 111; } __e == 64 { : 112; }
+    __e == 65 { : 113; } __e == 37 { : 114; } __e == 36 { : 115; } __e == 70 { : 116; } __e == 69 { : 122; }
+    __e == 89 { : 125; } __e == 105 { : 130; } __e == 104 { : 131; }
+    : __e;
+}
+
+// a result of C: negative → -Linux's errno
+__nihil_rt_res(r = 0) {
+    r < 0 { : -__nihil_rt_errno(); }
+    : r;
+}
+
+__nihil_rt_cloexec(fd = 0) { __nihil_cvar("fcntl", 2, fd, 2, 1); }   // F_SETFD, FD_CLOEXEC
+
+// Linux's open flags → macOS's
+__nihil_rt_open_flags(l = 0) {
+    __f = l & 3;
+    l & 0x40 != 0 { __f = __f | 0x200; }
+    l & 0x80 != 0 { __f = __f | 0x800; }
+    l & 0x200 != 0 { __f = __f | 0x400; }
+    l & 0x400 != 0 { __f = __f | 0x8; }
+    l & 0x800 != 0 { __f = __f | 0x4; }
+    l & 0x10000 != 0 { __f = __f | 0x100000; }
+    l & 0x20000 != 0 { __f = __f | 0x100; }
+    l & 0x80000 != 0 { __f = __f | 0x1000000; }
+    : __f;
+}
+
+__nihil_rt_at_dir(d = 0) {
+    d == -100 { : -2; }
+    : d;
+}
+
+// a new socket or connection: closed on exec when asked; a peer that went away is an error on
+// send, not SIGPIPE (macOS has no MSG_NOSIGNAL)
+__nihil_rt_own_socket(fd = 0, flags = 0) {
+    fd < 0 { : -__nihil_rt_errno(); }
+    flags & 0x80000 != 0 { __nihil_rt_cloexec(fd); }
+    __one = __nihil_c("malloc", 8);
+    __nihil_rt_poke4(__one, 1);
+    __nihil_c32("setsockopt", fd, 0xFFFF, 0x1022, __one, 4);   // SOL_SOCKET, SO_NOSIGPIPE
+    __nihil_c("free", __one);
+    : fd;
+}
+
+// Linux's sockaddr_in at l (u16 family, u16 port, u32 address) → macOS's, in a new buffer (free it)
+__nihil_rt_sockaddr(l = 0) {
+    __a = __nihil_c("calloc", 1, 16);
+    __nihil_rt_pokeb(__a, 0, 16);
+    __nihil_rt_pokeb(__a, 1, 2);
+    __nihil_c("memcpy", __a + 2, l + 2, 6);
+    : __a;
+}
+
+// one of the Linux files programs read (/proc/self/environ, /proc/uptime, /proc/sys/kernel/random/
+// uuid): a file of its own, already removed, with the contents, read from the start; else -2
+__nihil_rt_virtual_fd(path = 0) {
+    __b = __nihil_c("calloc", 1, 64);
+    __n = 0;
+    __nihil_rt_is(path, "/proc/self/environ") == true {
+        __env = __nihil_peek(__nihil_c("_NSGetEnviron"));
+        __k = 0;
+        * __nihil_peek(__env + 8 * __k) != 0 { __n = __n + __nihil_c("strlen", __nihil_peek(__env + 8 * __k)) + 1; __k = __k + 1; }
+        __nihil_c("free", __b);
+        __b = __nihil_c("calloc", 1, __n + 1);
+        __at = 0;
+        __k = 0;
+        * __nihil_peek(__env + 8 * __k) != 0 {
+            __e = __nihil_peek(__env + 8 * __k);
+            __m = __nihil_c("strlen", __e) + 1;
+            __nihil_c("memcpy", __b + __at, __e, __m);
+            __at = __at + __m;
+            __k = __k + 1;
+        }
+    } || __nihil_rt_is(path, "/proc/uptime") == true {
+        __ts = __nihil_c("calloc", 1, 16);
+        __nihil_c32("clock_gettime", 6, __ts);
+        __n = __nihil_rt_put_dec(__b, 0, __nihil_peek(__ts));
+        __nihil_rt_pokeb(__b, __n, '.');
+        __cs = __nihil_peek(__ts + 8) / 10000000;
+        __nihil_rt_pokeb(__b, __n + 1, '0' + __cs / 10);
+        __nihil_rt_pokeb(__b, __n + 2, '0' + __cs % 10);
+        __nihil_c("memcpy", __b + __n + 3, __nihil_addr(" 0.00\n"), 6);
+        __n = __n + 9;
+        __nihil_c("free", __ts);
+    } || __nihil_rt_is(path, "/proc/sys/kernel/random/uuid") == true {
+        __u = __nihil_c("calloc", 1, 16);
+        __nihil_c("arc4random_buf", __u, 16);
+        __nihil_rt_pokeb(__u, 6, (__nihil_peekb(__u + 6) & 0x0F) | 0x40);
+        __nihil_rt_pokeb(__u, 8, (__nihil_peekb(__u + 8) & 0x3F) | 0x80);
+        __hex = "0123456789abcdef";
+        __i = 0;
+        * __i < 16 {
+            __i == 4 || __i == 6 || __i == 8 || __i == 10 { __nihil_rt_pokeb(__b, __n, '-'); __n = __n + 1; }
+            __v = __nihil_peekb(__u + __i);
+            __nihil_rt_pokeb(__b, __n, __hex[__v >> 4]);
+            __nihil_rt_pokeb(__b, __n + 1, __hex[__v & 15]);
+            __n = __n + 2;
+            __i = __i + 1;
+        }
+        __nihil_rt_pokeb(__b, __n, 10);
+        __n = __n + 1;
+        __nihil_c("free", __u);
+    } || {
+        __nihil_c("free", __b);
+        : -2;                                   // ENOENT: maps, pagemap …
+    }
+    __name = __nihil_c("calloc", 1, 32);
+    __nihil_c("memcpy", __name, __nihil_addr("/tmp/nihil-proc-XXXXXX"), 22);
+    __fd = __nihil_c32("mkstemp", __name);
+    __fd >= 0 {
+        __nihil_c32("unlink", __name);
+        __at = 0;
+        * __at < __n {
+            __w = __nihil_c("write", __fd, __b + __at, __n - __at);
+            __w <= 0 { __at = __n; } || { __at = __at + __w; }
+        }
+        __nihil_c("lseek", __fd, 0, 0);
+        __nihil_rt_cloexec(__fd);
+    }
+    __nihil_c("free", __name);
+    __nihil_c("free", __b);
+    __fd < 0 { : -2; }
+    : __fd;
+}
+
+// the C text at p is the text s
+__nihil_rt_is(p = 0, s = "") {
+    __nihil_c("strlen", p) != #s { : false; }
+    : __nihil_c32("memcmp", p, __nihil_addr(s), #s) == 0;
+}
+
+// v (not negative) in decimal into the buffer at b, from at → where it ends
+__nihil_rt_put_dec(b = 0, at = 0, v = 0) {
+    __w = __nihil_rt_width(v);
+    __i = at + __w;
+    * __i > at { __i = __i - 1; __nihil_rt_pokeb(b, __i, '0' + v % 10); v = v / 10; }
+    : at + __w;
+}
+
+// getdents64(fd, buf, cap): Linux's records (d_ino, d_off, d_reclen, d_type, d_name), from readdir
+__nihil_rt_getdents(fd = 0, buf = 0, cap = 0) {
+    fd < 0 || fd >= 256 { : -9; }
+    __nihil_rt_dirs[fd] == 0 {
+        __copy = __nihil_c32("dup", fd);
+        __d = 0;
+        __copy >= 0 { __d = __nihil_c("fdopendir", __copy); }
+        __d == 0 { : -__nihil_rt_errno(); }
+        __nihil_rt_dirs[fd] = __d;
+    }
+    __dir = __nihil_rt_dirs[fd];
+    __used = 0;
+    * true {
+        __pos = __nihil_c("telldir", __dir);
+        __e = __nihil_c("readdir", __dir);
+        __e == 0 { : __used; }
+        __len = __nihil_c("strlen", __e + 21);
+        __rec = (19 + __len + 1 + 7) & -8;
+        __used + __rec > cap { __nihil_c("seekdir", __dir, __pos); : __used; }
+        __r = buf + __used;
+        __nihil_c("memset", __r, 0, __rec);
+        __nihil_poke8(__r, __nihil_peek(__e));
+        __nihil_rt_pokeb(__r, 16, __rec & 255);
+        __nihil_rt_pokeb(__r, 17, __rec >> 8);
+        __nihil_rt_pokeb(__r, 18, __nihil_peekb(__e + 20));
+        __nihil_c("memcpy", __r + 19, __e + 21, __len);
+        __used = __used + __rec;
+    }
+    : __used;
+}
+
+__nihil_rt_close(fd = 0) {
+    fd >= 0 && fd < 256 && __nihil_rt_dirs[fd] != 0 {
+        __nihil_c32("closedir", __nihil_rt_dirs[fd]);
+        __nihil_rt_dirs[fd] = 0;
+    }
+    __nihil_c32("close", fd);
+}
+
+// fstat / newfstatat into Linux's struct stat at b (144 bytes): dev, ino, mode, size, mtime
+__nihil_rt_stat(kind = 0, x1 = 0, x2 = 0, x3 = 0, x4 = 0) {
+    __st = __nihil_c("calloc", 1, 144);
+    __r = 0;
+    __b = 0;
+    kind == 5 {
+        __r = __nihil_c32("fstat", x1, __st);
+        __b = x2;
+    } || {
+        __fl = 0;
+        x4 & 0x100 != 0 { __fl = 0x20; }
+        __r = __nihil_c32("fstatat", __nihil_rt_at_dir(x1), x2, __st, __fl);
+        __b = x3;
+    }
+    __r != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __st); : -__e; }
+    __nihil_c("memset", __b, 0, 144);
+    __nihil_poke8(__b, __nihil_rt_peek4(__st));                              // st_dev
+    __nihil_poke8(__b + 8, __nihil_peek(__st + 8));                          // st_ino
+    __nihil_rt_poke4(__b + 24, __nihil_rt_peek4(__st + 4) & 0xFFFF);         // st_mode
+    __nihil_poke8(__b + 48, __nihil_peek(__st + 96));                        // st_size
+    __nihil_poke8(__b + 88, __nihil_peek(__st + 48));                        // st_mtime
+    __nihil_poke8(__b + 96, __nihil_peek(__st + 56));                        // st_mtime_nsec
+    __nihil_c("free", __st);
+    : 0;
+}
+
+// mincore(start, len, vec): Linux's 4 KiB pages, from macOS's (16 KiB); a page never written
+// reports only MINCORE_ANONYMOUS: nothing there
+__nihil_rt_mincore(start = 0, len = 0, vec = 0) {
+    __pg = __nihil_c32("getpagesize");
+    __first = start & -__pg;
+    __n = (start + len - __first + __pg - 1) / __pg;
+    __v = __nihil_c("malloc", __n);
+    __v == 0 { : -12; }
+    __nihil_c32("mincore", __first, __n * __pg, __v) != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __v); : -__e; }
+    __pages = (len + 4095) / 4096;
+    __i = 0;
+    * __i < __pages {
+        __s = __nihil_peekb(__v + (start + __i * 4096 - __first) / __pg) & 0x7F;
+        __s != 0 { __nihil_rt_pokeb(vec, __i, 1); } || { __nihil_rt_pokeb(vec, __i, 0); }
+        __i = __i + 1;
+    }
+    __nihil_c("free", __v);
+    : 0;
+}
+
+// x: [n, a1 … a6] (an array: as many as it has, the others 0)
+__nihil_rt_arg(x = 0, i = 0) {
+    i < __nihil_peek(x - 8) { : __nihil_peek(x + 8 * i); }
+    : 0;
+}
+
+__nihil_rt_syscall(x = 0) {
+    __n = __nihil_rt_arg(x, 0);
+    a1 = __nihil_rt_arg(x, 1);
+    a2 = __nihil_rt_arg(x, 2);
+    a3 = __nihil_rt_arg(x, 3);
+    a4 = __nihil_rt_arg(x, 4);
+    a5 = __nihil_rt_arg(x, 5);
+    a6 = __nihil_rt_arg(x, 6);
+    __n == 0 { : __nihil_rt_res(__nihil_c("read", a1, a2, a3)); }
+    __n == 1 { : __nihil_rt_res(__nihil_c("write", a1, a2, a3)); }
+    __n == 3 { __nihil_rt_close(a1); : 0; }
+    __n == 5 { : __nihil_rt_stat(5, a1, a2, a3, a4); }
+    __n == 262 { : __nihil_rt_stat(262, a1, a2, a3, a4); }
+    __n == 8 { : __nihil_rt_res(__nihil_c("lseek", a1, a2, a3)); }
+    __n == 9 {                                              // mmap: the flags' numbers differ
+        __f = a4 & 3;
+        a4 & 0x10 != 0 { __f = __f | 0x10; }
+        a4 & 0x20 != 0 { __f = __f | 0x1000; }
+        a4 & 0x4000 != 0 { __f = __f | 0x40; }
+        __p = __nihil_c("mmap", a1, a2, a3, __f, a5, a6);
+        __p == -1 { : -__nihil_rt_errno(); }
+        : __p;
+    }
+    __n == 11 { : __nihil_rt_res(__nihil_c32("munmap", a1, a2)); }
+    __n == 13 {                                             // rt_sigaction: only SIG_DFL / SIG_IGN
+        a2 != 0 { __h = 0; __nihil_peek(a2) == 1 { __h = 1; } __nihil_c("signal", a1, __h); }
+        : 0;
+    }
+    __n == 17 { : __nihil_rt_res(__nihil_c("pread", a1, a2, a3, a4)); }
+    __n == 18 { : __nihil_rt_res(__nihil_c("pwrite", a1, a2, a3, a4)); }
+    __n == 21 { : __nihil_rt_res(__nihil_c32("access", a1, a2)); }
+    __n == 27 { : __nihil_rt_mincore(a1, a2, a3); }
+    __n == 28 {                                             // madvise: MADV_DONTNEED zeroes the pages on Linux
+        a3 == 4 {
+            __nihil_c("mmap", a1, a2, 3, 0x1012, -1, 0) == -1 { : -__nihil_rt_errno(); }
+        }
+        : 0;
+    }
+    __n == 33 { : __nihil_rt_res(__nihil_c32("dup2", a1, a2)); }
+    __n == 35 { : __nihil_rt_res(__nihil_c32("nanosleep", a1, a2)); }
+    __n == 39 { : __nihil_rt_res(__nihil_c32("getpid")); }
+    __n == 41 { : __nihil_rt_own_socket(__nihil_c32("socket", a1, a2 & 15, a3), a2); }
+    __n == 42 || __n == 49 {                                // connect, bind: macOS's sockaddr
+        __a = __nihil_rt_sockaddr(a2);
+        __r = 0;
+        __n == 42 { __r = __nihil_c32("connect", a1, __a, 16); } || { __r = __nihil_c32("bind", a1, __a, 16); }
+        __r = __nihil_rt_res(__r);
+        __nihil_c("free", __a);
+        : __r;
+    }
+    __n == 43 || __n == 288 {                               // accept, accept4(fd, addr, len, flags)
+        __c = __nihil_c32("accept", a1, 0, 0);
+        * __c < 0 && __nihil_rt_peek4(__nihil_c("__error")) == 4 { __c = __nihil_c32("accept", a1, 0, 0); }
+        __fl = 0;
+        __n == 288 { __fl = a4; }
+        : __nihil_rt_own_socket(__c, __fl);
+    }
+    __n == 44 { : __nihil_rt_res(__nihil_c("send", a1, a2, a3, 0)); }
+    __n == 45 { : __nihil_rt_res(__nihil_c("recv", a1, a2, a3, 0)); }
+    __n == 50 { : __nihil_rt_res(__nihil_c32("listen", a1, a2)); }
+    __n == 54 {                                             // setsockopt: SOL_SOCKET and its options differ
+        __lv = a2;
+        __op = a3;
+        a2 == 1 {
+            __lv = 0xFFFF;
+            __op = 0;
+            a3 == 2 { __op = 4; }
+            a3 == 9 { __op = 8; }
+            a3 == 20 { __op = 0x1006; }
+            a3 == 21 { __op = 0x1005; }
+            __op == 0 { : 0; }
+        }
+        : __nihil_rt_res(__nihil_c32("setsockopt", a1, __lv, __op, a4, a5));
+    }
+    __n == 57 { : __nihil_rt_res(__nihil_c32("fork")); }
+    __n == 59 { __nihil_c32("execve", a1, a2, a3); : -__nihil_rt_errno(); }
+    __n == 60 || __n == 231 { __nihil_c("_exit", a1); }
+    __n == 61 {                                             // wait4(pid, status, options, rusage)
+        __st = __nihil_c("calloc", 1, 8);
+        __r = __nihil_c32("wait4", a1, __st, a3, 0);
+        __r < 0 { __e = __nihil_rt_errno(); __nihil_c("free", __st); : -__e; }
+        a2 != 0 { __nihil_rt_poke4(a2, __nihil_rt_peek4(__st)); }
+        __nihil_c("free", __st);
+        : __r;
+    }
+    __n == 62 { : __nihil_rt_res(__nihil_c32("kill", a1, a2)); }
+    __n == 73 { : __nihil_rt_res(__nihil_c32("flock", a1, a2)); }
+    __n == 74 {                                             // fsync, through the drive's cache
+        __nihil_cvar("fcntl", 2, a1, 51) == 0 { : 0; }
+        : __nihil_rt_res(__nihil_c32("fsync", a1));
+    }
+    __n == 77 { : __nihil_rt_res(__nihil_c32("ftruncate", a1, a2)); }
+    __n == 80 { : __nihil_rt_res(__nihil_c32("chdir", a1)); }
+    __n == 82 { : __nihil_rt_res(__nihil_c32("rename", a1, a2)); }
+    __n == 83 { : __nihil_rt_res(__nihil_c32("mkdir", a1, a2)); }
+    __n == 87 { : __nihil_rt_res(__nihil_c32("unlink", a1)); }
+    __n == 217 { : __nihil_rt_getdents(a1, a2, a3); }
+    __n == 228 {                                            // clock_gettime(0 realtime, 1 monotonic, timespec)
+        __ts = __nihil_c("calloc", 1, 16);
+        __ck = 0;
+        a1 == 1 { __ck = 6; }
+        __nihil_c32("clock_gettime", __ck, __ts) != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __ts); : -__e; }
+        __nihil_poke8(a2, __nihil_peek(__ts));
+        __nihil_poke8(a2 + 8, __nihil_peek(__ts + 8));
+        __nihil_c("free", __ts);
+        : 0;
+    }
+    __n == 257 {                                            // openat: the Linux files programs read
+        __nihil_c32("memcmp", a2, __nihil_addr("/proc/"), 6) == 0 { : __nihil_rt_virtual_fd(a2); }
+        : __nihil_rt_res(__nihil_cvar("openat", 3, __nihil_rt_at_dir(a1), a2, __nihil_rt_open_flags(a3), a4));
+    }
+    __n == 263 {
+        __fl = 0;
+        a3 & 0x200 != 0 { __fl = 0x80; }
+        : __nihil_rt_res(__nihil_c32("unlinkat", __nihil_rt_at_dir(a1), a2, __fl));
+    }
+    __n == 293 {                                            // pipe2(fds, flags)
+        __p = __nihil_c("calloc", 1, 8);
+        __nihil_c32("pipe", __p) != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __p); : -__e; }
+        a2 & 0x80000 != 0 { __nihil_rt_cloexec(__nihil_rt_peek4(__p)); __nihil_rt_cloexec(__nihil_rt_peek4(__p + 4)); }
+        __nihil_poke8(a1, __nihil_peek(__p));
+        __nihil_c("free", __p);
+        : 0;
+    }
+    __n == 436 {                                            // close_range(first, last, 0)
+        __last = __nihil_c32("getdtablesize") - 1;
+        a2 < __last { __last = a2; }
+        __fd = a1;
+        * __fd <= __last { __nihil_c32("close", __fd); __fd = __fd + 1; }
+        : 0;
+    }
+    : -38;                                                  // ENOSYS
+}

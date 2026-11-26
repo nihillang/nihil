@@ -979,6 +979,18 @@ peek_intrinsic() {
     : TYPE_INT;
 }
 
+// __nihil_peekb(a) → the byte at a
+peekb_intrinsic() {
+    next_token();
+    next_token();
+    expression();
+    op_load(OP_IMM, R_CX, 0);            // mov ecx, 0
+    op_ldbx(R_AX, R_AX, R_CX);           // movzx eax, byte [rax + rcx]
+    call_end = size_code;
+    expect(')', "')'");
+    : TYPE_INT;
+}
+
 poke8_intrinsic() {
     next_token();
     next_token();
@@ -995,15 +1007,24 @@ poke8_intrinsic() {
 // -native only: a function of the system's C library (libSystem) — __nihil_c("name", a1 … a8) →
 // its result (x0), __nihil_c32 → its int result (32 bits, sign-extended). Each argument an INT
 // (an address: __nihil_addr), pushed; the operation (OP_CCALL: r arguments, the name at source[v …
-// v + o)) takes them into x0 … x7. A function with variable arguments (open …) cannot be called so.
+// v + o)) takes them into x0 … x7. A function with variable arguments (openat's mode, fcntl's
+// argument): __nihil_cvar("name", F, …), F the fixed ones, a number; the others go on C's stack.
 ccall_intrinsic(int32 = false) {
     !arm_native { error("__nihil_c is only for -native (macOS: the system's C library)"); }
+    var = name_is(tok_start, tok_len, "__nihil_cvar");
     next_token();                        // name → "("
     next_token();
     tok_type != T_STR { error_expected("the function's name, a STRING"); }
     name_at = tok_start + 1;
     name_n = tok_len - 2;
     next_token();
+    fixed = -1;
+    var {
+        expect(',', "','");
+        tok_type != T_INT { error_expected("how many fixed arguments, a number"); }
+        fixed = tok_value;
+        next_token();
+    }
     n = 0;
     * tok_type == ',' {
         next_token();
@@ -1018,7 +1039,7 @@ ccall_intrinsic(int32 = false) {
     eb(0x0F, 0x0B);                      // (ud2: no x86 for it)
     k = OP_CCALL;
     int32 { k = OP_CCALL32; }
-    op_note(k, n, name_at, at, name_n);
+    op_note(k, n + 256 * (fixed + 1), name_at, at, name_n);   // r: the arguments (+ 256 · (fixed + 1))
     call_end = size_code;
     expect(')', "')'");
     : TYPE_INT;
