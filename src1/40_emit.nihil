@@ -719,7 +719,9 @@ emit_call_rt(rt = 0) {
     at = size_code;
     emit(0xE8);
     emit_d(rt + SIZE_HEADER - size_code - 4);
-    op_note(OP_CALL_RT, 0, rt, at);
+    o = 0;
+    arm_native { o = rt_method(rt) + 1; }  // -native: the routine written in Nihil, if there is one
+    op_note(OP_CALL_RT, 0, rt, at, o);
 }
 
 // cmp rcx, [rax-8] ; jae erro_indice

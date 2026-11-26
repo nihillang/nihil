@@ -534,6 +534,7 @@ op_rw(i = 0) {
         :;
     }
     k == OP_CALL { op_wr = L_ALL; :; }        // a method: its arguments on the stack; it leaves no register
+    k == OP_CCALL || k == OP_CCALL32 { op_wr = L_ALL; :; }   // a C function: its arguments on the stack
     k == OP_EPILOGUE { op_rd = L_AX | L_DX; :; }   // a method's result
     k == OP_CALL_FWD || k == OP_RET { op_rd = L_ALL; :; }
     // OP_JMP, OP_STACK, OP_FRAME, OP_ALIGN, OP_PUSHI, OP_XLD, OP_XOP: none of them
@@ -1274,7 +1275,15 @@ arm_op(i = 0) {
     k >= OP_IMM && k <= OP_REG { arm_load(k, r, v, o); :; }
     k == OP_CMP_SET { arm_cmp_set(v); :; }
     k == OP_CMP { a_line("cmp x9, x10"); :; }
+    k == OP_CALL_RT && o > 0 { arm_call_nihil(v, o - 1, i); :; }
     k == OP_CALL_RT { arm_call_rt(v); :; }
+    k == OP_CCALL || k == OP_CCALL32 {
+        j = r;
+        * j > 0 { j = j - 1; a_pop(j); }   // the last argument is on top
+        a_ins("bl _"); q = 0; * q < o { a_byte(source[v + q]); q = q + 1; } a_nl();
+        k == OP_CCALL32 { a_line("sxtw x9, w0"); } || { a_line("mov x9, x0"); }
+        :;
+    }
     k == OP_ALU { arm_alu(v, r, o); :; }
     k == OP_PUSH { a_push(a_rn(r)); :; }
     k == OP_POP { a_pop(a_rn(r)); :; }
@@ -1395,6 +1404,52 @@ arm_alu(alu = 0, r = 0, s = 0) {
     alu == ALU_AND { a_rrr("and ", r, r, s); :; }
     alu == ALU_OR { a_rrr("orr ", r, r, s); :; }
     a_rrr("eor ", r, r, s);
+}
+
+// ---- -native: the runtime's routines written in Nihil (src1/native.nihil: __nihil_rt_<name>) ----
+// A routine with such a method is called as a method: the registers it reads (rax, rcx, rdx, rsi,
+// rdi, in that order) are its arguments, pushed; its result comes back in rax (and rdx). rcx, rsi
+// and rdi, which the routines of x86 keep, are kept around it when live after.
+RT_METHS = 64;
+rt_meth = [-2 ; RT_METHS];                 // the method of each routine (by rt / 5), -1: none, -2: not looked up
+rt_meth_pass = -1;
+
+rt_method(rt = 0) {
+    n_passes != rt_meth_pass {              // each pass makes its symbols again
+        rt_meth_pass = n_passes;
+        u = 0;
+        RT_METHS { rt_meth[u] = -2; u = u + 1; }
+    }
+    j = rt / 5;
+    rt_meth[j] == -2 {
+        k = lookup_text("__nihil_rt_" + rt_name(rt));
+        k >= 0 && s_flags[k] & FLAG_METHOD == 0 { k = -1; }
+        rt_meth[j] = k;
+    }
+    k = rt_meth[j];
+    k >= 0 { note_call(k); }
+    : k;
+}
+
+arm_call_nihil(rt = 0, k = 0, i = 0) {
+    keep = L_CX | L_SI | L_DI;
+    lazy { keep = keep & live_out_of(i); }
+    rt == RT_READ_AT { keep = keep & (L_ALL ^ L_CX); }
+    keep & L_CX != 0 { a_push(10); }
+    keep & L_SI != 0 { a_push(12); }
+    keep & L_DI != 0 { a_push(13); }
+    rd = rt_reads(rt);
+    n = 0;
+    rd & L_AX != 0 { a_push(9); n = n + 1; }
+    rd & L_CX != 0 { a_push(10); n = n + 1; }
+    rd & L_DX != 0 { a_push(11); n = n + 1; }
+    rd & L_SI != 0 { a_push(12); n = n + 1; }
+    rd & L_DI != 0 { a_push(13); n = n + 1; }
+    a_ins("bl Lm"); a_num(k); a_nl();
+    arm_stack(8 * n);
+    keep & L_DI != 0 { a_pop(13); }
+    keep & L_SI != 0 { a_pop(12); }
+    keep & L_CX != 0 { a_pop(10); }
 }
 
 arm_call_rt(rt = 0) {

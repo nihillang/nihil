@@ -1,0 +1,103 @@
+// =============================================================================
+// native.nihil — the runtime of programs compiled with -native (macOS, ARM64), written in Nihil.
+//
+// A routine RT_<NAME> of the runtime (00_data.nihil) is the method __nihil_rt_<name> here, when
+// there is one (42_arm.nihil: rt_method); the others are still in C (macos/native/rt.c). Its
+// arguments are the registers the routine reads, in the order rax, rcx, rdx, rsi, rdi (rt_reads),
+// all INTs: addresses of texts and arrays are INTs here (a text's length is the 8 bytes before
+// it). The system is reached through its C library: __nihil_c("name", …) (memcpy, write, mmap …).
+//
+// A routine must not use what compiles to itself: no + of texts in __nihil_rt_concat, no $ in
+// __nihil_rt_int_text, no == of texts in __nihil_rt_str_equal.
+// =============================================================================
+
+// a new text of n bytes (and the 0 after them), zeroed; the collector does not look inside it
+__nihil_rt_new_text(__n = 0) {
+    __n < 0 { __n = 0; }
+    __t = __nihil_addr(__nihil_bytes(__n));
+    __nihil_poke8(__t - 16, 4);
+    : __t;
+}
+
+__nihil_rt_concat(a = 0, b = 0) {
+    __la = __nihil_peek(a - 8);
+    __lb = __nihil_peek(b - 8);
+    __t = __nihil_rt_new_text(__la + __lb);
+    __nihil_c("memcpy", __t, a, __la);
+    __nihil_c("memcpy", __t + __la, b, __lb);
+    : __nihil_str_at(__t);
+}
+
+__nihil_rt_str_equal(a = 0, b = 0) {
+    a == b { : true; }
+    __n = __nihil_peek(a - 8);
+    __n != __nihil_peek(b - 8) { : false; }
+    : __nihil_c32("memcmp", a, b, __n) == 0;
+}
+
+// how many characters v takes in decimal
+__nihil_rt_width(v = 0) {
+    __n = 1;
+    v < 0 { __n = 2; }
+    * v >= 10 || v <= -10 { v = v / 10; __n = __n + 1; }
+    : __n;
+}
+
+// v in decimal into the text at t, ending before t[end]
+__nihil_rt_put_int(__t = 0, end = 0, v = 0) {
+    __s = __nihil_str_at(__t);
+    __neg = v < 0;
+    __i = end;
+    __going = true;
+    * __going {
+        __d = v % 10;
+        __d < 0 { __d = -__d; }
+        __i = __i - 1;
+        __nihil_poke(__s, __i, '0' + __d);
+        v = v / 10;
+        __going = v != 0;
+    }
+    __neg { __nihil_poke(__s, __i - 1, '-'); }
+}
+
+__nihil_rt_int_text(v = 0) {
+    __n = __nihil_rt_width(v);
+    __t = __nihil_rt_new_text(__n);
+    __nihil_rt_put_int(__t, __n, v);
+    : __nihil_str_at(__t);
+}
+
+__nihil_rt_concat_int(a = 0, v = 0) {
+    __la = __nihil_peek(a - 8);
+    __n = __nihil_rt_width(v);
+    __t = __nihil_rt_new_text(__la + __n);
+    __nihil_c("memcpy", __t, a, __la);
+    __nihil_rt_put_int(__t, __la + __n, v);
+    : __nihil_str_at(__t);
+}
+
+// s[from … to)
+__nihil_rt_sub(__s = 0, from = 0, to = 0) {
+    __n = to - from;
+    __n < 0 { __n = 0; }
+    __t = __nihil_rt_new_text(__n);
+    __nihil_c("memcpy", __t, __s + from, __n);
+    : __nihil_str_at(__t);
+}
+
+// the text s into the text being made at dst, from at → where it ends
+__nihil_rt_put(dst = 0, at = 0, __s = 0) {
+    __n = __nihil_peek(__s - 8);
+    __nihil_c("memmove", dst + at, __s, __n);
+    : at + __n;
+}
+
+__nihil_rt_array_concat(a = 0, b = 0) {
+    __na = __nihil_peek(a - 8);
+    __nb = __nihil_peek(b - 8);
+    __r = [0 ; __na + __nb];
+    __t = __nihil_addr(__r);
+    __nihil_c("memcpy", __t, a, 8 * __na);
+    __nihil_c("memcpy", __t + 8 * __na, b, 8 * __nb);
+    : __r;
+}

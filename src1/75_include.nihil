@@ -24,13 +24,17 @@ store_name(start = 0, n = 0) {
     : n_names - 1;
 }
 
+wants_prelude = false;                     // the program needs the prelude (not only -native's runtime)
+
 // reads file k to the end of the raw arena → start; raw_got = size
 read_raw(k = 0) {
     path = [0 ; name_len[k]];
     i = 0;
     name_len[k] { path[i] = names[name_start[k] + i]; i = i + 1; }
     contents = "";
-    k == index_prelude { contents = PRELUDE_TEXT; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
+    k == index_prelude && arm_native && wants_prelude { contents = PRELUDE_TEXT + NATIVE_TEXT; }   // -native: its
+    || k == index_prelude && arm_native { contents = NATIVE_TEXT; }                             // runtime too
+    || k == index_prelude { contents = PRELUDE_TEXT; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
     n = #contents;
     size_raw + n >= SIZE_RAW - 1 { error_large(k); }
     start = size_raw;
@@ -349,6 +353,8 @@ load_program() {
     expanding = true;
     lx_buf = raw;
     expand(main, 0);
+    wants_prelude = uses_prelude;
+    arm_native { uses_prelude = true; }    // its runtime is prelude code (alone, if the program needs no prelude)
     uses_prelude {
         // again, now with the prelude before the program
         n_source = 0;

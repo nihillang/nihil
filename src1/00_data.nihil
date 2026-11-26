@@ -259,7 +259,9 @@ OP_FRAME = 59;          // rsp ← rsp - the frame's size (patched at the end: p
 OP_CALL_FWD = 60;       // a call of a place further on (patched: patch_here)
 OP_ALIGN = 61;          // nops up to an address multiple of 16 (v: how many bytes, in x86)
 OP_JCC_RT = 62;         // a jump on the condition v to the runtime's routine o (an error)
-OP_EPILOGUE = 63;       // a method's end: restores the v saved registers (REGS), rbp, and returns
+OP_EPILOGUE = 63;
+OP_CCALL = 64;          // -native: a call of the C function named at source[v … v + o), r arguments pushed
+OP_CCALL32 = 65;        // the same, its result an int (sign-extended)       // a method's end: restores the v saved registers (REGS), rbp, and returns
 CC_AE = 3;              // unsigned >=
 XOP_ADD = 0x58;         // (x86's opcodes, for its encoder)
 XOP_MUL = 0x59;

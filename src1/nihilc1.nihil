@@ -7,6 +7,7 @@
 
 @ "runtime_bin.nihil";            // the runtime's bytes, from src/runtime.asm (make runtime)
 @ "../build/prelude_text.nihil";   // the prelude, as text (generated: make build/prelude_text.nihil)
+@ "../build/native_text.nihil";    // the runtime written in Nihil, for -native (make build/native_text.nihil)
 @ "../build/std_text.nihil";       // the standard library, as text (generated: make build/std_text.nihil)
 @ "00_data.nihil";
 @ "bigint.nihil";

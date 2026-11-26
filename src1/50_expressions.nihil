@@ -552,6 +552,10 @@ primary_name() {
         k < 0 && name_is(pi, pl, "__nihil_bytes") { : bytes_intrinsic(1); }
         k < 0 && name_is(pi, pl, "__nihil_poke") { : bytes_intrinsic(2); }
         k < 0 && name_is(pi, pl, "__nihil_fail_rt") { : fail_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_peek") { : peek_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_poke8") { : poke8_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_c") { : ccall_intrinsic(false); }
+        k < 0 && name_is(pi, pl, "__nihil_c32") { : ccall_intrinsic(true); }
         k < 0 && name_is(pi, pl, "tools") { : tools_text(); }
         k < 0 && name_is(pi, pl, "call_tool") { : call_tool_call(); }
         is_model(k) { : new_record(k); }

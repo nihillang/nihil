@@ -967,6 +967,63 @@ bytes_intrinsic(kind = 0) {
     : TYPE_NONE;
 }
 
+// memory at an address, for the runtime written in Nihil: __nihil_peek(a) → the 8 bytes at a (an
+// INT); __nihil_poke8(a, v) puts v's 8 bytes there
+peek_intrinsic() {
+    next_token();                        // name → "("
+    next_token();
+    expression();
+    op_ld(R_AX, R_AX, 0, 0);             // mov rax, [rax]
+    call_end = size_code;
+    expect(')', "')'");
+    : TYPE_INT;
+}
+
+poke8_intrinsic() {
+    next_token();
+    next_token();
+    expression();
+    op_push(R_AX);
+    expect(',', "','");
+    expression();
+    op_pop(R_CX); op_st(R_CX, 0, R_AX, 0);   // pop rcx ; mov [rcx], rax
+    call_end = size_code;
+    expect(')', "')'");
+    : TYPE_NONE;
+}
+
+// -native only: a function of the system's C library (libSystem) — __nihil_c("name", a1 … a8) →
+// its result (x0), __nihil_c32 → its int result (32 bits, sign-extended). Each argument an INT
+// (an address: __nihil_addr), pushed; the operation (OP_CCALL: r arguments, the name at source[v …
+// v + o)) takes them into x0 … x7. A function with variable arguments (open …) cannot be called so.
+ccall_intrinsic(int32 = false) {
+    !arm_native { error("__nihil_c is only for -native (macOS: the system's C library)"); }
+    next_token();                        // name → "("
+    next_token();
+    tok_type != T_STR { error_expected("the function's name, a STRING"); }
+    name_at = tok_start + 1;
+    name_n = tok_len - 2;
+    next_token();
+    n = 0;
+    * tok_type == ',' {
+        next_token();
+        n == 8 { error("__nihil_c takes at most 8 arguments"); }
+        pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+        u = expression();
+        u != TYPE_INT && u != TYPE_BOOL && u != TYPE_UNKNOWN { type_wrong(pi, pl, pn, pli, TYPE_INT, u); }
+        op_push(R_AX);
+        n = n + 1;
+    }
+    at = size_code;
+    eb(0x0F, 0x0B);                      // (ud2: no x86 for it)
+    k = OP_CCALL;
+    int32 { k = OP_CCALL32; }
+    op_note(k, n, name_at, at, name_n);
+    call_end = size_code;
+    expect(')', "')'");
+    : TYPE_INT;
+}
+
 // ---- casts for the prelude (no code): __nihil_addr(x) → INT,
 // __nihil_str_at(INT) → STRING, __nihil_arr_at(INT) → ARRAY of INT
 intrinsic(r = 0) {

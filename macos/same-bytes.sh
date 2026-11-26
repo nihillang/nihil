@@ -23,7 +23,7 @@ fi
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT
 [ -f build/macos/rt.o ] && [ build/macos/rt.o -nt arm64/rt.c ] || clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
-make -s build/prelude_text.nihil build/std_text.nihil
+make -s build/prelude_text.nihil build/native_text.nihil build/std_text.nihil
 
 # the candidate: src1/ as it is now, compiled by the reference
 printf '%s\n' "-map $PWD/src1/nihilc1.nihil" | "$ref" > "$w/c.x86" 2> "$w/c.map" ||
