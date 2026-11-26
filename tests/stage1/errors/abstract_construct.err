@@ -1,0 +1,1 @@
+SHAPE is abstract (it does not implement area, which SHAPE leaves abstract): no record of it is made

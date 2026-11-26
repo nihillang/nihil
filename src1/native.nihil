@@ -533,7 +533,9 @@ __nihil_gc_collect() {
     __nihil_gc_collect_now();
 }
 
-// ---- the program's end, the error's text ----
+// ---- the program's end, the error's text, the profiler (Linux only: here it samples nothing) ----
+
+__nihil_rt_prof_start(symbols = 0) { : 0; }
 
 __nihil_rt_exit(code = 0) {
     __nihil_rt_flush();
@@ -1632,7 +1634,8 @@ __nihil_rt_pow10 = [0.0 ; 23];             // 1e0 … 1e22, exact as doubles
 __nihil_rt_pow10_made = false;
 
 // rec_parse(t, at, schema): the record in the line of t at at, its fields by schema ([n, type,
-// width, …]: 1 INT, 2 BOOL, 3 STRING, another FLOAT) → a new record (its texts inside its block), or
+// width, …, then the model's tag]: 1 INT, 2 BOOL, 3 STRING, another FLOAT) → a new record (its texts
+// inside its block; the tag in its header's top 16 bits), or
 // -1. One pass: the block is as large as the schema's texts can be (its words: kept by schema).
 __nihil_rt_sch = 0;
 __nihil_rt_sch_words = 0;
@@ -1649,6 +1652,7 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
     __r = [0 ; __nihil_rt_sch_words];
     __rec = __nihil_addr(__r);
     __nihil_poke8(__rec - 8, __nf);
+    __nihil_poke8(__rec - 16, __nihil_peek(__rec - 16) | __nihil_peek(schema + 8 + 16 * __nf));   // its model's tag (SPEC §20.12)
     __next = __rec + 8 * __nf;
     __slot = __rec;
     __fs = schema + 8;

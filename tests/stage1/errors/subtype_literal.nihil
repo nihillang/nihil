@@ -1,0 +1,4 @@
+// an ARRAY literal does not mix a parent and a child (no common type is inferred)
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+ps = [PESSOA("Rui"), ALUNO("Ana", "3B")];

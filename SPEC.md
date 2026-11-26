@@ -526,12 +526,14 @@ command         ::= method                      (* top level only *)
                   | expression ":" IDENT [ "," IDENT ] block   (* each element, §7.6 *)
                   | assignment ";"
                   | [ expression ] block ( "||" [ expression ] block )*
+                  | "?" block [ "||" block ]        (* protected block, §25.1 *)
                   | [ expression ] call ";"
                   | "@" STRING ";"              (* inclusion, §16 *)
 
 method          ::= IDENT "(" [ param ( "," param )* ] ")" block
 param           ::= IDENT [ "?" ] "=" ( literal | IDENT "(" ")" | "[" IDENT "(" ")" "]" )
-model           ::= IDENT "=" "@" "[" field ( ";" field )* [ ";" ] "]" ";"
+model           ::= IDENT "=" "@" "[" ( IDENT [ ";" fields ] | fields ) "]" ";"   (* IDENT: the parent, §20.8 *)
+fields          ::= field ( ";" field )* [ ";" ]
 field           ::= [ "#" [ "+" ] ] IDENT ":" ( ( "INT" | "STRING" | "FLOAT" ) "(" INTEGER ")" | "BOOL" )
 block           ::= "{" command* "}"
 assignment      ::= IDENT [ "?" ] [ "[" expression "]" ] "=" expression
@@ -744,7 +746,9 @@ inclusions (§16). `build/runtime.nihil` is generated from `runtime.bin`, and
      itself);
   3. `nihilc2`, without optimizations, produces exactly `nihilc1` again.
 - **Protocol:** `nihilc1` reads the path of the program from stdin (one line,
-  optionally prefixed with `-O0 `), reads the files itself with `@`, writes the
+  optionally prefixed with options: `-O0 ` (no optimizations), `-map ` (where the runtime,
+  the code and the constants end, on stderr: the macOS translator reads it) and `-profile `
+  (the executable samples where its time goes: docs/profiling.md)), reads the files itself with `@`, writes the
   executable to stdout and errors to stderr (with exit code 1). `nihilc1.sh` gives
   it the same command line as `nihilc`.
 - `nihilc1` reports compile errors with `!>>` and exits with `:: 1;`.
@@ -1145,10 +1149,170 @@ shelves[i].free() > 0.0 { … }
 - `value.name(…)` is resolved when compiling, from the model of the value: it is
   an ordinary call, with no table of methods and no cost. A name the model does
   not have is a compile error that lists the ones it has.
-- There is no inheritance: a model can hold another one's fields, and its
-  methods can call that model's methods.
+- A model can start from another one's fields and methods (§20.8); a model can
+  also hold another one's key, and its methods can call that model's methods.
 
-### 20.7 Implementation
+### 20.7 Private fields
+
+A field whose name starts with `_` is **private** to its model: only the model's
+own methods (§20.6) read it or change it. Anywhere else, naming it is a compile
+error, so the methods decide what the rest of the program can do with it:
+
+```text
+ACCOUNT = @[#id: INT(4); owner: STRING(20); _balance: FLOAT(14)];
+
+ACCOUNT.deposit(a = ACCOUNT(), v = 0.0) {
+    v <= 0.0 { ?! = "a deposit must be positive"; }
+    a._balance = a._balance + v;          // inside a method of ACCOUNT
+}
+ACCOUNT.balance(a = ACCOUNT()) { : a._balance; }
+
+acc = ACCOUNT(1, "Ana", 0.0);             // creating fills every field
+acc.deposit(50.0);
+>> acc.balance();                         // 50.0
+>> acc._balance;                          // compile error: private to ACCOUNT
+```
+
+- It holds for `r._field`, for `r._field = value;` and for a field named inside
+  a query (`rows.where(_balance > 0.0)`, §21.1): a query in one of the model's
+  methods may name it; a method of another model may not.
+- Creating a record, `ACCOUNT(1, "Ana", 0.0)`, fills every field in order, the
+  private ones too. Tables (§20.3) and JSON (§26) write and read them as any other
+  field: they are part of the data, and privacy is about the program's code.
+- It is checked when compiling and costs nothing when running.
+
+### 20.8 A model from another
+
+`CHILD = @[PARENT; field: …];` starts from a model declared before it: the
+child's fields are the parent's, in the parent's order and with its key, followed
+by its own. The parent's methods work on the child, since a child's record has the
+parent's fields where a parent's record has them:
+
+```text
+PERSON = @[#id: INT(4); name: STRING(20); _born: INT(4)];
+PERSON.age(p = PERSON(), year = 0) { : year - p._born; }
+
+STUDENT = @[PERSON; class: STRING(4); grade: FLOAT(5)];   // id, name, _born, class, grade
+s = STUDENT(1, "Ana", 2008, "3B", 8.5);
+>> s.age(2026);                         // 18: PERSON's method, on a STUDENT
+@>> "students.dat", [s];                // a table of its own: PERSON's line, then class and grade
+```
+
+- `@[PARENT]` alone is a model with the parent's fields and methods and a table of
+  its own. Several levels work (a child of a child).
+- A child cannot declare a field its parent has or a second key. It may declare a
+  method its parent has: it replaces it (§20.10).
+- A parent's private field (§20.7) stays private to the parent: the child's own
+  methods use the parent's methods to reach it.
+- A child is a type of its own. It is accepted where its parent is expected only at
+  the places §20.9 lists (an argument, an element stored into a collection).
+- The IDE reads a child's table with its whole line (the parent's fields first).
+
+### 20.9 A child where its parent is expected
+
+A child's record is accepted where its parent's is expected **at four places**,
+where the expected type is fixed by something else:
+
+```text
+show(p = PERSON()) { : p.name; }
+team = [PERSON() ; *];
+s = STUDENT(1, "Ana", 2008, "3B", 8.5);
+>> show(s);                 // 1. an argument for a parameter of the parent's type
+team[] = s;                 // 2. an element of a LIST of the parent (added or replaced)
+people = [PERSON() ; 3];
+people[0] = s;              // 3. an element of an ARRAY of the parent
+by_class = {"": PERSON() ; 8};
+by_class["3B"] = s;         // 4. a value of a MAP of the parent
+```
+
+- It is the same record, not a copy: a change through the parent shows in the child.
+- What copies or writes a record takes the model of the expression: `[p ; n]` through
+  a PERSON gives PERSONs, and `$p`, `to_json` and the table writes write the PERSON's
+  fields. A STUDENT is written whole through a STUDENT-typed expression.
+- An optional parameter of the parent's type takes a child (present) or a child's
+  optional (with its presence).
+- Everywhere else the models must be equal: assigning a child to a variable typed by
+  its parent, an ARRAY literal mixing them, a method returning both, a parent where a
+  child is expected. A collection of a child is **never** taken for a collection of its
+  parent (the callee could store a parent in it). `as_person(p = PERSON()) { : p; }`
+  gives a PERSON-typed reference to any descendant.
+- The design and what was left out (inferring a common type) are in
+  `docs/subtyping.md`.
+
+### 20.10 Replacing an inherited method
+
+A child may declare a method its parent (or an ancestor) declares: it **replaces**
+it. A call through a record of the parent's type runs the method of the record's
+real model, the nearest one, itself included, that declares it:
+
+```text
+PERSON.label(p = PERSON()) { : p.name; }
+TEACHER = @[PERSON; subject: STRING(10)];
+TEACHER.label(t = TEACHER()) { : "prof. " + t.name; }     // replaces PERSON.label
+
+team = [PERSON() ; *];
+team[] = STUDENT(1, "Ana", 2008, "3B", 8.5);
+team[] = TEACHER(2, "Rui", 1980, "physics");
+team : p { >> p.label() + "\n"; }                         // Ana, then prof. Rui
+```
+
+- A replacement takes the **same parameters after the first** (the same number,
+  each of the same type) and returns **the same type** (or nothing, if the method it
+  replaces returns nothing). Anything else is a compile error, the return type checked
+  once the types settle, also for a replacement no call reaches.
+- A child that does not replace a method gets the nearest one above it: a grandchild
+  of PERSON under TEACHER runs `TEACHER.label`.
+- A method of the parent that calls another method on its own record (`p.label()`
+  inside `PERSON.greet`) runs the real model's replacement too.
+- The arguments are evaluated once, before the choice. The defaults of the omitted
+  ones come from the method the static type finds (`PERSON.label` through a PERSON),
+  so the same record may get other defaults through a TEACHER.
+- There is no `super`: a replacement that needs the parent's behaviour calls a
+  method of the parent under another name (`PERSON.base_label`).
+- A call through a model none of whose descendants replaces the method is the plain
+  call it always was; a replaced one tests the model in the record's header (§20.12)
+  and calls directly: no table of methods, a compare per replacing model.
+
+### 20.11 Abstract methods
+
+A model's method whose body is `{ ... }` or `{ ... : example; }` is **abstract**: it
+declares the method and what it returns (by an example, as a parameter's default
+gives its type: `: 0.0;` a FLOAT, `: "";` a STRING, `: NAME();` a record, `: [0];` an
+ARRAY; `{ ... }` alone returns nothing), and leaves its body to the models below:
+
+```text
+SHAPE = @[name: STRING(12)];
+SHAPE.area(s = SHAPE()) { ... : 0.0; }
+SHAPE.describe(s = SHAPE()) { : s.name + ": " + $s.area(); }   // runs the real model's area
+
+CIRCLE = @[SHAPE; r: FLOAT(8)];
+CIRCLE.area(c = CIRCLE()) { : 3.14159 * c.r * c.r; }
+
+shapes = [SHAPE() ; *];                 // an empty LIST of SHAPE: no SHAPE is made
+shapes[] = CIRCLE("c", 1.0);
+SHAPE("x");                             // compile error: SHAPE is abstract (area)
+```
+
+- A model is **abstract** when, for some method, the nearest model at or above it that
+  declares it declares it abstract: the model that declares it, a child that does not
+  implement it, and a child that makes an inherited method abstract again. The others
+  are concrete. An implementation follows §20.10: the same parameters after the first,
+  and the example's return type.
+- No record of an abstract model is made, and each way of making one is a compile error
+  naming the method it lacks: `NAME(…)`, the table reads (`@`, `@?`, `@[i]`, `@{k}` and
+  their optional forms; `NAME @# path` only counts and stays), `from_json`,
+  `from_json_items`, `[r ; n]` through it, `[NAME() ; n]`, and a parameter's default
+  (`s = SHAPE()` and `xs = [SHAPE()]` give the type, but the argument must be passed).
+- `[NAME() ; *]` (an empty LIST) and `{k: NAME() ; n}` (an empty MAP) only give the
+  type, as they always did, and make no record. Locals, parameters and collections of an
+  abstract model hold records of the models below it; a **global** cannot (a record
+  global starts as an empty record of its type).
+- The abstract method itself raises a runtime error (`SHAPE.area is abstract: a model
+  below SHAPE implements it`), which no record the compiler lets be made can reach.
+- Optional returns, interfaces (a model with no fields) and several parents are not
+  part of it.
+
+### 20.12 Implementation
 
 A record is a block of 8-byte slots with the ARRAY layout (§3); a STRING field
 holds the address of its text. Its type is a model number, so each model is a
@@ -1160,6 +1324,15 @@ with models always get the prelude. The prelude builds text one byte per charact
 STRING it has just allocated (`__nihil_bytes(n)`, `__nihil_poke(s, i, b)`), and
 the FLOAT conversion reuses one buffer: writing or reading a table costs about
 two to three times the size of the file in memory at its peak.
+
+A record of a model in a hierarchy (one with a parent or a child, §20.8) carries
+its model in the header of its block: `m + 1` in the top 16 bits, which the size
+(under 2^40 slots) never reaches; other records carry 0. Every way of making a
+record sets it: a constructor, a default, a record global, `[r ; n]` (the static
+model, §20.9), the table readers and `from_json`, which take it from the last word
+of the model's schema constant. The collector masks it off where it reads a block's
+size. A call through a model some descendants replace the method in reads it
+(§20.10, `docs/dispatch.md`).
 
 ## 21. The library (stage 1)
 
@@ -1489,6 +1662,34 @@ r == _ { >> "failed: " + ?! + "\n"; } // ?! : the text of that error
 - A protected call costs a few instructions when nothing fails, and the stack does not grow
   when it is used in a loop.
 
+### 25.1 Protected blocks
+
+`?{ … }` protects a block, as `?` protects a call: a runtime error anywhere inside it, however
+deep, ends the block and goes on after it, with `?!` holding its text. `|| { … }` after it is
+the block that runs only then:
+
+```text
+?{
+    rows = PRODUCT @ "products.dat";
+    @>> "total.txt", $rows.sum(price);
+} || {
+    !>> "could not: " + ?! + "\n";        // ?! : the error's text
+}
+```
+
+- What the block changed before the error **stays changed**: variables keep the last values
+  given to them, and what was written stays written. (So that this holds, the locals of a
+  method with a protected block, or the globals of a top level with one, are kept in memory,
+  not in the registers the optimizer would give them.)
+- Without `|| { … }` the error is only in `?!`; a block that ends normally leaves `?!` empty,
+  and its `|| { … }` does not run. `||` takes one block: no condition, no chain.
+- `: value;` inside the block leaves the method and the protection with it; `::` ends the
+  program as usual. A runtime error inside the `|| { … }` block, including `?! = text;`, goes
+  to the protection around it, if any: so `?! = ?!;` passes the error on.
+- Blocks and calls nest, up to 64 protections at a time; in a loop, each turn is protected
+  on its own.
+- The same things are caught as by `?f()`, and the same are not (`out of memory`, `::`).
+
 **Implementation.** A stack of protections in the runtime, 64 levels deep: the stack pointer,
 the frame pointer, the address to resume at and the optimizer's registers (rbx, r12–r15: a
 local kept in one must not change when the call is abandoned), 8 words each. The compiler
@@ -1667,6 +1868,8 @@ every turn, so the list can grow inside the loop.
 | **v1.9:** saved registers learned between passes | The prologue comes before the body; using the count from the previous pass avoids saving registers for nothing |
 | **v2.1:** `... ms;` waits | Animations need a fixed speed; a busy loop depends on the machine. The ellipsis reads as a pause and cannot start any valid expression |
 | **v2.2:** renamed from Ket to Nihil | Latin for *nothing*: no keywords, and `_` for the missing value |
+| **v4.11:** private fields `_x` (§20.7); `CHILD = @[PARENT; …]` (§20.8); a child where its parent is expected, as an argument or a stored element (§20.9); replacing an inherited method, dispatched by the model in the record's header (§20.10); abstract methods `{ ... : example; }` (§20.11) | Programs organised around models needed the pillars of object orientation. Each part takes no keyword (`_`, a model's name, `...` were free) and none changes a program that compiled before. A child stands for its parent only where the expected type is fixed (an argument, an element), since anywhere else the inference would need to tell a provisional type from a fixed one; the model sits in the block header, so no field moves |
+| **v4.10:** `?{ … } \|\| { … }`, a protected block (§25.1); `nihil profile` and the compiler's `-profile` | Protecting a few commands took a method written only for `?`; `?` already meant protected and `\|\|` otherwise, so no program changes meaning. Measuring a real program took gdb and a hand-made sampler; the runtime now samples itself, for under 1% |
 | **v4.9:** LIST, an ARRAY that grows: `[x ; *]` and `v[] = x;` (§28) | Collecting items meant copying the whole array for each one, or doubling it by hand with a counter beside it |
 | **v4.8:** `xs : x, i { … }`, each element and its index (§7.6); `?! = text;` raises a runtime error that `?f()` catches (§25) | The big programs repeated a loop with a counter by hand, and made an error on purpose to give up on a step |
 | **v4.7:** Nihil's own assembler for the runtime (`asm/asm.nihil`, the same bytes as nasm); `from_json` checks the whole document (§26); `repeat` and `.int()` stop at the limits of INT | A change to the runtime needed nasm; a review found a size that went round in 64 bits, a number past the smallest INT and broken JSON read as a record |

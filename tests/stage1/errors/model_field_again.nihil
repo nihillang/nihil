@@ -1,0 +1,3 @@
+// a child does not declare a parent's field again
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; nome: STRING(30)];

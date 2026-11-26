@@ -28,6 +28,7 @@ command() {
     t == '@' && peek_type() == '{' { cmd_put_key(); :; }
     t == '@' { error("the inclusion @ \"file\"; can only appear at the top level, alone on its line"); }
     t == '?' && raise_ahead() { cmd_raise(); :; }
+    t == '?' && peek_type() == '{' { cmd_protected_block(); :; }
     init_expression(t) { cmd_expr_block(); :; }
     error_expected("a command");
 }
@@ -41,6 +42,36 @@ raise_ahead() {
     back_lexer();
     drop_lexer();
     : r;
+}
+
+// ?{ … } || { … } — a protected block (SPEC §25.1): a runtime error inside it, however deep, goes
+// to the block after ||, with ?! holding its text (without ||, only to ?!). The runtime keeps the
+// stack, the frame and rbx, r12–r15 at the start and brings them back: so that what the block
+// changed before the error stays changed, the locals of a method with a protected block (the
+// globals the top level keeps, for one at the top level) are kept in memory, not in registers.
+cmd_protected_block() {
+    next_token();                        // "?" → "{"
+    method_current >= 0 { prot_in_method = true; } || { prot_at_top = true; }
+    on_error = op_lea_fwd(R_AX);         // lea rax, [rip + on_error]
+    emit_call_rt(RT_PROTECT);
+    want_arm { arm_prot_block(); }       // (-native: the unit keeps its slots in memory too)
+    prot_depth = prot_depth + 1;
+    block();
+    prot_depth = prot_depth - 1;
+    emit_call_rt(RT_UNPROTECT);          // ended normally: ?! = ""
+    tok_type == T_OR {
+        next_token();                    // "||" → "{"
+        tok_type != '{' { error_expected("'{' after '?{ … } ||': the block that runs when it fails"); }
+        over = op_jmp();                 // jmp over the handler
+        patch_to_here(on_error);
+        last_target = size_code;         // the runtime lands here
+        block();
+        patch_here(over);
+        tok_type == T_OR { error("'?{ … } || { … }' takes one block after '||'"); }
+    } || {
+        patch_to_here(on_error);
+        last_target = size_code;
+    }
 }
 
 // ?! = text; — a runtime error with that text (SPEC §25): ?f() catches it, and ?! holds the
@@ -453,6 +484,24 @@ skip_method() {
     size_const = sc;
 }
 
+// tok = "{" of an abstract method (SPEC §20.11): its body raises a runtime error, which ?f() catches;
+// its return type is the example's (set in the prescan). Only a record of a model that does not
+// implement it reaches it, and the compiler lets no such record be made.
+abstract_body(k = 0) {
+    const_init();
+    const_put_source(s_ofs[k], s_len[k]);
+    d = 0;
+    * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
+    const_put_str(" is abstract: a model below ");
+    const_put_source(s_ofs[k], d);
+    const_put_str(" implements it");
+    c = const_close();
+    op_lea_const(R_AX, c);                  // lea rax, [rip + message]
+    emit_call_rt(RT_FAIL);
+    * tok_type != '}' { tok_type == T_END { error_expected("'}'"); } next_token(); }
+    next_token();
+}
+
 cmd_method(k = 0) {
     s_skip[k] != 0 { skip_method(); :; }   // a prelude method the program does not reach
     jump = op_jmp();                            // jmp over the body
@@ -524,7 +573,7 @@ cmd_method(k = 0) {
     saw_value = false;
     saw_empty = false;
     saw_absent = false;
-    block();
+    s_abstract[k] { abstract_body(k); } || { block(); }
     // a ": _;" and a ": value;" of type T: the method returns T?
     r = s_type[k];
     saw_absent && r != 0 && r != TYPE_NONE && !is_opt(r) {
@@ -554,6 +603,8 @@ cmd_method(k = 0) {
     max_slots = sv_max;
     slots = sv_slots;
     method_current = -1;
+    prot_in_method { demand = 0; }         // ?{ … }: every local in memory (cmd_protected_block)
+    prot_in_method = false;
     optimize && demand != s_regs[k] {
         s_regs[k] = demand;                // the next pass saves other registers
         altered = true;
@@ -566,6 +617,7 @@ cmd_method(k = 0) {
     limit_regs = 0;
     base_frame = 0;
     a_method_end();
+    s_mend[k] = size_code;
     patch_here(jump);
 }
 
@@ -1250,7 +1302,7 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
     expect(']', "']'");
     expect('=', "'='");
     v = expression();
-    v != TYPE_UNKNOWN && tt != TYPE_UNKNOWN && tt & ~TYPE_ARR != v {
+    v != TYPE_UNKNOWN && tt != TYPE_UNKNOWN && !element_accepts(tt & ~TYPE_ARR, v) {
         error_start();
         put_str("'");
         put_source(pi, pl);

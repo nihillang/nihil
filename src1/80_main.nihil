@@ -2,6 +2,61 @@
 // Main program: loads the source, compiles in passes and writes the ELF
 // =============================================================================
 
+// -profile: the symbols the executable writes with its samples, a line each, "start end name"
+// (addresses, decimal): the runtime's routines, each method of this pass and the top level
+// (the rest of the program's code, around the methods)
+prof_op = 0;                               // -profile: the operation of its lea (-arm)
+profile_symbols() {
+    base = BASE_CODE + SIZE_HEADER;
+    const_init();
+    i = 0;
+    start = 0;
+    w = 0;
+    n = #runtime_sym_names;
+    * i <= n {
+        i == n || runtime_sym_names[i] == ' ' {
+            const_put_num(base + runtime_sym_ofs[w]);
+            const_put_byte(' ');
+            w + 1 < #runtime_sym_ofs { const_put_num(base + runtime_sym_ofs[w + 1]); } || { const_put_num(base + #runtime_bin); }
+            const_put_byte(' ');
+            j = start;
+            * j < i { const_put_byte(runtime_sym_names[j]); j = j + 1; }
+            const_put_byte(10);
+            w = w + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    k = 0;
+    * k < n_sym {
+        s_flags[k] & FLAG_METHOD != 0 && s_skip[k] == 0 && s_end[k] > 0 && s_mend[k] > s_end[k] {
+            const_put_num(BASE_CODE + s_end[k]);
+            const_put_byte(' ');
+            const_put_num(BASE_CODE + s_mend[k]);
+            const_put_byte(' ');
+            const_put_source(s_ofs[k], s_len[k]);
+            const_put_byte(10);
+        }
+        k = k + 1;
+    }
+    const_put_num(base + #runtime_bin);
+    const_put_byte(' ');
+    const_put_num(BASE_CODE + size_code);
+    const_put_str(" (top level)");
+    const_put_byte(10);
+    c = const_close();
+    register_fixup(pos_profile, c, false);
+    want_arm && prof_op < n_ops { op_v[prof_op] = c; }   // (-arm: the lea's constant)
+}
+
+const_put_num(v = 0) {
+    v == 0 { const_put_byte('0'); :; }
+    d = [0 ; 20];
+    c = 0;
+    * v > 0 { d[c] = v % 10; v = v / 10; c = c + 1; }
+    * c > 0 { c = c - 1; const_put_byte('0' + d[c]); }
+}
+
 compile() {
     prescan();
     const_base = size_const;
@@ -68,8 +123,10 @@ globals_learn() {
         }
         i = i + 1;
     }
-    // the 5 heaviest of the others get rbx, r12 … r15 (in that order)
+    // the 5 heaviest of the others get rbx, r12 … r15 (in that order); none when the top level has
+    // a protected block ?{ … } (cmd_protected_block)
     j = 0;
+    prot_at_top { j = 5; }
     last = -1;
     lastw = 0;
     taken = [0 ; 5];
@@ -116,7 +173,10 @@ one_pass() {
     lab_free = -1;
     n_binds = 0;
     n_meths = 0;
+    n_prot_ops = 0;
     n_frames = 0;
+    prot_at_top = false;
+    prot_depth = 0;
     n_fix = 0;
     last_target = -1;
     slots = 0;
@@ -149,6 +209,15 @@ one_pass() {
     op_mov(R_BP, R_SP);
     pos_frame = op_frame();
     pos_init = op_call_fwd();              // call inicializa_globais
+    want_profile {
+        at = size_code;                    // lea rax, [rip + symbols] (made at the end of the pass)
+        eb(0x48, 0x8D, 0x05);
+        pos_profile = size_code;
+        emit_d(0);
+        op_note(OP_LEA_CONST, R_AX, 0, at);   // (its constant: profile_symbols)
+        prof_op = n_ops - 1;
+        emit_call_rt(RT_PROF_START);
+    }
 
     init_lexer();
     next_token();
@@ -183,12 +252,72 @@ one_pass() {
         i = i + 1;
     }
     op_ret();
+    want_profile { profile_symbols(); }
     emit_constantes();
     close_elf();
 }
 
+// once the types settled: a method that replaces an inherited one (SPEC §20.10) returns the same
+// type, so a call through the parent gets what it expects whichever model's runs; checked also for
+// a replacement no call reaches
+check_replacements() {
+    k = 0;
+    * k < n_sym_base {
+        s_flags[k] & FLAG_METHOD != 0 {
+            d = 0;
+            * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
+            km = -1;
+            d < s_len[k] { km = lookup(s_ofs[k], d); }
+            km >= 0 && is_model(km) {
+                ns = s_ofs[k] + d + 1;
+                nl = s_len[k] - d - 1;
+                p = m_parent[s_extra[km]];
+                ko = -1;
+                * ko < 0 && p >= 0 { ko = lookup_model_method(m_sym[p], ns, nl); p = m_parent[p]; }
+                ko >= 0 && s_type[k] != s_type[ko] {
+                    msg_len = 0;
+                    put_str("nihilc: ");
+                    put_source(s_ofs[k], s_len[k]);
+                    put_str(" returns ");
+                    put_type(s_type[k]);
+                    put_str(", but the method it replaces, ");
+                    put_source(s_ofs[ko], s_len[ko]);
+                    put_str(", returns ");
+                    put_type(s_type[ko]);
+                    put_str(": a replacement returns the same type");
+                    error_end();
+                }
+            }
+        }
+        k = k + 1;
+    }
+}
+
+// a global whose type is an abstract model (SPEC §20.11): refused, since a record global starts as
+// an empty record of its model. Locals and collections of it are fine.
+check_abstract_globals() {
+    k = 0;
+    * k < n_sym_base {
+        s_flags[k] & FLAG_GLOBAL != 0 && s_flags[k] & FLAG_METHOD == 0 && is_rec(base_opt(s_type[k])) {
+            ka = missing_method(base_opt(s_type[k]) >> 8);
+            ka >= 0 {
+                msg_len = 0;
+                put_str("nihilc: the global '");
+                put_source(s_ofs[k], s_len[k]);
+                put_str("' holds a ");
+                put_type(s_type[k]);
+                put_str(", an abstract model: a global holds a model below it, or a list of it");
+                error_end();
+            }
+        }
+        k = k + 1;
+    }
+}
+
 load_program();
 compile();
+check_replacements();
+check_abstract_globals();
 // -map: the runtime ends after the header and its block, the program's code at code_end, the
 // constants follow (8-aligned) up to the end of the file
 // (written with the message buffer: stage 0, which builds this compiler, has no $ for INT)

@@ -813,6 +813,8 @@ emit_mov_reg_rax(r = 0) {                  // mov r, rax
 
 // method epilogue: restores the saved registers and returns
 emit_return() {
+    i = 0;
+    * i < prot_depth { emit_call_rt(RT_UNPROTECT); i = i + 1; }   // ": x;" inside ?{ … } (keeps rax, rdx)
     at = size_code;
     limit_regs == 0 {
         eb(0xC9, 0xC3);                     // leave ; ret

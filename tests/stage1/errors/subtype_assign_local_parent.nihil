@@ -1,0 +1,5 @@
+// assigning a child to a local typed by a parent is not one of the places a child is accepted
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+x = PESSOA("Rui");
+x = ALUNO("Ana", "3B");

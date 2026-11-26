@@ -1,0 +1,1 @@
+ALUNO.valor returns STRING, but the method it replaces, PESSOA.valor, returns INT

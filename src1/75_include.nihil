@@ -313,8 +313,9 @@ load_program() {
         }
         <<< c;
     }
-    // options before the path: "-O0 " (no optimizations: the same bytes as stage 0) and "-map "
+    // options before the path: "-O0 " (no optimizations: the same bytes as stage 0), "-map "
     // (where the runtime, the code and the constants are, on stderr: the macOS translator reads it)
+    // and "-profile " (the executable samples where it spends its time: see profile_symbols)
     going = true;
     * going {
         going = false;
@@ -346,6 +347,14 @@ load_program() {
             i = 0;
             size_names - 5 { names[i] = names[i + 5]; i = i + 1; }
             size_names = size_names - 5;
+            going = true;
+        }
+        size_names >= 9 && names[0] == '-' && names[1] == 'p' && names[2] == 'r' && names[3] == 'o' && names[4] == 'f'
+            && names[5] == 'i' && names[6] == 'l' && names[7] == 'e' && names[8] == ' ' {
+            want_profile = true;
+            i = 0;
+            size_names - 9 { names[i] = names[i + 9]; i = i + 1; }
+            size_names = size_names - 9;
             going = true;
         }
     }

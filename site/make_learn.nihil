@@ -22,7 +22,7 @@ TITLES = [
     "Globals and locals: the one rule to remember",
     "Automatic keys",
     "Modeling data",
-    "Errors: protected calls",
+    "Errors: protected calls and blocks",
     "Lists: arrays that grow"
 ];
 INTROS = [
@@ -84,7 +84,12 @@ INTROS = [
       "in another table (<code>customer</code> below holds a <code>CUSTOMER</code> id). The table does not " +
       "enforce the link, so the program checks it when it writes (<code>sell</code>), and a <b>join</b> is " +
       "a lookup by key (<code>CUSTOMER @{s.customer} CUSTOMERS</code>), a few small reads through the " +
-      "index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and " +
+      "index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and a field " +
+      "whose name starts with <code>_</code> is <b>private</b>: only those methods read or change it " +
+      "(<code>_cents</code> at the end), so they keep the data consistent. A model can start from another " +
+      "(<code>SAVINGS = @[WALLET; rate: FLOAT(5)];</code>): its fields come first, its methods work on it, " +
+      "a SAVINGS goes where a WALLET is expected as an argument or as an element of a list, and its own " +
+      "<code>describe</code> replaces WALLET's: a call through a WALLET runs the record's real model's. " +
       "<code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> " +
       "are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of " +
       "its lines, so the old table no longer reads with the new model. Convert it once, reading it with " +
@@ -103,7 +108,9 @@ INTROS = [
       "JSON document) ends the program with its message. A <code>?</code> before a call protects it: an " +
       "error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when " +
       "the call worked). <code>?! = text;</code> raises an error of your own, which a protected call " +
-      "catches like any other. A server keeps running when one request fails, and a program can skip a " +
+      "catches like any other. <code>?{ … }</code> protects a whole block the same way, and " +
+      "<code>|| { … }</code> after it runs only when something inside failed; what the block did before " +
+      "the error stays done. A server keeps running when one request fails, and a program can skip a " +
       "bad line of its input and go on.",
     "An ARRAY keeps the size it was made with. A LIST grows: <code>[x ; *]</code> makes an empty one " +
       "(<code>x</code> only gives the type of its items), <code>v[] = x;</code> adds at the end, and " +

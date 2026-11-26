@@ -1,0 +1,5 @@
+// a replacement returns what the method it replaces returns: a value, not nothing
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+PESSOA.rotulo(p = PESSOA()) { : p.nome; }
+ALUNO.rotulo(a = ALUNO()) { >> a.turma; }

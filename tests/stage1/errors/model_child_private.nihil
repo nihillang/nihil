@@ -1,0 +1,5 @@
+// a parent's private field stays private to the parent
+PESSOA = @[nome: STRING(20); _nascimento: INT(4)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+ALUNO.ano(a = ALUNO()) { : a._nascimento; }
+>> ALUNO("Ana", 2008, "3B").ano();

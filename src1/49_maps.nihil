@@ -73,7 +73,8 @@ map_literal() {
     op_push(R_AX);                            // push rax (key)
     expect(':', "':' between the key and the value ({key: value})");
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
-    vt = expression();
+    vt = type_only_record(false);          // {k: NAME() ; n} of an abstract model: only the type
+    vt < 0 { vt = expression(); }
     !value_ok(vt) {
         restore_pos(pi, pl, pn, pli);
         error_start();
@@ -183,7 +184,7 @@ map_assign(k = 0, t = 0) {
     }
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
-    u != map_val(t) && u != TYPE_UNKNOWN { map_mismatch("value", t, u, pi, pl, pn, pli); }
+    !element_accepts(map_val(t), u) && u != TYPE_UNKNOWN { map_mismatch("value", t, u, pi, pl, pn, pli); }
     op_push(R_AX);
     emit_kind(map_kind(t));
     call_prelude("__nihil_map_set", 32);   // (map, key, value, kind)
@@ -334,7 +335,7 @@ list_assign(k = 0, t = 0) {
         expect('=', "'=' (v[] = value;)");
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         u = expression();
-        t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && u != list_elem(t) { list_mismatch(k, t, u, pi, pl, pn, pli); }
+        t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && !element_accepts(list_elem(t), u) { list_mismatch(k, t, u, pi, pl, pn, pli); }
         op_push(R_AX);
         list_call(t, "__nihil_list_push", 16);
         expect(';', "';'");
@@ -346,7 +347,7 @@ list_assign(k = 0, t = 0) {
     expect('=', "'='");
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
-    t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && u != list_elem(t) { list_mismatch(k, t, u, pi, pl, pn, pli); }
+    t != TYPE_UNKNOWN && u != TYPE_UNKNOWN && !element_accepts(list_elem(t), u) { list_mismatch(k, t, u, pi, pl, pn, pli); }
     op_push(R_AX);
     list_call(t, "__nihil_list_set", 24);
     expect(';', "';'");

@@ -1,0 +1,11 @@
+// The example 1 of NIHIL-AGENTS.md (the short reference the IDE gives its agents): keep both in sync
+n = 0; total = 0; best = -1;
+<< n;
+i = 0;
+* i < n {
+    v = 0; << v;
+    v > best { best = v; }
+    v % 2 == 0 { total = total + v; } || v < 0 { total = total - 1; } || { }
+    i = i + 1;
+}
+>> total; >> "\n"; >> best; >> "\n";

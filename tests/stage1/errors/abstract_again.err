@@ -1,0 +1,1 @@
+ROUND is abstract (it does not implement area, which ROUND leaves abstract)

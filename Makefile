@@ -178,4 +178,17 @@ build/ide-server: build/nihilc1 ide/server.nihil
 clean:
 	rm -rf build
 
-.PHONY: all runtime runtime-check asm-check seedcheck test test1 test1-O0 compare fixedpoint floatcheck gcstress ide clean
+# -profile (Linux, docs/profiling.md): tests/profile/busy.nihil spends most of its time in spin, and
+# words calls the runtime to join texts; the report must say so
+profilecheck: build/nihilc1
+	@mkdir -p build/profile && rm -f build/profile/nihil-profile.*
+	@printf '%s\n' "-profile $(CURDIR)/tests/profile/busy.nihil" | build/nihilc1 > build/profile/busy && chmod 755 build/profile/busy
+	@cd build/profile && ./busy > out.txt 2> err.txt
+	@grep -q '^nihil: profile in nihil-profile\.[0-9]*$$' build/profile/err.txt || { echo "profile: no profile written" >&2; cat build/profile/err.txt >&2; exit 1; }
+	@./nihilc1.sh tools/profile.nihil build/profile/report
+	@ls build/profile/nihil-profile.* | build/profile/report > build/profile/report.txt
+	@awk '/\(self\):/ { getline; exit !($$NF == "spin") }' build/profile/report.txt || { echo "profile: spin is not first" >&2; cat build/profile/report.txt >&2; exit 1; }
+	@awk '/by the method that called it:/ { getline; exit !($$NF == "words") }' build/profile/report.txt || { echo "profile: the runtime's time is not given to words" >&2; cat build/profile/report.txt >&2; exit 1; }
+	@echo "profile: $$(head -1 build/profile/report.txt | cut -d, -f1 | cut -d' ' -f2) samples; spin first, the runtime's time given to words"
+
+.PHONY: all runtime runtime-check asm-check seedcheck test test1 test1-O0 compare fixedpoint floatcheck gcstress profilecheck ide clean

@@ -1,0 +1,5 @@
+// … each of the same type
+PESSOA = @[nome: STRING(12)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+PESSOA.saudar(p = PESSOA(), x = 0) { : p.nome; }
+ALUNO.saudar(a = ALUNO(), x = "") { : a.turma; }

@@ -412,6 +412,64 @@ fail_intrinsic() {
     : TYPE_NONE;
 }
 
+// record.name(…) through a model some descendants replace name in (SPEC §20.10): the receiver,
+// pushed first, is read back from under the arguments; the model in its block header (m + 1, the
+// top 16 bits) picks the call; anything else (k's own models, a record with no model) calls k.
+// Only compares, direct calls and jumps (what the macOS translator takes); every branch ends at
+// one place, where the caller removes the arguments.
+emit_dispatch(k = 0, base = 0, np = 0, dn = 0, dm = [0], dt = [0]) {
+    a = 0;
+    j = 1;
+    np { j < np { a = a + size_param(base + j); } j = j + 1; }
+    op_ld(R_AX, R_SP, a, 1);                // mov rax, [rsp + a]: the receiver
+    op_ld(R_CX, R_AX, -16, 0);              // mov rcx, [rax - 16]
+    op_shri(R_CX, 48);                      // shr rcx, 48: its model + 1
+    jumps = [0 ; dn];
+    j = 0;
+    * j < dn {
+        op_cmpi(R_CX, dm[j] + 1);           // cmp rcx, model + 1
+        jumps[j] = op_jcc(CC_E);            // je its call
+        j = j + 1;
+    }
+    op_call_method(k);                      // call k: every other model
+    ends = [0 ; dn + 1];
+    ends[0] = op_jmp();                     // jmp done
+    j = 0;
+    * j < dn {
+        patch_here(jumps[j]);
+        note_call(dt[j]);
+        op_call_method(dt[j]);              // call the method of model dm[j]
+        ends[j + 1] = op_jmp();
+        j = j + 1;
+    }
+    j = 0;
+    * j <= dn { patch_here(ends[j]); j = j + 1; }
+}
+
+// tok = a model's name: is it "NAME() ; *" (list: an empty LIST) or "NAME() ;" (else: the value of
+// an empty MAP {k: NAME() ; n}) with NAME abstract (SPEC §20.11)? Then the record only gives the
+// type: nothing is made (rax = 0, the sample the literal drops) and the type is returned; else -1,
+// the lexer untouched
+type_only_record(list = false) {
+    tok_type != T_IDENT { : -1; }
+    k = lookup(tok_start, tok_len);
+    !is_model(k) || missing_method(s_extra[k]) < 0 { : -1; }
+    save_lexer();
+    next_token();
+    ok = tok_type == '(';
+    ok { next_token(); ok = tok_type == ')'; }
+    ok { next_token(); ok = tok_type == ';'; }
+    ok && list { next_token(); ok = tok_type == '*'; }
+    back_lexer();
+    drop_lexer();
+    !ok { : -1; }
+    next_token();                        // name → "("
+    next_token();                        // "(" → ")"
+    next_token();                        // ")" → ";"
+    op_zero(R_AX);                          // xor eax, eax: no record
+    : model_type(s_extra[k]);
+}
+
 // postfix ::= primary ( "[" expression "]" | "." field )*
 postfix() {
     : postfix_rest(primary(), false);
@@ -559,6 +617,8 @@ primary_name() {
         k < 0 && name_is(pi, pl, "__nihil_c") { : ccall_intrinsic(false); }
         k < 0 && name_is(pi, pl, "__nihil_c32") { : ccall_intrinsic(true); }
         k < 0 && name_is(pi, pl, "__nihil_cvar") { : ccall_intrinsic(false); }
+        k < 0 && name_is(pi, pl, "__nihil_set_model") { : model_intrinsic(1); }
+        k < 0 && name_is(pi, pl, "__nihil_model_of") { : model_intrinsic(2); }
         k < 0 && name_is(pi, pl, "tools") { : tools_text(); }
         k < 0 && name_is(pi, pl, "call_tool") { : call_tool_call(); }
         is_model(k) { : new_record(k); }
@@ -636,7 +696,8 @@ primary_array() {
     next_token();
     tok_type == ']' { error("'[]' has no type; for an empty array use [0 ; 0]"); }
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
-    t = expression();
+    t = type_only_record(true);            // [NAME() ; *] of an abstract model: only the type
+    t < 0 { t = expression(); }
     !is_element(t) {
         restore_pos(pi, pl, pn, pli);
         error_start();
@@ -660,6 +721,7 @@ primary_array() {
         }
         is_rec(t) {
             // [record ; n]: n independent copies of the record
+            refuse_abstract(t >> 8, "no copies of it are made ([NAME() ; *] is an empty LIST of it)");
             op_push(R_AX);
             push_const(m_schema[t >> 8]);
             call_prelude("__nihil_rec_rep", 24);
@@ -708,6 +770,13 @@ primary_array() {
 // default), calls and removes the arguments. Returns the return type.
 call_method(k = 0, pre = 0) {
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
+    // a dispatch table from model_method_call, taken now: the arguments may hold calls of their own
+    dn = disp_n;
+    disp_n = 0;
+    dm = [0 ; dn];
+    dt = [0 ; dn];
+    j = 0;
+    * j < dn { dm[j] = disp_model[j]; dt[j] = disp_target[j]; j = j + 1; }
     k < 0 {
         restore_pos(pi, pl, pn, pli);
         error_start();
@@ -747,7 +816,7 @@ call_method(k = 0, pre = 0) {
         ai = tok_start; al = tok_len; an = tok_line; ali = tok_lstart;
         u = expression();
         pt = p_type[base + i];
-        !convert(u, pt) {
+        !convert_argument(u, pt) {
             restore_pos(ai, al, an, ali);
             error_start();
             put_str("argument ");
@@ -792,7 +861,11 @@ call_method(k = 0, pre = 0) {
     }
     next_token();                        // consome ")"
     note_call(k);
-    op_call_method(k);                            // call method (patched at the end of the pass)
+    dn == 0 {
+        op_call_method(k);                 // call method (patched at the end of the pass)
+    } || {
+        emit_dispatch(k, base, np, dn, dm, dt);
+    }
     np > 0 {
         total = 0;
         j = 0;
@@ -821,6 +894,7 @@ call_method(k = 0, pre = 0) {
 emit_default(e = 0) {
     b = p_type[e] & ~(TYPE_ARR | TYPE_OPT);
     b & TYPE_REC != 0 {
+        refuse_abstract(b >> 8, "its default here would make one, so pass this argument");
         emit_alloc_record(b >> 8);        // NAME(): a new empty record on every call
         :;
     }

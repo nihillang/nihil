@@ -26,6 +26,33 @@ convert(from_ = 0, to = 0) {
     : false;
 }
 
+// a record of model c where one of model p is expected: the same model, or c descends from p
+// (CHILD = @[PARENT; …], SPEC §20.8). Plain records only: never an ARRAY, LIST, MAP or optional
+// of them, so a collection of a child is never taken for a collection of its parent.
+record_subtype(c = 0, p = 0) {
+    !is_rec(c) || !is_rec(p) { : false; }
+    : c == p || descends(c >> 8, p >> 8);
+}
+
+// an explicit argument for a parameter of type to (SPEC §20.9): what convert() accepts, and a
+// child's record where its parent (or the parent's optional) is expected. The parameter's type
+// comes from its default, so accepting a child here never changes a type the compiler infers.
+convert_argument(from_ = 0, to = 0) {
+    convert(from_, to) { : true; }
+    !is_opt(from_) && record_subtype(from_, base_opt(to)) {
+        is_opt(to) { op_load(OP_IMM, R_DX, 1); }      // mov edx, 1: present
+        : true;
+    }
+    is_opt(from_) && is_opt(to) && record_subtype(base_opt(from_), base_opt(to)) { : true; }   // presence kept
+    : false;
+}
+
+// a value stored into an element of a collection whose element type is el (v[i] = x, l[] = x,
+// m[k] = x): the same type, or a child's record where its parent is the element type
+element_accepts(el = 0, v = 0) {
+    : v == el || record_subtype(v, el);
+}
+
 // bytes a parameter takes on the stack
 size_param(e = 0) {
     is_opt(p_type[e]) { : 16; }

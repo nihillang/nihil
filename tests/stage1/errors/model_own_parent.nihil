@@ -1,0 +1,2 @@
+// a model is not its own parent
+PESSOA = @[PESSOA; nome: STRING(20)];

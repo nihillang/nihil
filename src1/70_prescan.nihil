@@ -109,6 +109,8 @@ try_method(ns = 0, nl = 0) {
                     next_token();
                     declare = tok_type == '{';
                     searching = false;
+                    pend_abstract = false;
+                    declare && ns >= 0 { abstract_ahead(); }    // a model's method: { ... }?
                 }
             }
             searching { next_token(); }
@@ -116,10 +118,45 @@ try_method(ns = 0, nl = 0) {
     }
     back_lexer();
     declare {
+        ab = pend_abstract;
+        at = pend_type;
         register_method(ns, nl);
+        ab {
+            k = lookup(ns, nl);
+            s_abstract[k] = true;
+            s_type[k] = at;                   // the return type is the example's, not inferred
+        }
         back_lexer();
     }
     drop_lexer();
+}
+
+// tok = "{" of a model's method: is the body "{ ... }" or "{ ... : example; }"? (SPEC §20.11) Sets
+// pend_abstract and pend_type (TYPE_NONE: returns nothing). The example is read as a parameter's
+// default is (a literal, NAME(), [x]), never compiled: NAME() of an abstract model makes nothing.
+// Anything else after "..." is the pause it always was ("{ ... 500; … }").
+abstract_ahead() {
+    next_token();
+    tok_type != T_PAUSE { :; }
+    next_token();
+    tok_type == '}' { pend_abstract = true; pend_type = TYPE_NONE; :; }
+    tok_type != ':' { :; }
+    next_token();
+    arr = false;
+    tok_type == '[' { arr = true; next_token(); }
+    read_literal();
+    ty = lit_type;
+    next_token();
+    arr {
+        tok_type != ']' { error_expected("']' after the example of what the abstract method returns"); }
+        next_token();
+        ty = ty | TYPE_ARR;
+    }
+    tok_type != ';' { error_expected("';' after the example of what the abstract method returns ({ ... : 0.0; })"); }
+    next_token();
+    tok_type != '}' { error_expected("'}': an abstract method's body is { ... } or { ... : an example of what it returns; }"); }
+    pend_abstract = true;
+    pend_type = ty;
 }
 
 // tok = name of the declaration (ns, nl: the whole name, as in try_method)
@@ -220,6 +257,47 @@ model_method_check(k = 0, ns = 0, nl = 0) {
         put_str("()");
         error_end();
     }
+    is_model(km) { no_replacement(s_extra[km], ns + d + 1, nl - d - 1, ns, nl, k); }
+}
+
+// m descends from a (a parent, its parent, …)?
+descends(m = 0, a = 0) {
+    p = m_parent[m];
+    * p >= 0 { p == a { : true; } p = m_parent[p]; }
+    : false;
+}
+
+// MODEL.name may replace a method its parent (or an ancestor) declares, and be replaced by a
+// child's, when they take the same parameters after the first (the receiver, each declaration's own
+// model): a call through the parent then runs the record's real model's (SPEC §20.10). The return
+// types are compared once they settle (check_replacements). Both orders are checked, since methods
+// are registered in the order they are written. k: the method being registered.
+no_replacement(m = 0, start = 0, n = 0, ns = 0, nl = 0, k = 0) {
+    o = 0;
+    * o < n_models {
+        (descends(m, o) || descends(o, m)) {
+            ko = lookup_model_method(m_sym[o], start, n);
+            ko >= 0 && ko != k && !same_parameters(k, ko) {
+                child = k; parent = ko;
+                descends(o, m) { child = ko; parent = k; }     // the child's method was written first
+                error_start();
+                put_source(s_ofs[child], s_len[child]);
+                put_str(" replaces ");
+                put_source(s_ofs[parent], s_len[parent]);
+                put_str(", so it takes the same parameters after the first (the same number, each of the same type)");
+                error_end();
+            }
+        }
+        o = o + 1;
+    }
+}
+
+// two model methods with the same parameters after the first
+same_parameters(a = 0, b = 0) {
+    s_nparam[a] != s_nparam[b] { : false; }
+    i = 1;
+    * i < s_nparam[a] { p_type[s_extra[a] + i] != p_type[s_extra[b] + i] { : false; } i = i + 1; }
+    : true;
 }
 
 // default literal: tok = start → lit_type, lit_value; the lexer stays on the

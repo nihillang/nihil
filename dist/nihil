@@ -3,6 +3,9 @@
 #
 #   nihil PROGRAM.nihil [OUT]        compile into a native executable (OUT: PROGRAM without .nihil)
 #   nihil run PROGRAM.nihil [ARG…]   compile into a temporary file and run it
+#   nihil profile PROGRAM.nihil [ARG…]
+#                                    run it as run does, sampled every 10 ms of CPU, then report
+#                                    where the time went, on stderr (Linux x86_64 for now)
 #   nihil ide [--no-window]          the IDE, in an app window (workspace: ~/Nihil); its server
 #                                    runs in the background (--foreground: in this terminal)
 #   nihil ide stop                   stop the IDE's server
@@ -31,6 +34,7 @@ usage() {
     echo "usage: nihil PROGRAM.nihil [OUT] | nihil run PROGRAM.nihil [ARG…] | nihil ide [stop] | nihil version" >&2
     exit 2
 }
+with_profile=false
 
 # opens URL in an app window (a browser with --app: no tabs, no address bar), or in the default browser
 open_window() {
@@ -199,6 +203,7 @@ compile() {
     [ -f "$src" ] && [ -r "$src" ] || { echo "nihil: could not open $src" >&2; exit 1; }
     option=""
     [ "${NIHIL_O0:-0}" = 1 ] && option="-O0 "
+    [ "$with_profile" = true ] && option="$option-profile "
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
     if [ -x "$lib/nihilc1-native" ]; then
@@ -225,7 +230,7 @@ case $1 in
         echo "nihil $(cat "$home/VERSION" 2>/dev/null || echo unknown)"
         ;;
     help|--help|-h)
-        sed -n '2,12p' "$self" | sed 's/^# \{0,1\}//'
+        sed -n '2,15p' "$self" | sed 's/^# \{0,1\}//'
         ;;
     ide)
         shift
@@ -240,6 +245,34 @@ case $1 in
         set +e
         "$dir/program" "$@"
         code=$?
+        rm -rf "$dir"
+        exit $code
+        ;;
+    profile)
+        # built with -profile, the program writes nihil-profile.PID (PID: its process id) in this
+        # directory when it ends; tools/profile.nihil, built here, reads it
+        [ $# -ge 2 ] || usage
+        if [ ! -x "$lib/nihilc1" ]; then
+            echo "nihil: profile works on Linux x86_64 for now" >&2
+            exit 2
+        fi
+        src=$2
+        shift 2
+        dir=$(mktemp -d)
+        with_profile=true
+        compile "$src" "$dir/program"
+        with_profile=false
+        compile "$home/share/nihil/tools/profile.nihil" "$dir/report"
+        set +e
+        "$dir/program" "$@" 0<&0 &
+        pid=$!
+        wait $pid
+        code=$?
+        if [ -f "nihil-profile.$pid" ]; then
+            printf '%s\n' "nihil-profile.$pid" | "$dir/report" >&2
+        else
+            echo "nihil: the program wrote no profile (did it end by a signal?)" >&2
+        fi
         rm -rf "$dir"
         exit $code
         ;;

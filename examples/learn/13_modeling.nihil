@@ -53,3 +53,34 @@ i = 0;
 // a join inside a query: the city of each sale's customer
 lajeado = sales.where((CUSTOMER @{customer} CUSTOMERS).city == "Lajeado");
 >> "sold in Lajeado: " + $lajeado.sum(total) + "\n";
+
+// a field whose name starts with _ is private: only the model's own methods read or change it
+WALLET = @[owner: STRING(12); _cents: INT(8)];
+WALLET.pay(w = WALLET(), cents = 0) {
+    cents > w._cents { ?! = "not enough: " + $w._cents + " cents"; }
+    w._cents = w._cents - cents;
+}
+WALLET.left(w = WALLET()) { : w._cents; }
+wallet = WALLET("Ana", 5000);
+wallet.pay(1200);
+?wallet.pay(9000);                      // refused by the method; wallet._cents = 0; would not compile
+>> "left: " + $wallet.left() + " (" + ?! + ")\n";
+
+// a model can start from another: SAVINGS has WALLET's fields first, and WALLET's methods
+SAVINGS = @[WALLET; rate: FLOAT(5)];
+savings = SAVINGS("Bia", 10000, 0.5);
+savings.pay(2500);
+>> savings.owner + ": " + $savings.left() + " left, at " + $savings.rate + "%\n";
+
+// a SAVINGS goes where a WALLET is expected: as an argument, or into a list of WALLET
+wallets = [WALLET() ; *];
+wallets[] = wallet;
+wallets[] = savings;
+in_all = 0;
+wallets : w { in_all = in_all + w.left(); }
+>> "in all wallets: " + $in_all + "\n";
+
+// SAVINGS replaces WALLET's describe: a call through a WALLET runs the record's own model's
+WALLET.describe(w = WALLET()) { : w.owner + ": " + $w.left(); }
+SAVINGS.describe(s = SAVINGS()) { : s.owner + ": " + $s.left() + " at " + $s.rate + "%"; }
+wallets : w { >> w.describe() + "\n"; }

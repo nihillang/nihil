@@ -130,6 +130,7 @@ RT_UNPROTECT = 250;
 RT_ERR_TEXT = 255;      // ?! → rax = a new STRING
 RT_FAIL = 260;          // rax = STRING: a runtime error with that message
 RT_CONCAT_INT = 265;    // rax = STRING, rcx = INT → "…" + $n in one block
+RT_PROF_START = 270;    // rax = STRING with the symbols: samples until the exit (-profile)
 last_int_text = -1;     // where the code of the last $ of an INT ends (binary fuses it with a "…" +)
 
 // ---- limits (the same as the stage 0 arenas) ----
@@ -354,11 +355,14 @@ m_names = [0 ; MAX_MODEL];    // constant: STRING with the field names separated
 m_title = [0 ; MAX_MODEL];    // constant: STRING with the model's name
 m_key = [0 ; MAX_MODEL];      // the key field (#name), or -1
 m_auto = [false ; MAX_MODEL]; // the key is automatic (#+name): @{}>> numbers a record whose key is 0
+m_parent = [0 ; MAX_MODEL];   // CHILD = @[PARENT; …] (SPEC §20.8): the parent's model, or -1
+m_tagged = [false ; MAX_MODEL]; // in a hierarchy (a parent or a child): its records carry the model (SPEC §20.12)
 n_models = 0;
 f_start = [0 ; MAX_FIELD];
 f_len = [0 ; MAX_FIELD];
 f_type = [0 ; MAX_FIELD];
 f_width = [0 ; MAX_FIELD];
+f_owner = [0 ; MAX_FIELD];    // the model that declared the field (a child repeats its parent's fields)
 n_fields = 0;
 
 // ---- method parameters ----
@@ -410,6 +414,7 @@ call_from = [0 ; MAX_CALLS];   // the calls of this pass: method making it (-1: 
 call_to = [0 ; MAX_CALLS];     // … and method called
 n_calls = 0;
 s_reach = [0 ; MAX_SYM];       // reached from the program in this pass
+s_mend = [0 ; MAX_SYM];        // a method: where its code ends (s_end: where it starts), for -profile
 s_skip = [0 ; MAX_SYM];        // a prelude method left out of this pass (not reached in the last)
 s_kept = [0 ; MAX_SYM];        // left out once and then needed: never left out again
 q_model = -1;                // inside a query: the model whose field names stand for the element
@@ -438,12 +443,23 @@ pv2_line = 0;
 // ---- optimizations (M9) ----
 optimize = true;                 // "-O0 " before the path turns them off (the same bytes as stage 0)
 want_map = false;                // "-map " before the path: where the code ends, on stderr (for the macOS translator)
+want_profile = false;            // "-profile " before the path: the executable samples itself (Linux)
+pos_profile = 0;                 // the rel32 of its "lea rax, [rip + symbols]"
 code_end = 0;                    // where the program's code ends and its constants begin
 REGS = [3, 12, 13, 14, 15];     // rbx, r12 … r15 (preserved by the runtime)
 n_regs = 0;                     // registers in use in the current method
 limit_regs = 0;                // how many the current method saved in its prologue
 candidates = 0;                 // live locals that would fit in a register
 demand = 0;                    // largest number of candidates at the same time (up to 5)
+s_abstract = [false ; MAX_SYM]; // a model's method written { ... } or { ... : example; } (SPEC §20.11)
+pend_abstract = false;          // the prescan saw such a body; pend_type: its return type
+pend_type = 0;
+disp_n = 0;                    // the next call_method dispatches (SPEC §20.10): how many models to test,
+disp_model = [0 ; 1024];       // each one (a descendant of the static model) and the method it runs
+disp_target = [0 ; 1024];
+prot_depth = 0;                // protected blocks ?{ … } open around the code being compiled
+prot_in_method = false;        // the method being compiled has a ?{ … }: its locals stay in memory
+prot_at_top = false;           // the top level has one (this pass): its globals stay in memory
 base_frame = 0;                // bytes of the saved registers, below rbp
 last_target = -1;               // last position some jump points to
 start_assignment = -1;         // the code of an assignment's expression starts here

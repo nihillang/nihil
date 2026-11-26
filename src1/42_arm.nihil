@@ -218,6 +218,23 @@ a_label_l(pos = 0) { a_str("L_"); a_hex(BASE_CODE + pos); }
 a_label(l = 0) { a_str("Lj"); a_num(l); }
 a_label_rt(rt = 0) { a_str("L_"); a_hex(BASE_CODE + SIZE_HEADER + rt); }
 
+// a protected block ?{ … } (cmd_protected_block): its RT_PROTECT, the last operation. A unit with
+// one keeps its slots in memory: what the block changed before an error stays changed (x19 … x26
+// come back as they were at its start, x1 … x8 as they happen to be)
+PROT_BLOCKS = 4096;
+prot_ops = [0 ; PROT_BLOCKS];
+n_prot_ops = 0;
+arm_prot_block() {
+    n_prot_ops >= PROT_BLOCKS { error("too many protected blocks for -arm"); }
+    prot_ops[n_prot_ops] = n_ops - 1;
+    n_prot_ops = n_prot_ops + 1;
+}
+is_prot_block(i = 0) {
+    q = 0;
+    * q < n_prot_ops { prot_ops[q] == i { : true; } q = q + 1; }
+    : false;
+}
+
 // a method k starts here (cmd_method): a label for the text, and where its operations start
 METHS = 1 << 16;
 meth_k = [0 ; 1];              // each method's symbol
@@ -249,7 +266,13 @@ arm_call_method(i = 0) {
     n = meth_slots(k);
     !in_regs(k) { vs_flush(); a_ins("bl Lm"); a_num(k); a_nl(); : 1; }   // (its arguments on the stack, all of them)
     n > 0 && (i + 1 >= n_ops || op_k[i + 1] != OP_STACK || op_v[i + 1] != 8 * n) {
-        error("internal error: -native: a call without the release of its arguments");
+        // a call the release does not follow (a dispatch: one of several calls, then the release):
+        // its arguments, all pushed, into the registers too; the release drops them later
+        vs_flush();
+        q = 0;
+        * q < n { a_ldst_n(false, 1 + q, 8, 28, 8 * (n - 1 - q)); q = q + 1; }
+        a_ins("bl Lm"); a_num(k); a_nl();
+        : 1;
     }
     virt = n_vs;
     virt > n { virt = n; }
@@ -589,6 +612,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
                 v == R_BP || o == R_BP { promote_off = true; }
             }
             k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { calls = true; }
+            k == OP_CALL_RT && v == RT_PROTECT && is_prot_block(i) { promote_off = true; }
             k == OP_CALL_RT && v != RT_DIV && v != RT_MOD { calls = true; }
             k == OP_LOCAL && o != 0 && v >= 0 { leaf_bad = true; }   // an optional parameter: two slots, in memory
             k == OP_LOCAL && o == 0 { slot_use(R_BP, v, w); }
@@ -802,7 +826,7 @@ rt_reads(rt = 0) {
     rt == RT_ERR_TEXT || rt == RT_READ_BYTE { : 0; }
     rt == RT_PRINT_INT || rt == RT_PRINT_BOOL || rt == RT_PRINT_STR || rt == RT_ERROR_INT || rt == RT_ERROR_BOOL || rt == RT_ERROR_STR { : L_AX; }
     rt == RT_WRITE_BYTE || rt == RT_INT_TEXT || rt == RT_TEXT || rt == RT_FAIL || rt == RT_READ_FILE || rt == RT_READ_FILE_OPT { : L_AX; }
-    rt == RT_SLEEP || rt == RT_SYSCALL || rt == RT_FD_CLOSE || rt == RT_NET_ACCEPT { : L_AX; }
+    rt == RT_SLEEP || rt == RT_SYSCALL || rt == RT_FD_CLOSE || rt == RT_NET_ACCEPT || rt == RT_PROF_START { : L_AX; }
     rt == RT_PRINT_INT_OPT || rt == RT_PRINT_BOOL_OPT || rt == RT_PRINT_STR_OPT { : L_AX | L_DX; }
     rt == RT_ERROR_INT_OPT || rt == RT_ERROR_BOOL_OPT || rt == RT_ERROR_STR_OPT || rt == RT_UNPROTECT { : L_AX | L_DX; }
     rt == RT_TRUNCATE || rt == RT_TRUNCATE_NS { : L_AX | L_DX; }
@@ -1628,6 +1652,7 @@ rt_name(rt = 0) {
     rt == RT_ERR_TEXT { : "err_text"; }
     rt == RT_FAIL { : "fail"; }
     rt == RT_CONCAT_INT { : "concat_int"; }
+    rt == RT_PROF_START { : "prof_start"; }
     : "unknown";
 }
 

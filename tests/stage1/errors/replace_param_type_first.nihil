@@ -1,0 +1,5 @@
+// … also when the replacement is written first
+PESSOA = @[nome: STRING(12)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+ALUNO.saudar(a = ALUNO(), x = "") { : a.turma; }
+PESSOA.saudar(p = PESSOA(), x = 0) { : p.nome; }
