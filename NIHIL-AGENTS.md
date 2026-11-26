@@ -82,6 +82,7 @@ pos = find([4, 8, 15], 8) || -1;
 - MAP: `m = {"a": 1}; m["b"] = 2; c = m["z"] || 0; m["a"] = _;` (delete); `m.keys()`, `m.contains(k)`.
 - Records: `P = @[code: INT(6); name: STRING(12)];` (top level) then `p = P(7, "x"); p.name`.
   A field named `_x` is private: only `P.method(p = P(), …) { … }` reads or changes `p._x`.
+  `C = @[P; extra: INT(3)];` starts from P's fields and methods (P declared before); a C is not a P (not passed where P is expected).
 
 ## Library (method calls on values; each returns a new value)
 

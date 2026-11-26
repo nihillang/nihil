@@ -1,0 +1,24 @@
+// CHILD = @[PARENT; …] (SPEC §20.8): the parent's fields first, then its own; the parent's methods too
+PESSOA = @[#id: INT(4); nome: STRING(20); _nascimento: INT(4)];
+PESSOA.idade(p = PESSOA(), ano = 0) { : ano - p._nascimento; }      // the private field: its own method
+PESSOA.rotulo(p = PESSOA()) { : $p.id + " " + p.nome; }
+
+ALUNO = @[PESSOA; turma: STRING(4); media: FLOAT(5)];
+ALUNO.situacao(a = ALUNO()) { a.media >= 7.0 { : "aprovado"; } : "recuperacao"; }
+MONITOR = @[ALUNO; horas: INT(3)];      // three levels
+
+a = ALUNO(1, "Ana", 2008, "3B", 8.5);
+>> a.rotulo() + ", " + $a.idade(2026) + " anos, " + a.turma + ", " + a.situacao() + "\n";
+m = MONITOR(2, "Bia", 2007, "3A", 6.0, 10);
+>> m.rotulo() + ": " + m.situacao() + ", " + $m.horas + " h, " + $m.idade(2026) + "\n";
+m.nome = "Bia Souza";
+>> m.rotulo() + "\n";
+
+// the child has a table of its own: its line is the parent's followed by its fields, and the key is the parent's
+@>> "build/model_reuse_alunos.dat", [a, ALUNO(3, "Caio", 2009, "3B", 5.5)];
+rows = ALUNO @ "build/model_reuse_alunos.dat";
+>> $#rows + " " + (rows.first(media >= 7.0) || ALUNO()).nome + " " + $rows.sum(media) + "\n";
+c? = ALUNO @?{3} "build/model_reuse_alunos.dat";
+>> (c || ALUNO()).nome + "\n";
+>> a.to_json() + "\n";
+>> $a;

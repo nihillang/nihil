@@ -112,6 +112,38 @@ parse_model() {
     next_token();                        // → "@"
     next_token();                        // → "["
     next_token();
+    // CHILD = @[PARENT; …]: the parent's fields come first, in its order and with its key, so its
+    // methods read a child as they read a parent (SPEC §20.8). The parent is declared before.
+    m_parent[m] = -1;
+    tok_type == T_IDENT && (peek_type() == ';' || peek_type() == ']') {
+        kp = lookup(tok_start, tok_len);
+        !is_model(kp) || s_extra[kp] == m {
+            error_start();
+            put_str("'");
+            put_source(tok_start, tok_len);
+            put_str("' is not a data model declared before this one (a parent comes first: CHILD = @[PARENT; field: TYPE(width)])");
+            error_end();
+        }
+        p = s_extra[kp];
+        m_parent[m] = p;
+        j = 0;
+        * j < m_n[p] {
+            e = m_first[p] + j;
+            n_fields >= MAX_FIELD { error("too many fields in the data models"); }
+            f_start[n_fields] = f_start[e];
+            f_len[n_fields] = f_len[e];
+            f_type[n_fields] = f_type[e];
+            f_width[n_fields] = f_width[e];
+            f_owner[n_fields] = f_owner[e];
+            n_fields = n_fields + 1;
+            j = j + 1;
+        }
+        m_n[m] = m_n[p];
+        m_key[m] = m_key[p];
+        m_auto[m] = m_auto[p];
+        next_token();
+        tok_type == ';' { next_token(); }
+    }
     * tok_type != ']' {
         is_key = tok_type == '#';
         is_auto = false;
@@ -188,6 +220,7 @@ parse_model() {
         f_len[n_fields] = fl;
         f_type[n_fields] = ty;
         f_width[n_fields] = w;
+        f_owner[n_fields] = m;
         n_fields = n_fields + 1;
         m_n[m] = m_n[m] + 1;
         tok_type == ';' {
@@ -272,7 +305,7 @@ field_index(t = 0) {
 // token is the field's name, where the error points
 check_private(m = 0, e = 0) {
     source[f_start[e]] != '_' { :; }
-    km = m_sym[m];
+    km = m_sym[f_owner[e]];                 // private to the model that declared it, not its children
     ml = s_len[km];
     mc = method_current;
     mc >= 0 && s_len[mc] > ml + 1 && source[s_ofs[mc] + ml] == '.' && same_source(s_ofs[mc], s_ofs[km], ml) { :; }

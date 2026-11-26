@@ -559,6 +559,8 @@ library_call(t = 0) {
 model_method_call(t = 0, ns = 0, nl = 0) {
     km = m_sym[t >> 8];
     k = lookup_model_method(km, ns, nl);
+    p = m_parent[t >> 8];                    // a method a parent declared (SPEC §20.8)
+    * k < 0 && p >= 0 { k = lookup_model_method(m_sym[p], ns, nl); p = m_parent[p]; }
     k < 0 {
         error_start();
         put_source(s_ofs[km], s_len[km]);

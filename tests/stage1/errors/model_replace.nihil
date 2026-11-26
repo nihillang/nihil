@@ -1,0 +1,5 @@
+// a child does not replace a method it inherits (no dispatch yet)
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+PESSOA.rotulo(p = PESSOA()) { : p.nome; }
+ALUNO.rotulo(a = ALUNO()) { : a.turma; }
