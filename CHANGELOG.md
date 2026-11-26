@@ -4,6 +4,11 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## Unreleased
+
+- FLOAT → text takes its fast way, with exact integers, for numbers with up to 17 decimals (it was up to 3) from about 10^-5 to 2^53: ratios, percentages and measures no longer go through the general algorithm and its big integers. The text is the same (`make floatcheck`: 501,117 cases against Python and against the general algorithm, now with 4 to 17 decimals among them)
+  - *Why:* A profile of a real program (a planogram generator writing JSON) showed 12% of its time in the general algorithm; it runs 8% faster (6.39 → 5.89 s), with the same output byte for byte
+
 ## v4.9.1
 
 Three fixes in the runtime, found while researching threads for Nihil and measuring the planogram on its Linux server.
