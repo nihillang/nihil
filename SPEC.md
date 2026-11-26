@@ -745,7 +745,9 @@ inclusions (§16). `build/runtime.nihil` is generated from `runtime.bin`, and
      itself);
   3. `nihilc2`, without optimizations, produces exactly `nihilc1` again.
 - **Protocol:** `nihilc1` reads the path of the program from stdin (one line,
-  optionally prefixed with `-O0 `), reads the files itself with `@`, writes the
+  optionally prefixed with options: `-O0 ` (no optimizations), `-map ` (where the runtime,
+  the code and the constants end, on stderr: the macOS translator reads it) and `-profile `
+  (the executable samples where its time goes: docs/profiling.md)), reads the files itself with `@`, writes the
   executable to stdout and errors to stderr (with exit code 1). `nihilc1.sh` gives
   it the same command line as `nihilc`.
 - `nihilc1` reports compile errors with `!>>` and exits with `:: 1;`.

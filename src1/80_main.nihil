@@ -2,6 +2,58 @@
 // Main program: loads the source, compiles in passes and writes the ELF
 // =============================================================================
 
+// -profile: the symbols the executable writes with its samples, a line each, "start end name"
+// (addresses, decimal): the runtime's routines, each method of this pass and the top level
+// (the rest of the program's code, around the methods)
+profile_symbols() {
+    base = BASE_CODE + SIZE_HEADER;
+    const_init();
+    i = 0;
+    start = 0;
+    w = 0;
+    n = #runtime_sym_names;
+    * i <= n {
+        i == n || runtime_sym_names[i] == ' ' {
+            const_put_num(base + runtime_sym_ofs[w]);
+            const_put_byte(' ');
+            w + 1 < #runtime_sym_ofs { const_put_num(base + runtime_sym_ofs[w + 1]); } || { const_put_num(base + #runtime_bin); }
+            const_put_byte(' ');
+            j = start;
+            * j < i { const_put_byte(runtime_sym_names[j]); j = j + 1; }
+            const_put_byte(10);
+            w = w + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    k = 0;
+    * k < n_sym {
+        s_flags[k] & FLAG_METHOD != 0 && s_skip[k] == 0 && s_end[k] > 0 && s_mend[k] > s_end[k] {
+            const_put_num(BASE_CODE + s_end[k]);
+            const_put_byte(' ');
+            const_put_num(BASE_CODE + s_mend[k]);
+            const_put_byte(' ');
+            const_put_source(s_ofs[k], s_len[k]);
+            const_put_byte(10);
+        }
+        k = k + 1;
+    }
+    const_put_num(base + #runtime_bin);
+    const_put_byte(' ');
+    const_put_num(BASE_CODE + size_code);
+    const_put_str(" (top level)");
+    const_put_byte(10);
+    register_fixup(pos_profile, const_close(), false);
+}
+
+const_put_num(v = 0) {
+    v == 0 { const_put_byte('0'); :; }
+    d = [0 ; 20];
+    c = 0;
+    * v > 0 { d[c] = v % 10; v = v / 10; c = c + 1; }
+    * c > 0 { c = c - 1; const_put_byte('0' + d[c]); }
+}
+
 compile() {
     prescan();
     const_base = size_const;
@@ -148,6 +200,12 @@ one_pass() {
     emit(0xE8);                            // call inicializa_globais
     pos_init = size_code;
     emit_d(0);
+    want_profile {
+        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + symbols] (made at the end of the pass)
+        pos_profile = size_code;
+        emit_d(0);
+        emit_call_rt(RT_PROF_START);
+    }
 
     init_lexer();
     next_token();
@@ -184,6 +242,7 @@ one_pass() {
         i = i + 1;
     }
     emit(0xC3);                            // ret
+    want_profile { profile_symbols(); }
     emit_constantes();
     close_elf();
 }

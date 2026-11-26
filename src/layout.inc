@@ -83,6 +83,18 @@
 ; Mac's translated runtime runs on an emulated stack in a data area of its own: its start sets them.
 %define PLAT_STACK_TOP  (BASE_DATA + 0x6C8)
 %define PLAT_DATA_END   (BASE_DATA + 0x6D0)
+; the profiler (nihil -profile, Linux): on (1) while it samples, the buffer of samples, the next
+; free qword in it and where it is full, the program's symbols (a STRING), and the code: the start
+; of the image, the end of the runtime and the symbols, after the code (return addresses are below)
+%define PROF_ON         (BASE_DATA + 0x6D8)
+%define PROF_BUF        (BASE_DATA + 0x6E0)
+%define PROF_POS        (BASE_DATA + 0x6E8)
+%define PROF_END        (BASE_DATA + 0x6F0)
+%define PROF_SYMS       (BASE_DATA + 0x6F8)
+%define PROF_LO         (BASE_DATA + 0x700)
+%define PROF_MID        (BASE_DATA + 0x708)
+%define PROF_HI         (BASE_DATA + 0x710)
+%define PROF_TOP        (BASE_DATA + 0x718)    ; the top of the stack (frames are below it)
 %define OUTPUT_BUF       (BASE_DATA + 0x1000)   ; standard output buffer
 %define OUTPUT_CAP       65536
 %define IN_BUF         (BASE_DATA + 0x11000)  ; standard input buffer
@@ -144,5 +156,6 @@
 %define RT_ERR_TEXT         255 ; → rax = ?!, a new STRING
 %define RT_FAIL             260 ; rax = STRING: a runtime error with that message
 %define RT_CONCAT_INT       265 ; rax = STRING, rcx = INT → rax = STRING followed by the INT in decimal
+%define RT_PROF_START       270 ; rax = STRING with the symbols: samples every 10 ms of CPU until the exit (nihil -profile)
 %define RT_NET_CONNECT      240 ; rax = IPv4 address (a.b.c.d as a << 24 | … | d), rcx = port → rax = connected socket (or -errno)
 %define RT_SYSCALL          210 ; rax = ARRAY of INT [n, a1 … a6] (missing ones 0) → rax = what the kernel gave

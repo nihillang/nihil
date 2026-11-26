@@ -115,6 +115,14 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   <li><b>The clock</b> is <code>std:time</code>'s <code>now_us()</code>, in microseconds. The operations on one record are timed
   thousands at a time (20 000 reads, 300 writes) and divided; the reads are also timed 1 000 at a time, for the median.</li>
 </ul>
+<h2 id="profile">Your own program</h2>
+<p><code>nihil profile program.nihil</code> runs it as <code>nihil run</code> does, sampled every 10 ms of CPU, and then
+reports where the time went: by method and by runtime routine, the runtime's time (allocating, collecting, joining texts)
+charged to the method that asked for it, and each method with what it called. It costs under 1%, so a real run can be
+measured as it is (Linux for now; <a href="https://github.com/nihillang/nihil/blob/main/docs/profiling.md">docs/profiling.md</a>).
+On a program that writes 50 MB of JSON, it showed one method building each line with about ninety <code>+</code>,
+each copying the text so far; joining the parts once made the whole run 25% faster.</p>
+
 <p>The numbers come from the runs of 25 November 2026, with Nihil 4.8.0. The rules behind them are in
 <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md#20-data-models-and-records-stage-1">SPEC §20</a>.</p>
 </div></main>
