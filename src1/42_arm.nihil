@@ -85,8 +85,8 @@ a_rn(r = 0) {
     : 0;
 }
 
-a_x(n = 0) { a_str("x"); a_num(n); }
-a_w(n = 0) { a_str("w"); a_num(n); }
+a_x(n = 0) { n == 31 { a_str("xzr"); :; } a_str("x"); a_num(n); }           // 31: the zero register
+a_w(n = 0) { n == 31 { a_str("wzr"); :; } a_str("w"); a_num(n); }
 a_reg(r = 0) { a_x(a_rn(r)); }
 
 // an x86 condition (its number) → ARM's, after cmp or tst
@@ -210,7 +210,9 @@ arm_text() {
     arm_len = 0;
     arm_native { native_start(); } || { a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl(); }
     promote = arm_native && optimize;
+    lazy = promote;
     promote {
+        live_calc();
         loop_depths();
         unit_slots(0, n_ops, true);        // the program's own code: all but the methods
         u = 0;
@@ -221,6 +223,7 @@ arm_text() {
     i = 0;
     m = 0;                                 // the next method
     * i <= n_ops {
+        lazy && at_lab[i] != 0 { pend_flush(live_in[i]); }   // (before a unit's registers change)
         promote && m < n_meths && i == meth_lo[m] { unit_slots(meth_lo[m], meth_hi[m], false); }
         promote && m < n_meths && i == meth_hi[m] {
             u = 0;
@@ -229,9 +232,12 @@ arm_text() {
             m = m + 1;
         }
         * j < n_binds && lab_op[binds[j]] <= i { arm_bind(binds[j]); j = j + 1; }
-        i < n_ops { arm_op(i); }
-        i = i + 1;
+        step = 1;
+        ARM_DEBUG && i < n_ops { a_str("// "); a_num(op_k[i]); a_str(" r"); a_num(op_r[i]); a_str(" v"); a_num(op_v[i]); a_str(" o"); a_num(op_o[i]); a_str(" live "); a_num(live_in[i]); a_nl(); }
+        lazy && i < n_ops { step = arm_lazy(i); } || i < n_ops { arm_op(i); }
+        i = i + step;
     }
+    lazy { arm_stubs(); }
     arm_native { native_end(); }
 }
 
@@ -365,6 +371,629 @@ pslot(base = 0, disp = 0) {
     s = -disp / 8;
     s >= SLOTS { : 0; }
     : unit_reg[s];
+}
+
+// ---- -native: values kept where they are, until they are needed ----
+// The operations keep x86's model: a value goes into rax or rcx (x9, x10) before each use. Here (with
+// promote), a constant, or a local in a register, loaded into rax, rcx, rdx, rsi or rdi is not copied
+// at once: it waits (pend_k, pend_v), and the operations that read that register read it where it is
+// (cmp x24, #1000; ldr x9, [x25, #8]). It is copied only where it is still needed (live) at a label,
+// a jump's target or an operation that reads registers this does not follow. live_in: for each
+// operation, which of rax, rcx, rdx, rsi, rdi and the flags it, or an operation after it, reads
+// before writing (x86's meaning of each operation); a comparison whose 0 or 1 is only tested by a
+// jump becomes the jump on its condition (cmp ; b.lt), and a test of a register before a jump cbz/cbnz.
+L_AX = 1;
+L_CX = 2;
+L_DX = 4;
+L_SI = 8;
+L_DI = 16;
+L_FL = 32;
+L_ALL = 63;
+live_in = [0 ; 1];
+at_lab = [0 ; 1];              // 1: a label is bound before the operation (or a method starts or ends)
+op_rd = 0;                     // op_rw's answer
+op_wr = 0;
+pend_k = [0 ; 16];             // by x86 register: 0 nothing waits, 1 an ARM register, 2 a constant
+pend_v = [0 ; 16];
+lazy = false;
+ARM_DEBUG = false;              // each operation as a comment (k, r, v, o, live_in) before its text
+// pushes of values waiting (a constant, or a register no operation writes before the pop) are kept
+// here and become values waiting at their pop: push rax … pop rcx is no memory at all; anything that
+// touches the stack (or a jump, a label, a call) pushes them for real first
+VS = 64;
+vs_k = [0 ; VS];
+vs_v = [0 ; VS];
+n_vs = 0;
+// the jumps to a runtime error that need values still waiting go through a stub (Le<n>), at the end
+STUBS = 1 << 16;
+stub_rt = [0 ; 1];
+stub_k = [0 ; 1];
+stub_v = [0 ; 1];
+n_stubs = 0;
+
+// the bit of an x86 register (0 for the others: never dead, never waiting)
+lbit(r = 0) {
+    r == R_AX { : L_AX; }
+    r == R_CX { : L_CX; }
+    r == R_DX { : L_DX; }
+    r == R_SI { : L_SI; }
+    r == R_DI { : L_DI; }
+    : 0;
+}
+
+// the registers (bits) operation i reads and writes, as x86 means it → op_rd, op_wr
+op_rw(i = 0) {
+    k = op_k[i];
+    r = op_r[i];
+    v = op_v[i];
+    o = op_o[i];
+    lr = lbit(r);
+    b = lbit(o >> 1);
+    mb = lbit((o >> 32) >> 1);
+    op_rd = 0;
+    op_wr = 0;
+    k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO || k == OP_LEA_CONST || k == OP_LEA_FWD || k == OP_RMOVX || k == OP_POP { op_wr = lr; :; }
+    k == OP_LOCAL || k == OP_GLOBAL { op_wr = lr; o == 1 { op_wr = lr | L_DX; } :; }
+    k == OP_REG { op_rd = lbit(v); op_wr = lr; :; }
+    k == OP_F2I { op_wr = lr | L_FL; :; }
+    k == OP_CMP_SET { op_rd = L_AX | L_CX; op_wr = L_AX | L_FL; :; }
+    k == OP_CMP { op_rd = L_AX | L_CX; op_wr = L_FL; :; }
+    k == OP_FCMP_SET { op_wr = L_AX | L_CX | L_FL; :; }
+    k == OP_ALU || k == OP_MUL { op_rd = lr | lbit(o); op_wr = lr | L_FL; :; }
+    k == OP_MULI { op_rd = lbit(o); op_wr = lr | L_FL; :; }
+    k == OP_ADDI || k == OP_SHRI || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG { op_rd = lr; op_wr = lr | L_FL; :; }
+    k == OP_SHL || k == OP_SAR { op_rd = lr | L_CX; op_wr = lr | L_FL; :; }
+    k == OP_CMPI || k == OP_TEST { op_rd = lr; op_wr = L_FL; :; }
+    k == OP_SETCC { op_rd = L_FL; op_wr = lr; :; }
+    k == OP_CMOV { op_rd = L_FL | lr | lbit(o); op_wr = lr; :; }
+    k == OP_ZXB { op_rd = lr; op_wr = lr; :; }
+    k == OP_LD || k == OP_LEA { op_rd = b; op_wr = lr; :; }
+    k == OP_ST || k == OP_ADDTOM { op_rd = b | lr; k == OP_ADDTOM { op_wr = L_FL; } :; }
+    k == OP_CMPM { op_rd = b | lr; op_wr = L_FL; :; }
+    k == OP_SUBM { op_rd = b | lr; op_wr = lr | L_FL; :; }
+    k == OP_PUSHM { op_rd = b; :; }
+    k == OP_STI { op_rd = mb; :; }
+    k == OP_ADDIM || k == OP_CMPIM { op_rd = mb; op_wr = L_FL; :; }
+    k == OP_LDX || k == OP_LDBX { op_rd = lbit(v) | lbit(o); op_wr = lr; :; }
+    k == OP_STX || k == OP_STBX { op_rd = lbit(v) | lbit(o) | lr; :; }
+    k == OP_PUSH { op_rd = lr; :; }
+    k == OP_XMOV || k == OP_I2F { op_rd = lbit(o); :; }
+    k == OP_JCC || k == OP_JCC8 { op_rd = L_FL; :; }
+    k == OP_JCC_RT { op_rd = L_FL | L_AX | L_CX; o != RT_ERROR_INDEX { op_rd = L_ALL; } :; }
+    k == OP_CALL_RT {
+        op_rd = rt_reads(v);
+        op_wr = L_AX | L_DX | L_FL;
+        v == RT_READ_AT { op_wr = op_wr | L_CX; }
+        :;
+    }
+    k == OP_CALL || k == OP_CALL_FWD || k == OP_RET || k == OP_EPILOGUE { op_rd = L_ALL; :; }
+    // OP_JMP, OP_STACK, OP_FRAME, OP_ALIGN, OP_PUSHI, OP_XLD, OP_XOP: none of them
+}
+
+// the registers a routine of the C runtime reads (macos/native/rt.c)
+rt_reads(rt = 0) {
+    rt == RT_ALLOC { : L_CX; }
+    rt == RT_ARRAY_REP { : L_CX | L_DX; }
+    rt == RT_EXIT { : L_DI; }
+    rt == RT_ERROR { : L_SI; }
+    rt == RT_ERR_TEXT || rt == RT_READ_BYTE { : 0; }
+    rt == RT_PRINT_INT || rt == RT_PRINT_BOOL || rt == RT_PRINT_STR || rt == RT_ERROR_INT || rt == RT_ERROR_BOOL || rt == RT_ERROR_STR { : L_AX; }
+    rt == RT_WRITE_BYTE || rt == RT_INT_TEXT || rt == RT_TEXT || rt == RT_FAIL || rt == RT_READ_FILE || rt == RT_READ_FILE_OPT { : L_AX; }
+    rt == RT_SLEEP || rt == RT_SYSCALL || rt == RT_FD_CLOSE || rt == RT_NET_ACCEPT { : L_AX; }
+    rt == RT_PRINT_INT_OPT || rt == RT_PRINT_BOOL_OPT || rt == RT_PRINT_STR_OPT { : L_AX | L_DX; }
+    rt == RT_ERROR_INT_OPT || rt == RT_ERROR_BOOL_OPT || rt == RT_ERROR_STR_OPT || rt == RT_UNPROTECT { : L_AX | L_DX; }
+    rt == RT_TRUNCATE || rt == RT_TRUNCATE_NS { : L_AX | L_DX; }
+    rt == RT_DIV || rt == RT_MOD || rt == RT_CONCAT || rt == RT_CONCAT_INT || rt == RT_STR_EQUAL || rt == RT_ARRAY_CONCAT { : L_AX | L_CX; }
+    rt == RT_WRITE_FILE || rt == RT_APPEND_FILE || rt == RT_JSON_END || rt == RT_LINES || rt == RT_FD_READ || rt == RT_FD_SEND { : L_AX | L_CX; }
+    rt == RT_NET_LISTEN || rt == RT_NET_CONNECT || rt == RT_ERROR_INDEX { : L_AX | L_CX; }
+    rt == RT_PUT || rt == RT_READ_AT || rt == RT_REC_PARSE || rt == RT_SUB || rt == RT_WRITE_AT || rt == RT_WRITE_AT_NS { : L_AX | L_CX | L_DX; }
+    : L_ALL;
+}
+
+// what is live after operation i (its successors' live_in)
+live_out_of(i = 0) {
+    k = op_k[i];
+    out = 0;
+    k != OP_JMP && k != OP_RET && k != OP_EPILOGUE { out = live_in[i + 1]; }
+    k == OP_JMP || k == OP_JCC || k == OP_JCC8 { out = out | live_in[lab_op[op_o[i]]]; }
+    : out;
+}
+
+// live_in of every operation (backwards, again until nothing changes: the loops), and at_lab
+live_calc() {
+    live_in = [0 ; n_ops + 1];
+    live_in[n_ops] = L_ALL;
+    changed = true;
+    * changed {
+        changed = false;
+        i = n_ops - 1;
+        * i >= 0 {
+            op_rw(i);
+            n = op_rd | (live_out_of(i) & (L_ALL ^ op_wr));
+            n != live_in[i] { live_in[i] = n; changed = true; }
+            i = i - 1;
+        }
+    }
+    at_lab = [0 ; n_ops + 1];
+    j = 0;
+    * j < n_binds { at_lab[lab_op[binds[j]]] = 1; j = j + 1; }
+    m = 0;
+    * m < n_meths { at_lab[meth_lo[m]] = 1; at_lab[meth_hi[m]] = 1; m = m + 1; }
+    stub_rt = [0 ; STUBS];
+    stub_k = [0 ; STUBS * 8];
+    stub_v = [0 ; STUBS * 8];
+    n_stubs = 0;
+}
+
+// x86 register r's value into it, if it waits
+pend_fix(r = 0) {
+    pend_k[r] == 1 && pend_v[r] != a_rn(r) { a_ins("mov "); a_reg(r); a_str(", "); a_x(pend_v[r]); a_nl(); }
+    pend_k[r] == 2 { a_imm(a_rn(r), pend_v[r]); }
+    pend_k[r] = 0;
+}
+
+// every value waiting: into its register where live (bits) says it is needed, else dropped
+pend_flush(live = 0) {
+    r = 0;
+    * r < 8 {
+        pend_k[r] != 0 { (lbit(r) & live) != 0 { pend_fix(r); } || { pend_k[r] = 0; } }
+        r = r + 1;
+    }
+}
+
+// before a jump to operation t: the values waiting that are live there, into their registers
+pend_to(t = 0) {
+    r = 0;
+    * r < 8 {
+        pend_k[r] != 0 && (lbit(r) & live_in[t]) != 0 { pend_fix(r); }
+        r = r + 1;
+    }
+}
+
+// the ARM register n is about to be written: the values waiting in it, into their registers
+pend_clobber(n = 0) {
+    q = 0;
+    * q < n_vs { vs_k[q] == 1 && vs_v[q] == n { vs_flush(); } q = q + 1; }
+    r = 0;
+    * r < 8 {
+        pend_k[r] == 1 && pend_v[r] == n { pend_fix(r); }
+        r = r + 1;
+    }
+}
+
+// the pushes kept, made
+vs_flush() {
+    q = 0;
+    * q < n_vs {
+        vs_k[q] == 1 { a_push(vs_v[q]); } || { a_imm(16, vs_v[q]); a_push(16); }
+        q = q + 1;
+    }
+    n_vs = 0;
+}
+
+// operation i does not touch the program's stack (x28) nor jump: the pushes kept can wait
+vs_safe(i = 0) {
+    k = op_k[i];
+    k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO || k == OP_LOCAL || k == OP_GLOBAL { : true; }
+    k == OP_LEA_CONST || k == OP_ALU || k == OP_ADDI || k == OP_MUL || k == OP_MULI || k == OP_CMP || k == OP_CMPI { : true; }
+    k == OP_TEST || k == OP_SETCC || k == OP_XMOV || k == OP_I2F || k == OP_XLD || k == OP_XOP || k == OP_RMOVX { : true; }
+    k == OP_SHRI || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG || k == OP_ZXB || k == OP_F2I || k == OP_FCMP_SET { : true; }
+    k == OP_JCC_RT && op_o[i] == RT_ERROR_INDEX { : true; }
+    k == OP_CALL_RT && (op_v[i] == RT_DIV || op_v[i] == RT_MOD) { : true; }
+    k == OP_CMP_SET && !fused_jump(i) { : true; }
+    k == OP_REG { : op_v[i] != R_SP; }
+    k == OP_LD || k == OP_ST || k == OP_LEA || k == OP_CMPM || k == OP_SUBM || k == OP_ADDTOM || k == OP_PUSHM { : (op_o[i] >> 1) != R_SP && k != OP_PUSHM; }
+    k == OP_LDX || k == OP_STX || k == OP_LDBX || k == OP_STBX { : op_v[i] != R_SP && op_o[i] != R_SP; }
+    k == OP_STI || k == OP_ADDIM || k == OP_CMPIM { : ((op_o[i] >> 32) >> 1) != R_SP; }
+    : false;
+}
+
+// the register a result of operation i for r goes into: a local's own, when i + 1 only stores r
+// there (no label between) → that register, and skip = 1; else r's
+skip = 0;
+dest_of(i = 0, r = 0) {
+    skip = 0;
+    lbit(r) == 0 || i + 1 >= n_ops || at_lab[i + 1] != 0 { : a_rn(r); }
+    op_k[i + 1] != OP_ST || op_r[i + 1] != r { : a_rn(r); }
+    p = pslot(op_o[i + 1] >> 1, op_v[i + 1]);
+    p == 0 { : a_rn(r); }
+    skip = 1;
+    : p;
+}
+
+// the result of an operation for r is in d (dest_of): r's value waits there
+dest_done(r = 0, d = 0) {
+    pend_k[r] = 0;
+    d != a_rn(r) { pend_k[r] = 1; pend_v[r] = d; }
+}
+
+// before writing d, after reading the operands: what waits in d into its register (r's old value
+// is gone)
+dest_clear(r = 0, d = 0) {
+    lbit(r) != 0 { pend_k[r] = 0; }
+    pend_clobber(d);
+}
+
+// a value to store: the zero register for a 0 waiting
+srcz(r = 0) {
+    pend_k[r] == 2 && pend_v[r] == 0 { : 31; }
+    : srcr(r);
+}
+
+// the ARM register that holds x86 register r's value now (a constant waiting goes into r)
+srcr(r = 0) {
+    pend_k[r] == 1 { : pend_v[r]; }
+    pend_k[r] == 2 { pend_fix(r); }
+    : a_rn(r);
+}
+
+// a constant that fits an add, sub or cmp (12 bits) waits in r
+pend_small(r = 0) { : pend_k[r] == 2 && pend_v[r] >= 0 && pend_v[r] <= 4095; }
+
+// cmp x<a>, v
+a_cmp_imm(a = 0, v = 0) {
+    v >= 0 && v <= 4095 { a_ins("cmp "); a_x(a); a_str(", #"); a_num(v); a_nl(); :; }
+    v < 0 && v >= -4095 { a_ins("cmn "); a_x(a); a_str(", #"); a_num(-v); a_nl(); :; }
+    a_imm(17, v);
+    a_ins("cmp "); a_x(a); a_str(", x17"); a_nl();
+}
+
+// cmp rax, rcx, from where their values are
+a_cmp_ax_cx() {
+    pend_k[R_CX] == 2 { a_cmp_imm(srcr(R_AX), pend_v[R_CX]); :; }
+    a = srcr(R_AX);
+    c = srcr(R_CX);
+    a_ins("cmp "); a_x(a); a_str(", "); a_x(c); a_nl();
+}
+
+// a load or store at [x<b> + off] (b an ARM register)
+a_ldst_n(store = false, t = 0, size = 8, b = 0, off = 0) {
+    m = "ldr";
+    store { m = "str"; }
+    off >= 0 && off <= 4095 * size && off % size == 0 {
+        a_ins(m);
+    } || off >= -256 && off <= 255 {
+        store { a_ins("stur"); } || { a_ins("ldur"); }
+    } || {
+        off >= -4095 && off <= 4095 { a_add_imm(15, b, off); } || {
+            a_imm(15, off);
+            a_ins("add x15, "); a_x(b); a_str(", x15"); a_nl();
+        }
+        b = 15;
+        off = 0;
+        a_ins(m);
+    }
+    size == 1 { a_str("b "); a_w(t); } || { a_str(" "); a_x(t); }
+    a_str(", ["); a_x(b);
+    off != 0 { a_str(", #"); a_num(off); }
+    a_str("]"); a_nl();
+}
+
+// operation i at the end of a comparison whose 0 or 1 a test and a jump only look at: i + 1 tests
+// rax, i + 2 jumps if it is 0 or not, no label between, and rax and the flags dead after
+fused_jump(i = 0) {
+    i + 2 >= n_ops { : false; }
+    op_k[i + 1] != OP_TEST || op_r[i + 1] != R_AX { : false; }
+    op_k[i + 2] != OP_JCC && op_k[i + 2] != OP_JCC8 { : false; }
+    op_v[i + 2] != CC_E && op_v[i + 2] != CC_NE { : false; }
+    at_lab[i + 1] != 0 || at_lab[i + 2] != 0 { : false; }
+    : (live_out_of(i + 2) & (L_AX | L_CX | L_FL)) == 0;
+}
+
+// b.<cc> to label l (the values live there into their registers first)
+a_jump(cc = "", l = 0) {
+    pend_to(lab_op[l]);
+    a_ins("b."); a_str(cc); a_str(" "); a_label(l); a_nl();
+}
+
+// ARM's opposite condition
+a_not_cond(c = "") {
+    c == "gt" { : "le"; }
+    c == "le" { : "gt"; }
+    c == "ge" { : "lt"; }
+    : "ge";
+}
+
+// operation i, with the values waiting → how many operations it took (1; 2 or 3 when it took the
+// test and jump after it, or the store of its result)
+arm_lazy(i = 0) {
+    k = op_k[i];
+    r = op_r[i];
+    v = op_v[i];
+    o = op_o[i];
+    lr = lbit(r);
+    n_vs > 0 && !vs_safe(i) && k != OP_PUSH && k != OP_POP { vs_flush(); }
+    // a constant, or a local in a register, into a register: it waits
+    lr != 0 && (k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO) {
+        pend_k[r] = 0;
+        (live_out_of(i) & lr) != 0 { pend_k[r] = 2; pend_v[r] = v; k == OP_ZERO { pend_v[r] = 0; } }
+        : 1;
+    }
+    p = 0;
+    k == OP_LOCAL && o == 0 { p = pslot(R_BP, v); }
+    k == OP_LD { p = pslot(o >> 1, v); }
+    k == OP_REG && (v == R_BX || v >= 12) { p = a_rn(v); }
+    lr != 0 && p > 0 && (k == OP_LOCAL || k == OP_LD || k == OP_REG) {
+        pend_k[r] = 0;
+        (live_out_of(i) & lr) != 0 { pend_k[r] = 1; pend_v[r] = p; }
+        : 1;
+    }
+    lr != 0 && k == OP_REG && lbit(v) != 0 && pend_k[v] != 0 {
+        pend_k[r] = pend_k[v];
+        pend_v[r] = pend_v[v];
+        : 1;
+    }
+    lr == 0 && k == OP_REG && (r == R_BX || r >= 12) && lbit(v) != 0 {   // into a local kept in rbx, r12 …
+        d = a_rn(r);
+        pend_k[v] == 2 { pend_clobber(d); a_imm(d, pend_v[v]); : 1; }
+        t = srcz(v);
+        pend_clobber(d);
+        t != d { a_ins("mov "); a_x(d); a_str(", "); a_x(t); a_nl(); }
+        : 1;
+    }
+    // pushes and pops of values waiting
+    k == OP_PUSH && (pend_k[r] != 0 || r == R_BX || r >= 12) && n_vs < VS {
+        pend_k[r] != 0 { vs_k[n_vs] = pend_k[r]; vs_v[n_vs] = pend_v[r]; } || { vs_k[n_vs] = 1; vs_v[n_vs] = a_rn(r); }
+        n_vs = n_vs + 1;
+        : 1;
+    }
+    k == OP_POP && lr != 0 && n_vs > 0 {
+        n_vs = n_vs - 1;
+        pend_k[r] = vs_k[n_vs];
+        pend_v[r] = vs_v[n_vs];
+        : 1;
+    }
+    (k == OP_PUSH || k == OP_POP) && n_vs > 0 { vs_flush(); }
+    k == OP_PUSH { a_push(srcr(r)); : 1; }
+    k == OP_POP && lr != 0 { pend_k[r] = 0; a_pop(a_rn(r)); : 1; }
+    // a comparison and the jump on it
+    k == OP_CMP_SET && fused_jump(i) {
+        a_cmp_ax_cx();
+        pend_k[R_AX] = 0;
+        cc = v;
+        op_v[i + 2] == CC_E { cc = cc ^ 1; }
+        a_jump(a_cond(cc), op_o[i + 2]);
+        : 3;
+    }
+    k == OP_FCMP_SET && (v == '<' || v == '>' || v == T_LE || v == T_GE) && fused_jump(i) {
+        v == '<' || v == T_LE { a_line("fcmp d1, d0"); } || { a_line("fcmp d0, d1"); }
+        c = "ge";
+        v == '<' || v == '>' { c = "gt"; }
+        op_v[i + 2] == CC_E { c = a_not_cond(c); }
+        pend_k[R_AX] = 0;
+        pend_k[R_CX] = 0;
+        a_jump(c, op_o[i + 2]);
+        : 3;
+    }
+    k == OP_CMP_SET {
+        a_cmp_ax_cx();
+        pend_k[R_AX] = 0;
+        a_ins("cset x9, "); a_str(a_cond(v)); a_nl();
+        : 1;
+    }
+    k == OP_CMP { a_cmp_ax_cx(); : 1; }
+    k == OP_CMPI { a_cmp_imm(srcr(r), v); : 1; }
+    k == OP_TEST && i + 1 < n_ops && at_lab[i + 1] == 0 && (op_k[i + 1] == OP_JCC || op_k[i + 1] == OP_JCC8)
+            && (op_v[i + 1] == CC_E || op_v[i + 1] == CC_NE) && (live_out_of(i + 1) & L_FL) == 0 {
+        a = srcr(r);
+        vs_flush();
+        pend_to(lab_op[op_o[i + 1]]);
+        op_v[i + 1] == CC_E { a_ins("cbz "); } || { a_ins("cbnz "); }
+        a_x(a); a_str(", "); a_label(op_o[i + 1]); a_nl();
+        : 2;
+    }
+    k == OP_TEST { a = srcr(r); a_ins("tst "); a_x(a); a_str(", "); a_x(a); a_nl(); : 1; }
+    k == OP_JCC || k == OP_JCC8 { a_jump(a_cond(v), o); : 1; }
+    k == OP_JMP {
+        pend_to(lab_op[o]);
+        a_ins("b "); a_label(o); a_nl();
+        pend_flush(0);
+        : 1;
+    }
+    k == OP_JCC_RT && o == RT_ERROR_INDEX && pend_k[R_AX] == 0 && pend_k[R_CX] == 0 { arm_op(i); : 1; }
+    k == OP_JCC_RT && o == RT_ERROR_INDEX {
+        a_ins("b."); a_str(a_cond(v)); a_str(" ");
+        a_stub(o);
+        : 1;
+    }
+    // division: sdiv (x86's idiv, but INT_MIN / -1 gives INT_MIN and the rest 0, as the runtime does);
+    // by zero: the runtime's routine, for its error
+    // by a power of 2: shifts, rounding towards 0 as idiv does (a negative a gets 2^k - 1 first)
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) && (live_out_of(i) & L_DX) == 0
+            && pend_k[R_CX] == 2 && pend_v[R_CX] > 1 && (pend_v[R_CX] & (pend_v[R_CX] - 1)) == 0 {
+        cv = pend_v[R_CX];
+        kk = 0;
+        * (1 << kk) < cv { kk = kk + 1; }
+        a = srcr(R_AX);
+        d = dest_of(i, R_AX);
+        sk = skip;
+        a_ins("asr x16, "); a_x(a); a_str(", #63"); a_nl();
+        a_ins("add x16, "); a_x(a); a_str(", x16, lsr #"); a_num(64 - kk); a_nl();
+        dest_clear(R_AX, d);
+        v == RT_DIV { a_ins("asr "); a_x(d); a_str(", x16, #"); a_num(kk); a_nl(); }
+        || {
+            a_ins("and x16, x16, #0x"); a_hex(0 - cv); a_nl();
+            a_ins("sub "); a_x(d); a_str(", "); a_x(a); a_str(", x16"); a_nl();
+        }
+        dest_done(R_AX, d);
+        pend_k[R_DX] = 0;
+        : 1 + sk;
+    }
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) && (live_out_of(i) & L_DX) == 0 {
+        a = srcr(R_AX);
+        c = 0;
+        pend_k[R_CX] == 2 && pend_v[R_CX] != 0 { a_imm(17, pend_v[R_CX]); c = 17; }
+        c == 0 {
+            pend_k[R_AX] == 0 && pend_k[R_CX] == 0 {
+                rt_used[v / 5] = true;
+                a_ins("cbz x10, Lrt"); a_num(v); a_nl();
+                c = 10;
+            } || {
+                c = srcr(R_CX);
+                a_ins("cbz "); a_x(c); a_str(", ");
+                a_stub(v);
+            }
+        }
+        d = dest_of(i + 0, R_AX);
+        sk = skip;
+        v == RT_DIV {
+            dest_clear(R_AX, d);
+            a_ins("sdiv "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl();
+        } || {
+            a_ins("sdiv x16, "); a_x(a); a_str(", "); a_x(c); a_nl();
+            dest_clear(R_AX, d);
+            a_ins("msub "); a_x(d); a_str(", x16, "); a_x(c); a_str(", "); a_x(a); a_nl();
+        }
+        dest_done(R_AX, d);
+        pend_k[R_DX] = 0;
+        : 1 + sk;
+    }
+    // arithmetic: from where the values are, into r (or straight into the local it is stored in)
+    k == OP_ALU && (v == ALU_ADD || v == ALU_SUB || v == ALU_AND || v == ALU_OR || v == ALU_XOR) {
+        m = "eor ";
+        v == ALU_ADD { m = "add "; }
+        v == ALU_SUB { m = "sub "; }
+        v == ALU_AND { m = "and "; }
+        v == ALU_OR { m = "orr "; }
+        a = srcr(r);
+        imm = (v == ALU_ADD || v == ALU_SUB) && pend_small(o);
+        c = 0;
+        !imm { c = srcr(o); }
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        imm { a_ins(m); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(pend_v[o]); a_nl(); }
+        || { a_ins(m); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl(); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_ADDI {
+        a = srcr(r);
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        a_add_imm(d, a, v);
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    // a constant factor: in x17 (not in rax), a power of 2: a shift
+    k == OP_MUL || k == OP_MULI {
+        a = 0;
+        c = 17;
+        cv = -1;
+        k == OP_MULI { cv = v; a = srcr(o); }
+        k == OP_MUL && pend_k[r] == 2 { cv = pend_v[r]; a = srcr(o); }
+        k == OP_MUL && cv < 0 && pend_k[o] == 2 { cv = pend_v[o]; a = srcr(r); }
+        k == OP_MUL && cv < 0 { a = srcr(r); c = srcr(o); }
+        kk = -1;
+        cv > 0 && (cv & (cv - 1)) == 0 { kk = 0; * (1 << kk) < cv { kk = kk + 1; } }
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        kk >= 0 {
+            a_ins("lsl "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(kk); a_nl();
+        } || {
+            cv >= 0 { a_imm(17, cv); }
+            a_ins("mul "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl();
+        }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    // memory: addresses and values from where they are
+    k == OP_LDX || k == OP_LDBX {
+        bn = srcr(v);
+        xn = srcr(o);
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        k == OP_LDX { a_ins("ldr "); a_x(d); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str(", lsl #3]"); a_nl(); }
+        || { a_ins("ldrb "); a_w(d); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str("]"); a_nl(); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_STX || k == OP_STBX {
+        bn = srcr(v);
+        xn = srcr(o);
+        t = srcz(r);
+        k == OP_STX { a_ins("str "); a_x(t); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str(", lsl #3]"); a_nl(); }
+        || { a_ins("strb "); a_w(t); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str("]"); a_nl(); }
+        : 1;
+    }
+    lr != 0 && (k == OP_LD || ((k == OP_LOCAL || k == OP_GLOBAL) && o == 0)) {
+        b = o >> 1;
+        k == OP_LOCAL { b = R_BP; }
+        k == OP_GLOBAL { b = R_ABS; }
+        bn = 0;
+        lbit(b) != 0 { bn = srcr(b); }
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        bn != 0 { a_ldst_n(false, d, 8, bn, v); } || { a_ldst(false, d, 8, b, v); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_ST {
+        p = pslot(o >> 1, v);
+        p > 0 {
+            pend_k[r] == 2 { pend_clobber(p); a_imm(p, pend_v[r]); : 1; }
+            t = srcz(r);
+            pend_clobber(p);
+            t != p { a_ins("mov "); a_x(p); a_str(", "); a_x(t); a_nl(); }
+            : 1;
+        }
+        t = 0;
+        pend_k[r] == 2 && pend_v[r] != 0 { a_imm(16, pend_v[r]); t = 16; } || { t = srcz(r); }
+        lbit(o >> 1) != 0 { a_ldst_n(true, t, 8, srcr(o >> 1), v); : 1; }
+        a_ldst(true, t, 8, o >> 1, v);
+        : 1;
+    }
+    k == OP_CMPM && lbit(o >> 1) != 0 && pslot(o >> 1, v) == 0 {
+        a = srcr(r);
+        a_ldst_n(false, 16, 8, srcr(o >> 1), v);
+        a_ins("cmp "); a_x(a); a_str(", x16"); a_nl();
+        : 1;
+    }
+    // loads that read no register waiting
+    lr != 0 && (k == OP_LOCAL || k == OP_GLOBAL || k == OP_LEA_CONST || k == OP_RMOVX || k == OP_F2I) {
+        pend_k[r] = 0;
+        o == 1 && (k == OP_LOCAL || k == OP_GLOBAL) { pend_k[R_DX] = 0; }
+        arm_op(i);
+        : 1;
+    }
+    k == OP_SETCC && lr != 0 { pend_k[r] = 0; a_ins("cset "); a_reg(r); a_str(", "); a_str(a_cond(v)); a_nl(); : 1; }
+    k == OP_FCMP_SET { pend_k[R_AX] = 0; pend_k[R_CX] = 0; arm_op(i); : 1; }
+    k == OP_XMOV { a = srcr(o); a_ins("fmov d"); a_num(r); a_str(", "); a_x(a); a_nl(); : 1; }
+    k == OP_I2F { a = srcr(o); a_ins("scvtf d"); a_num(r); a_str(", "); a_x(a); a_nl(); : 1; }
+    k == OP_XLD || k == OP_XOP || k == OP_ALIGN { arm_op(i); : 1; }
+    // the others: every value live there into its register first, and the pushes kept made
+    n_vs > 0 { vs_flush(); }
+    pend_flush(live_in[i]);
+    arm_op(i);
+    : 1;
+}
+
+// the jump's target (after "b.<cc> " or "cbz x<n>, "): the runtime's routine rt, through a stub that
+// puts rax's and rcx's values waiting into them
+a_stub(rt = 0) {
+    n_stubs >= STUBS { error("too many checks for -native"); }
+    stub_rt[n_stubs] = rt;
+    q = 0;
+    * q < 2 { stub_k[n_stubs * 8 + q] = pend_k[q]; stub_v[n_stubs * 8 + q] = pend_v[q]; q = q + 1; }
+    rt_used[rt / 5] = true;
+    a_str("Le"); a_num(n_stubs); a_nl();
+    n_stubs = n_stubs + 1;
+}
+
+// the stubs: the values a runtime error needs, then the error
+arm_stubs() {
+    s = 0;
+    * s < n_stubs {
+        a_str("Le"); a_num(s); a_str(":"); a_nl();
+        q = 0;
+        * q < 2 { pend_k[q] = stub_k[s * 8 + q]; pend_v[q] = stub_v[s * 8 + q]; pend_fix(q); q = q + 1; }
+        a_ins("b Lrt"); a_num(stub_rt[s]); a_nl();
+        s = s + 1;
+    }
 }
 
 // ---- -native: a whole program for the C runtime (macos/native/rt.c) ----

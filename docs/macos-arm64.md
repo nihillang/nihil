@@ -120,8 +120,24 @@ Measured on an M4 (`CHECK=1 SIZES=1000000 sh bench/compare/run.sh macos/nihil-na
 against the translator's path: making the records 70–112 ms (60–80), reading the table 61–67 ms
 (74), the first key lookup, which builds the index, 72–78 ms (72–79); peak memory 352 MB (325). The
 program stops for at most 3 ms in a forked collection. The compiler compiles itself in 0.25 s (0.43
-s with the collector before this one). Next: the code itself, registers for the temporaries and
-`sp` as the stack.
+s with the collector before this one).
+
+The code (`src1/42_arm.nihil`, `-native` optimized) keeps x86's operations but not their copies:
+- liveness of rax, rcx, rdx, rsi, rdi and the flags for every operation (backwards over the jumps;
+  each runtime routine reads only its own arguments);
+- a constant, or a local in a register, loaded into rax or rcx waits where it is: the operations
+  that read it read it there (`cmp x24, #1000`, `ldr x9, [x25, #8]`), and it is copied only where
+  it is still live (a label, a jump's target, an operation not followed);
+- a comparison whose 0 or 1 only a jump looks at becomes the jump (`cmp ; b.lt`, `cbz`); a result
+  goes straight into the local it is stored in; push … pop of a value waiting is no memory; a 0 is
+  stored from `xzr`;
+- division and remainder are `sdiv`/`msub` (by a power of 2, shifts), with x86's results (INT_MIN /
+  -1, the remainder's sign) and the runtime's error for a division by zero.
+
+Measured (best of 3, M4; C with `cc -O2`): a double loop of `+`, `^` and `%`, 0.37 → 0.155 s (C
+0.142); Collatz up to 3 000 000, 1.45 → 0.71 s (C 0.33); a sieve and `fib(35)` do not change (a
+BOOL array takes 8 bytes an element; a call passes its arguments on the stack). Next: the calls,
+arguments and results in registers, and `sp` as the stack.
 
 ## The original plan (a second backend)
 
