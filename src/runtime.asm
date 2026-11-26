@@ -1241,9 +1241,9 @@ rt_prof_start:
     mov [PROF_POS], rax
     add rax, PROF_CAP - 8 * (PROF_DEPTH + 2)
     mov [PROF_END], rax
-    mov rax, BASE_CODE              ; the code: from the start of the image up to the symbols,
-    mov [PROF_LO], rax              ; which are among the constants after it
-    mov rax, [PROF_SYMS]
+    mov rax, BASE_CODE + SIZE_HEADER + 5   ; the code: from the first return address there can be
+    mov [PROF_LO], rax              ; (so the call before it is mapped) up to the symbols, which are
+    mov rax, [PROF_SYMS]            ; among the constants after it
     mov [PROF_HI], rax
     lea rax, [rel rt_image_end]
     mov [PROF_MID], rax
@@ -1309,6 +1309,10 @@ prof_signal:
     cmp rax, [PROF_MID]
     jae .chain
     lea rdi, [rcx + 4096]
+    cmp rdi, [PROF_TOP]             ; not past the top of the stack
+    jbe .below_top
+    mov rdi, [PROF_TOP]
+.below_top:
     cmp r9, rcx
     jb .scan
     cmp r9, rdi
