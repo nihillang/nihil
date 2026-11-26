@@ -322,26 +322,19 @@ load_program() {
             going = true;
         }
         size_names >= 5 && names[0] == '-' && names[1] == 'a' && names[2] == 'r' && names[3] == 'm' && names[4] == ' ' {
-            want_arm = true;                // -arm: the ARM64 text too, on stderr after the map (42_arm.nihil)
-            arm = [0 ; ARM_SIZE];
-            ops_cap = OPS_ARM;
-            op_at = [0 ; OPS_ARM];
-            op_end = [0 ; OPS_ARM];
-            op_k = [0 ; OPS_ARM];
-            op_r = [0 ; OPS_ARM];
-            op_v = [0 ; OPS_ARM];
-            op_o = [0 ; OPS_ARM];
-            lab_cap = LABELS_ARM;
-            lab_at = [0 ; LABELS_ARM];
-            lab_fix = [0 ; LABELS_ARM];
-            lab_kind = [0 ; LABELS_ARM];
-            lab_v = [0 ; LABELS_ARM];
-            lab_op = [0 ; LABELS_ARM];
-            lab_next = [0 ; LABELS_ARM];
-            binds = [0 ; LABELS_ARM];
+            arm_setup();                    // -arm: the ARM64 text too, on stderr after the map (42_arm.nihil)
             i = 0;
             size_names - 5 { names[i] = names[i + 5]; i = i + 1; }
             size_names = size_names - 5;
+            going = true;
+        }
+        size_names >= 8 && names[0] == '-' && names[1] == 'n' && names[2] == 'a' && names[3] == 't'
+            && names[4] == 'i' && names[5] == 'v' && names[6] == 'e' && names[7] == ' ' {
+            arm_setup();                    // -native: the whole program in ARM64 on stdout (42_arm.nihil)
+            arm_native = true;
+            i = 0;
+            size_names - 8 { names[i] = names[i + 8]; i = i + 1; }
+            size_names = size_names - 8;
             going = true;
         }
         size_names >= 5 && names[0] == '-' && names[1] == 'm' && names[2] == 'a' && names[3] == 'p' && names[4] == ' ' {

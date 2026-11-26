@@ -74,6 +74,21 @@ The first step keeps the translator's conventions (rax → x9, the x86 stack emu
 runtime serves as it is; the speed is the translator's. The gains come next, operation by operation:
 the native stack and more registers for locals inside methods, then a native runtime.
 
+### -native: no translator
+
+`-native` writes the whole program as ARM64 assembly on stdout (`_main`, the program, the constants,
+the globals) for a runtime in C, `macos/native/rt.c`: no x86 code, no translator. A routine
+`RT_<NAME>` is `nh_<name>(rax, rcx, rdx, rsi, rdi, stack) → {rax, rdx}`, reached through a small
+adapter `Lrt<n>` in the text. The program's stack stays a stack of 8-byte slots in x28 (the code
+builds arrays on it, with 8-byte elements), allocated by the runtime; `sp` is only C's.
+
+    macos/nihil-native prog.nihil [out]
+    macos/test-native-c.sh                    the battery; lists the routines the C runtime lacks
+
+First milestone: the routines of small programs (output, strings, arrays, errors), a heap that only
+grows (no collector yet). Next: the collector's contract (roots: the x28 stack, x19 … x23, the
+globals; where it may run), then the rest of the routines.
+
 ## The original plan (a second backend)
 
 ## The target

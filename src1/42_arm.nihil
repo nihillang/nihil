@@ -10,6 +10,27 @@
 // The text goes to stderr after the map line and "nihil-arm" (macos/nihil, macos/translate.nihil).
 // =============================================================================
 
+// -arm, -native: all of a pass's operations and labels are kept (00_data.nihil)
+arm_setup() {
+    want_arm = true;
+    arm = [0 ; ARM_SIZE];
+    ops_cap = OPS_ARM;
+    op_at = [0 ; OPS_ARM];
+    op_end = [0 ; OPS_ARM];
+    op_k = [0 ; OPS_ARM];
+    op_r = [0 ; OPS_ARM];
+    op_v = [0 ; OPS_ARM];
+    op_o = [0 ; OPS_ARM];
+    lab_cap = LABELS_ARM;
+    lab_at = [0 ; LABELS_ARM];
+    lab_fix = [0 ; LABELS_ARM];
+    lab_kind = [0 ; LABELS_ARM];
+    lab_v = [0 ; LABELS_ARM];
+    lab_op = [0 ; LABELS_ARM];
+    lab_next = [0 ; LABELS_ARM];
+    binds = [0 ; LABELS_ARM];
+}
+
 a_byte(b = 0) {
     arm_len >= ARM_SIZE { error("the ARM64 text is too large"); }
     arm[arm_len] = b;
@@ -116,6 +137,7 @@ a_ldst(store = false, t = 0, size = 8, base = 0, disp = 0) {
     base < 0 {
         b = 27;
         off = disp - (BASE_DATA + OFS_GLOBALS);
+        arm_native && off < 0 { error("internal error: -native: an address below the globals"); }
     } || {
         b = a_rn(base);
     }
@@ -168,7 +190,7 @@ arm_bind(l = 0) {
 // the whole text: the program's start, then each operation, each label before the one it was bound before
 arm_text() {
     arm_len = 0;
-    a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl();
+    arm_native { native_start(); } || { a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl(); }
     j = 0;
     i = 0;
     * i <= n_ops {
@@ -176,6 +198,131 @@ arm_text() {
         i < n_ops { arm_op(i); }
         i = i + 1;
     }
+    arm_native { native_end(); }
+}
+
+// ---- -native: a whole program for the C runtime (macos/native/rt.c) ----
+// The conventions of the text stay those of -arm (x28 is the program's stack, of 8-byte slots,
+// which the runtime allocates: the code builds arrays on it); a routine of the runtime is
+// _nh_<its name>(rax, rcx, rdx, rsi, rdi, the stack) → {rax, rdx}, reached through Lrt<n>.
+
+native_start() {
+    a_line(".text");
+    a_line(".p2align 2");
+    a_line(".globl _main");
+    a_str("_main:"); a_nl();
+    a_line("stp x29, x30, [sp, #-16]!");
+    a_line("mov x29, sp");
+    a_line("bl _nh_start");               // (argc, argv in x0, x1) → x0: the stack's top
+    a_line("mov x28, x0");
+    a_line("mov x29, x0");
+    a_line("adrp x27, _nh_globals@PAGE");
+    a_line("add x27, x27, _nh_globals@PAGEOFF");
+    a_line("b Lprogram");
+    a_str("Lprogram:"); a_nl();
+}
+
+native_end() {
+    // the routines called: the registers into C's arguments, the result back
+    rt = 0;
+    * rt < 64 {
+        rt_used[rt] {
+            a_str("Lrt"); a_num(rt * 5); a_str(":"); a_nl();
+            a_line("stp x29, x30, [sp, #-16]!");
+            a_line("mov x0, x9");
+            a_line("mov x1, x10");
+            a_line("mov x2, x11");
+            a_line("mov x3, x12");
+            a_line("mov x4, x13");
+            a_line("mov x5, x28");
+            a_ins("bl _nh_"); a_str(rt_name(rt * 5)); a_nl();
+            a_line("mov x9, x0");
+            a_line("mov x11, x1");
+            a_line("ldp x29, x30, [sp], #16");
+            a_line("ret");
+        }
+        rt = rt + 1;
+    }
+    // the constants
+    a_line(".data");
+    a_line(".p2align 4");
+    a_str("Lconst:"); a_nl();
+    i = 0;
+    * i < size_const {
+        a_ins(".byte "); 
+        j = 0;
+        * j < 16 && i < size_const {
+            j > 0 { a_str(","); }
+            a_num(cst[i] & 255);
+            i = i + 1;
+            j = j + 1;
+        }
+        a_nl();
+    }
+    a_line(".globl _nh_globals");
+    a_line(".globl _nh_globals_size");
+    a_line(".p2align 3");
+    a_str("_nh_globals_size:"); a_nl();
+    a_ins(".quad "); a_num(n_globals * 8 + 16); a_nl();
+    a_ins(".zerofill __DATA,__bss,_nh_globals,"); a_num(n_globals * 8 + 16); a_str(",4"); a_nl();
+}
+
+// a routine's name in the C runtime
+rt_name(rt = 0) {
+    rt == RT_DIV { : "div"; }
+    rt == RT_MOD { : "mod"; }
+    rt == RT_PRINT_INT { : "print_int"; }
+    rt == RT_PRINT_BOOL { : "print_bool"; }
+    rt == RT_PRINT_STR { : "print_str"; }
+    rt == RT_EXIT { : "exit"; }
+    rt == RT_ERROR { : "error"; }
+    rt == RT_ALLOC { : "alloc"; }
+    rt == RT_ARRAY_REP { : "array_rep"; }
+    rt == RT_ERROR_INDEX { : "error_index"; }
+    rt == RT_WRITE_BYTE { : "write_byte"; }
+    rt == RT_READ_BYTE { : "read_byte"; }
+    rt == RT_STR_EQUAL { : "str_equal"; }
+    rt == RT_ERROR_INT { : "error_int"; }
+    rt == RT_ERROR_BOOL { : "error_bool"; }
+    rt == RT_ERROR_STR { : "error_str"; }
+    rt == RT_READ_FILE { : "read_file"; }
+    rt == RT_TEXT { : "text"; }
+    rt == RT_PRINT_INT_OPT { : "print_int_opt"; }
+    rt == RT_PRINT_BOOL_OPT { : "print_bool_opt"; }
+    rt == RT_PRINT_STR_OPT { : "print_str_opt"; }
+    rt == RT_ERROR_INT_OPT { : "error_int_opt"; }
+    rt == RT_ERROR_BOOL_OPT { : "error_bool_opt"; }
+    rt == RT_ERROR_STR_OPT { : "error_str_opt"; }
+    rt == RT_READ_FILE_OPT { : "read_file_opt"; }
+    rt == RT_CONCAT { : "concat"; }
+    rt == RT_SLEEP { : "sleep"; }
+    rt == RT_WRITE_FILE { : "write_file"; }
+    rt == RT_APPEND_FILE { : "append_file"; }
+    rt == RT_READ_AT { : "read_at"; }
+    rt == RT_WRITE_AT { : "write_at"; }
+    rt == RT_WRITE_AT_NS { : "write_at_ns"; }
+    rt == RT_TRUNCATE { : "truncate"; }
+    rt == RT_TRUNCATE_NS { : "truncate_ns"; }
+    rt == RT_INT_TEXT { : "int_text"; }
+    rt == RT_ARRAY_CONCAT { : "array_concat"; }
+    rt == RT_NET_LISTEN { : "net_listen"; }
+    rt == RT_NET_ACCEPT { : "net_accept"; }
+    rt == RT_FD_READ { : "fd_read"; }
+    rt == RT_FD_SEND { : "fd_send"; }
+    rt == RT_FD_CLOSE { : "fd_close"; }
+    rt == RT_SYSCALL { : "syscall"; }
+    rt == RT_JSON_END { : "json_end"; }
+    rt == RT_SUB { : "sub"; }
+    rt == RT_PUT { : "put"; }
+    rt == RT_REC_PARSE { : "rec_parse"; }
+    rt == RT_LINES { : "lines"; }
+    rt == RT_NET_CONNECT { : "net_connect"; }
+    rt == RT_PROTECT { : "protect"; }
+    rt == RT_UNPROTECT { : "unprotect"; }
+    rt == RT_ERR_TEXT { : "err_text"; }
+    rt == RT_FAIL { : "fail"; }
+    rt == RT_CONCAT_INT { : "concat_int"; }
+    : "unknown";
 }
 
 // the operation i
@@ -250,6 +397,7 @@ arm_op(i = 0) {
     k == OP_FRAME { arm_stack(-v); :; }
     k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
     k == OP_ALIGN { :; }
+    k == OP_JCC_RT && arm_native { rt_used[o / 5] = true; a_ins("b."); a_str(a_cond(v)); a_str(" Lrt"); a_num(o); a_nl(); :; }
     k == OP_JCC_RT { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label_rt(o); a_nl(); :; }
     k == OP_EPILOGUE { arm_epilogue(v); :; }
     error("internal error: an operation with no ARM64 text");
@@ -280,7 +428,10 @@ arm_alu(alu = 0, r = 0, s = 0) {
     a_rrr("eor ", r, r, s);
 }
 
-arm_call_rt(rt = 0) { a_ins("bl "); a_label_rt(rt); a_str("_c"); a_nl(); }
+arm_call_rt(rt = 0) {
+    arm_native { rt_used[rt / 5] = true; a_ins("bl Lrt"); a_num(rt); a_nl(); :; }
+    a_ins("bl "); a_label_rt(rt); a_str("_c"); a_nl();
+}
 
 arm_lea_const(r = 0, c = 0) {
     n = a_rn(r);

@@ -202,6 +202,12 @@ want_map {
     msg_len { map_line[i_map] = msg[i_map]; i_map = i_map + 1; }
     !>> $map_line;
 }
+arm_native {
+    arm_text();
+    i_arm = 0;
+    arm_len { >>> arm[i_arm]; i_arm = i_arm + 1; }
+    :: 0;
+}
 want_arm {
     arm_text();
     !>> "nihil-arm\n";
