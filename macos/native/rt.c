@@ -159,6 +159,11 @@ R nh_protect(I resume, I *regs) {
 
 R nh_unprotect(ARGS) { UNUSED; prot_depth--; err_len = 0; return ret2(rax, rdx); }
 
+// for the routines written in Nihil (src1/native.nihil), until output and errors are Nihil too:
+// the output written so far, and an error (its text, then a line break) as the runtime reports one
+void nh_flush_out(void) { flush_out(); }
+void nh_fail_bytes(const char *p, I n) { err_begin(); err_write(p, n); err_str("\n"); err_end(); }
+
 // ---- the heap ----
 // Blocks of 21 size classes live in pages of 64 KiB, one class to a page; a larger one takes whole
 // pages. What is in use is not in the blocks but in a map, a byte for each 32 bytes of the arena (the

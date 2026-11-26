@@ -1463,6 +1463,10 @@ arm_call_nihil(rt = 0, k = 0, i = 0) {
     keep & L_DI != 0 { a_pop(13); }
     keep & L_SI != 0 { a_pop(12); }
     keep & L_CX != 0 { a_pop(10); }
+    rt == RT_READ_AT {                     // its other results, in globals of native.nihil
+        a_ldst(false, 11, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_dx")]);
+        a_ldst(false, 10, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_cx")]);
+    }
 }
 
 arm_call_rt(rt = 0) {
