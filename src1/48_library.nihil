@@ -645,6 +645,7 @@ query_field() {
     q_model < 0 || peek_type() == '(' { : -1; }
     j = find_field(q_model, tok_start, tok_len);
     j < 0 { : -1; }
+    check_private(q_model, m_first[q_model] + j);
     q_load(0, q_elem);
     eb(0x48, 0x8B, 0x80);                   // mov rax, [rax + disp32]
     emit_d(j * 8);

@@ -267,6 +267,26 @@ field_index(t = 0) {
     : m_first[m] + j;
 }
 
+// a field whose name starts with _ is private to its model (SPEC §20.7): only the model's own
+// methods, MODEL.name(…), read or change it. e = the field (index in f_*), m = its model; the
+// token is the field's name, where the error points
+check_private(m = 0, e = 0) {
+    source[f_start[e]] != '_' { :; }
+    km = m_sym[m];
+    ml = s_len[km];
+    mc = method_current;
+    mc >= 0 && s_len[mc] > ml + 1 && source[s_ofs[mc] + ml] == '.' && same_source(s_ofs[mc], s_ofs[km], ml) { :; }
+    error_start();
+    put_str("the field '");
+    put_source(f_start[e], f_len[e]);
+    put_str("' is private to ");
+    put_source(s_ofs[km], ml);
+    put_str(": only its methods (");
+    put_source(s_ofs[km], ml);
+    put_str(".name(…) { … }) read or change it");
+    error_end();
+}
+
 not_a_record(t = 0) {
     error_start();
     put_str("only records have fields, but the expression is ");
@@ -286,6 +306,7 @@ field_access(t = 0) {
     }
     !is_rec(t) { not_a_record(t); }
     e = field_index(t);
+    check_private(t >> 8, e);
     next_token();
     eb(0x48, 0x8B, 0x80);                   // mov rax, [rax + disp32]
     emit_d((e - m_first[t >> 8]) * 8);
@@ -356,6 +377,7 @@ cmd_field_assign() {
     t != TYPE_UNKNOWN {
         !is_rec(t) { not_a_record(t); }
         e = field_index(t);
+        check_private(t >> 8, e);
         ft = f_type[e];
         disp = (e - m_first[t >> 8]) * 8;
     }

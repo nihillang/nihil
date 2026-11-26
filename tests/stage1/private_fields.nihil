@@ -1,0 +1,32 @@
+// fields whose names start with _ (SPEC §20.7): only the model's own methods read or change them
+CONTA = @[#id: INT(4); titular: STRING(20); _saldo: FLOAT(14)];
+
+CONTA.depositar(c = CONTA(), v = 0.0) {
+    v <= 0.0 { ?! = "a deposit must be positive"; }
+    c._saldo = c._saldo + v;
+}
+CONTA.saldo(c = CONTA()) { : c._saldo; }
+
+// a query inside one of the model's methods may name the private field
+CONTA.quantas_com(c = CONTA(), todas = [CONTA()], minimo = 0.0) { : todas.count(_saldo >= minimo); }
+CONTA.mais_rica(c = CONTA(), todas = [CONTA()]) { : todas.sort(-_saldo)[0].titular; }
+
+// creating a record fills every field, the private one too
+a = CONTA(1, "Ana", 0.0);
+a.depositar(50.0);
+a.depositar(25.5);
+>> a.saldo(); >> "\n";
+?a.depositar(-1.0);
+>> ?! + "\n";
+b = CONTA(2, "Bia", 10.0);
+>> a.quantas_com([a, b], 50.0); >> " "; >> a.mais_rica([b, a]); >> "\n";
+
+// the other fields stay public
+a.titular = "Ana Lima";
+>> a.titular + "\n";
+
+// a table and JSON keep the private field: it is part of the data
+@>> "build/private_fields.dat", [a, b];
+rows = CONTA @ "build/private_fields.dat";
+>> rows[0].saldo(); >> " "; >> rows[1].saldo(); >> "\n";
+>> a.to_json(); >> "\n";
