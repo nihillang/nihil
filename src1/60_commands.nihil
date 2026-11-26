@@ -28,6 +28,7 @@ command() {
     t == '@' && peek_type() == '{' { cmd_put_key(); :; }
     t == '@' { error("the inclusion @ \"file\"; can only appear at the top level, alone on its line"); }
     t == '?' && raise_ahead() { cmd_raise(); :; }
+    t == '?' && peek_type() == '{' { cmd_protected_block(); :; }
     init_expression(t) { cmd_expr_block(); :; }
     error_expected("a command");
 }
@@ -41,6 +42,39 @@ raise_ahead() {
     back_lexer();
     drop_lexer();
     : r;
+}
+
+// ?{ … } || { … } — a protected block (SPEC §25.1): a runtime error inside it, however deep, goes
+// to the block after ||, with ?! holding its text (without ||, only to ?!). The runtime keeps the
+// stack, the frame and rbx, r12–r15 at the start and brings them back: so that what the block
+// changed before the error stays changed, the locals of a method with a protected block (the
+// globals the top level keeps, for one at the top level) are kept in memory, not in registers.
+cmd_protected_block() {
+    next_token();                        // "?" → "{"
+    method_current >= 0 { prot_in_method = true; } || { prot_at_top = true; }
+    eb(0x48, 0x8D, 0x05);                // lea rax, [rip + on_error]
+    on_error = size_code;
+    emit_d(0);
+    emit_call_rt(RT_PROTECT);
+    prot_depth = prot_depth + 1;
+    block();
+    prot_depth = prot_depth - 1;
+    emit_call_rt(RT_UNPROTECT);          // ended normally: ?! = ""
+    tok_type == T_OR {
+        next_token();                    // "||" → "{"
+        tok_type != '{' { error_expected("'{' after '?{ … } ||': the block that runs when it fails"); }
+        emit(0xE9);                      // jmp over the handler
+        over = size_code;
+        emit_d(0);
+        put_d(on_error, size_code - (on_error + 4));
+        last_target = size_code;         // the runtime lands here
+        block();
+        patch_here(over);
+        tok_type == T_OR { error("'?{ … } || { … }' takes one block after '||'"); }
+    } || {
+        put_d(on_error, size_code - (on_error + 4));
+        last_target = size_code;
+    }
 }
 
 // ?! = text; — a runtime error with that text (SPEC §25): ?f() catches it, and ?! holds the
@@ -569,6 +603,8 @@ cmd_method(k = 0) {
     max_slots = sv_max;
     slots = sv_slots;
     method_current = -1;
+    prot_in_method { demand = 0; }         // ?{ … }: every local in memory (cmd_protected_block)
+    prot_in_method = false;
     optimize && demand != s_regs[k] {
         s_regs[k] = demand;                // the next pass saves other registers
         altered = true;

@@ -135,7 +135,8 @@ PRODUCT @{3} FILE = _;                      // delete by key</pre>
             <tr><td><code>v = [0 ; *];</code>, <code>v[] = x;</code></td><td>a list: an array that grows</td></tr>
             <tr><td><code>m = {"ana": 30}</code></td><td>a map: values by key, in memory</td></tr>
             <tr><td><code>r? = ?f(x);</code>, <code>?!</code></td><td>a protected call: a runtime error inside gives <code>_</code>, and <code>?!</code> its text</td></tr>
-            <tr><td><code>?! = "why";</code></td><td>raise an error, which a protected call catches</td></tr>
+            <tr><td><code>?{ … } || { … }</code></td><td>a protected block: an error inside runs the block after <code>||</code></td></tr>
+            <tr><td><code>?! = "why";</code></td><td>raise an error, which a protected call or block catches</td></tr>
             <tr><td><code>@ "std:json.nihil";</code></td><td>include a library that ships with the compiler</td></tr>
           </tbody>
         </table>

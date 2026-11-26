@@ -526,6 +526,7 @@ command         ::= method                      (* top level only *)
                   | expression ":" IDENT [ "," IDENT ] block   (* each element, §7.6 *)
                   | assignment ";"
                   | [ expression ] block ( "||" [ expression ] block )*
+                  | "?" block [ "||" block ]        (* protected block, §25.1 *)
                   | [ expression ] call ";"
                   | "@" STRING ";"              (* inclusion, §16 *)
 
@@ -1490,6 +1491,34 @@ r == _ { >> "failed: " + ?! + "\n"; } // ?! : the text of that error
 - What was written before the error stays written: the output buffer is not touched.
 - A protected call costs a few instructions when nothing fails, and the stack does not grow
   when it is used in a loop.
+
+### 25.1 Protected blocks
+
+`?{ … }` protects a block, as `?` protects a call: a runtime error anywhere inside it, however
+deep, ends the block and goes on after it, with `?!` holding its text. `|| { … }` after it is
+the block that runs only then:
+
+```text
+?{
+    rows = PRODUCT @ "products.dat";
+    @>> "total.txt", $rows.sum(price);
+} || {
+    !>> "could not: " + ?! + "\n";        // ?! : the error's text
+}
+```
+
+- What the block changed before the error **stays changed**: variables keep the last values
+  given to them, and what was written stays written. (So that this holds, the locals of a
+  method with a protected block, or the globals of a top level with one, are kept in memory,
+  not in the registers the optimizer would give them.)
+- Without `|| { … }` the error is only in `?!`; a block that ends normally leaves `?!` empty,
+  and its `|| { … }` does not run. `||` takes one block: no condition, no chain.
+- `: value;` inside the block leaves the method and the protection with it; `::` ends the
+  program as usual. A runtime error inside the `|| { … }` block, including `?! = text;`, goes
+  to the protection around it, if any: so `?! = ?!;` passes the error on.
+- Blocks and calls nest, up to 64 protections at a time; in a loop, each turn is protected
+  on its own.
+- The same things are caught as by `?f()`, and the same are not (`out of memory`, `::`).
 
 **Implementation.** A stack of protections in the runtime, 64 levels deep: the stack pointer,
 the frame pointer, the address to resume at and the optimizer's registers (rbx, r12–r15: a
