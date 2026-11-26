@@ -4,7 +4,11 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
-## Unreleased
+## v4.11.0
+
+The five pillars of object orientation, without a keyword: private fields, a model built from another, a child where
+its parent is expected, replacing methods with dispatch by the record's real model, and abstract methods. Each step
+was reviewed by Codex before it was written, and no program that compiled before changes meaning.
 
 - abstract methods (SPEC §20.11): `SHAPE.area(s = SHAPE()) { ... : 0.0; }` declares the method and its return type by an example (`{ ... }`: nothing) and leaves the body to the models below. A model that does not implement one, or makes an inherited one abstract again, is abstract: no record of it is made (constructor, table reads, JSON, copies, a default), while `[SHAPE() ; *]` and `{k: SHAPE() ; n}` still give the type, and a global cannot hold one. Both forms were compile errors before, so no program changes meaning
   - *Why:* The fifth pillar of object orientation, abstraction: a parent that says what its children must do. The return type is written, not inferred from the children (Codex's review: it would tie the parent to whatever children a program has), and the method compiles to one that raises, so dispatch needs nothing new
