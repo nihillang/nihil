@@ -1,0 +1,9 @@
+// a global does not hold an abstract model (a record global starts as an empty one)
+SHAPE = @[name: STRING(12)];
+SHAPE.area(s = SHAPE()) { ... : 0.0; }
+CIRCLE = @[SHAPE; r: FLOAT(8)];
+CIRCLE.area(c = CIRCLE()) { : 3.0 * c.r * c.r; }
+as_shape(s = SHAPE()) { : s; }
+g = as_shape(CIRCLE("c", 1.0));
+show() { : g.name; }
+>> show();

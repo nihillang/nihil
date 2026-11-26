@@ -73,7 +73,8 @@ map_literal() {
     emit(0x50);                            // push rax (key)
     expect(':', "':' between the key and the value ({key: value})");
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
-    vt = expression();
+    vt = type_only_record(false);          // {k: NAME() ; n} of an abstract model: only the type
+    vt < 0 { vt = expression(); }
     !value_ok(vt) {
         restore_pos(pi, pl, pn, pli);
         error_start();

@@ -500,6 +500,30 @@ emit_dispatch(k = 0, base = 0, np = 0, dn = 0, dm = [0], dt = [0]) {
     * j <= dn { patch_here(ends[j]); j = j + 1; }
 }
 
+// tok = a model's name: is it "NAME() ; *" (list: an empty LIST) or "NAME() ;" (else: the value of
+// an empty MAP {k: NAME() ; n}) with NAME abstract (SPEC §20.11)? Then the record only gives the
+// type: nothing is made (rax = 0, the sample the literal drops) and the type is returned; else -1,
+// the lexer untouched
+type_only_record(list = false) {
+    tok_type != T_IDENT { : -1; }
+    k = lookup(tok_start, tok_len);
+    !is_model(k) || missing_method(s_extra[k]) < 0 { : -1; }
+    save_lexer();
+    next_token();
+    ok = tok_type == '(';
+    ok { next_token(); ok = tok_type == ')'; }
+    ok { next_token(); ok = tok_type == ';'; }
+    ok && list { next_token(); ok = tok_type == '*'; }
+    back_lexer();
+    drop_lexer();
+    !ok { : -1; }
+    next_token();                        // name → "("
+    next_token();                        // "(" → ")"
+    next_token();                        // ")" → ";"
+    eb(0x31, 0xC0);                         // xor eax, eax: no record
+    : model_type(s_extra[k]);
+}
+
 // postfix ::= primary ( "[" expression "]" | "." field )*
 postfix() {
     : postfix_rest(primary(), false);
@@ -721,7 +745,8 @@ primary_array() {
     next_token();
     tok_type == ']' { error("'[]' has no type; for an empty array use [0 ; 0]"); }
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
-    t = expression();
+    t = type_only_record(true);            // [NAME() ; *] of an abstract model: only the type
+    t < 0 { t = expression(); }
     !is_element(t) {
         restore_pos(pi, pl, pn, pli);
         error_start();
@@ -745,6 +770,7 @@ primary_array() {
         }
         is_rec(t) {
             // [record ; n]: n independent copies of the record
+            refuse_abstract(t >> 8, "no copies of it are made ([NAME() ; *] is an empty LIST of it)");
             emit(0x50);
             push_const(m_schema[t >> 8]);
             call_prelude("__nihil_rec_rep", 24);
@@ -920,6 +946,7 @@ call_method(k = 0, pre = 0) {
 emit_default(e = 0) {
     b = p_type[e] & ~(TYPE_ARR | TYPE_OPT);
     b & TYPE_REC != 0 {
+        refuse_abstract(b >> 8, "its default here would make one, so pass this argument");
         emit_alloc_record(b >> 8);        // NAME(): a new empty record on every call
         :;
     }

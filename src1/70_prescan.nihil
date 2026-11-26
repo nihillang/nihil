@@ -109,6 +109,8 @@ try_method(ns = 0, nl = 0) {
                     next_token();
                     declare = tok_type == '{';
                     searching = false;
+                    pend_abstract = false;
+                    declare && ns >= 0 { abstract_ahead(); }    // a model's method: { ... }?
                 }
             }
             searching { next_token(); }
@@ -116,10 +118,45 @@ try_method(ns = 0, nl = 0) {
     }
     back_lexer();
     declare {
+        ab = pend_abstract;
+        at = pend_type;
         register_method(ns, nl);
+        ab {
+            k = lookup(ns, nl);
+            s_abstract[k] = true;
+            s_type[k] = at;                   // the return type is the example's, not inferred
+        }
         back_lexer();
     }
     drop_lexer();
+}
+
+// tok = "{" of a model's method: is the body "{ ... }" or "{ ... : example; }"? (SPEC §20.11) Sets
+// pend_abstract and pend_type (TYPE_NONE: returns nothing). The example is read as a parameter's
+// default is (a literal, NAME(), [x]), never compiled: NAME() of an abstract model makes nothing.
+// Anything else after "..." is the pause it always was ("{ ... 500; … }").
+abstract_ahead() {
+    next_token();
+    tok_type != T_PAUSE { :; }
+    next_token();
+    tok_type == '}' { pend_abstract = true; pend_type = TYPE_NONE; :; }
+    tok_type != ':' { :; }
+    next_token();
+    arr = false;
+    tok_type == '[' { arr = true; next_token(); }
+    read_literal();
+    ty = lit_type;
+    next_token();
+    arr {
+        tok_type != ']' { error_expected("']' after the example of what the abstract method returns"); }
+        next_token();
+        ty = ty | TYPE_ARR;
+    }
+    tok_type != ';' { error_expected("';' after the example of what the abstract method returns ({ ... : 0.0; })"); }
+    next_token();
+    tok_type != '}' { error_expected("'}': an abstract method's body is { ... } or { ... : an example of what it returns; }"); }
+    pend_abstract = true;
+    pend_type = ty;
 }
 
 // tok = name of the declaration (ns, nl: the whole name, as in try_method)

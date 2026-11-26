@@ -85,7 +85,8 @@ pos = find([4, 8, 15], 8) || -1;
   `C = @[P; extra: INT(3)];` starts from P's fields and methods (P declared before). A C is accepted where a P is expected
   only as an argument (`f(p = P())` takes a C) or as an element stored into an ARRAY/LIST/MAP of P; never `x = c;` into a P
   variable, a mixed literal, or a collection of C as a collection of P. `C.m(c = C(), …)` may replace `P.m` (same parameters
-  after the first, same return): a call through a P runs the real model's `m`.
+  after the first, same return): a call through a P runs the real model's `m`. `P.m(p = P()) { ... : 0.0; }` is abstract
+  (returns a FLOAT; `{ ... }`: nothing): no P is made, `[P() ; *]` is an empty LIST of P, and every model below implements it.
 
 ## Library (method calls on values; each returns a new value)
 

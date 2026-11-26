@@ -81,6 +81,46 @@ prescan_models() {
     n_models { model_constants(m); m = m + 1; }
 }
 
+// an abstract method a record of model m would lack (SPEC §20.11): for some method name, the nearest
+// model, m itself or above it, that declares it, declares it abstract; -1 when m is concrete
+missing_method(m = 0) {
+    k = 0;
+    * k < n_sym {
+        s_abstract[k] {
+            d = 0;
+            * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
+            ka = lookup(s_ofs[k], d);
+            a = -1;
+            is_model(ka) { a = s_extra[ka]; }
+            a >= 0 && (a == m || descends(m, a)) {
+                e = m;
+                ke = -1;
+                * ke < 0 && e >= 0 { ke = lookup_model_method(m_sym[e], s_ofs[k] + d + 1, s_len[k] - d - 1); e = m_parent[e]; }
+                ke >= 0 && s_abstract[ke] { : ke; }
+            }
+        }
+        k = k + 1;
+    }
+    : -1;
+}
+
+// a record of model m is about to be made (what: how, for the message): an error when m is abstract
+refuse_abstract(m = 0, what = "") {
+    k = missing_method(m);
+    k < 0 { :; }
+    d = 0;
+    * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
+    error_start();
+    put_source(s_ofs[m_sym[m]], s_len[m_sym[m]]);
+    put_str(" is abstract (it does not implement ");
+    put_source(s_ofs[k] + d + 1, s_len[k] - d - 1);
+    put_str(", which ");
+    put_source(s_ofs[k], d);
+    put_str(" leaves abstract): ");
+    put_str(what);
+    error_end();
+}
+
 // the model's tag: (m + 1) in the top 16 bits of a record's block header, for a model in a
 // hierarchy; 0 for the others, whose records carry no model (nothing dispatches on them)
 model_tag(m = 0) {
@@ -483,6 +523,7 @@ emit_alloc_record(m = 0) {
 // tok = model name, followed by "(" → NAME(a, b, …)
 new_record(k = 0) {
     m = s_extra[k];
+    refuse_abstract(m, "no record of it is made; make one of a model below it");
     n = m_n[m];
     next_token();
     next_token();
@@ -538,6 +579,7 @@ new_record(k = 0) {
 // tok = the model's name of MODEL.from_json(text) or MODEL.from_json_items(text) (SPEC §26)
 model_from_json(k = 0) {
     m = s_extra[k];
+    refuse_abstract(m, "it is not read from JSON; read a model below it");
     next_token();                        // name → "."
     next_token();                        // "." → the method
     ns = tok_start; nl = tok_len;
@@ -626,8 +668,9 @@ table_read(k = 0) {
     next_token();                        // name → "@"
     opt = tok_type == T_AT_OPT;
     next_token();
+    tok_type == '#' && !opt { : record_count(m); }    // counts lines: makes no record
+    refuse_abstract(m, "a table of it is not read; read a table of a model below it");
     tok_type == '[' { : record_at(m, opt); }
-    tok_type == '#' && !opt { : record_count(m); }
     tok_type == '{' { : record_by_key(m, opt); }
     model_path(m, "@");
     emit(0x50);                            // push rax (the path)
@@ -1059,7 +1102,7 @@ bytes_intrinsic(kind = 0) {
     : TYPE_NONE;
 }
 
-// a record's model (SPEC §20.11): __nihil_set_model(r, tag) ORs tag (a schema's last word) into the
+// a record's model (SPEC §20.12): __nihil_set_model(r, tag) ORs tag (a schema's last word) into the
 // header of r, a block just made; __nihil_model_of(r) → the model + 1 its header holds, 0 for none
 model_intrinsic(kind = 0) {
     next_token();                        // name → "("

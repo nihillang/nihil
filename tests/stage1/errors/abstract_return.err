@@ -1,0 +1,1 @@
+SQUARE.area returns INT, but the method it replaces, SHAPE.area, returns FLOAT

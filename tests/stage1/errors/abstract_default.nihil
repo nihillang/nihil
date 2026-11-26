@@ -1,0 +1,8 @@
+// a parameter of an abstract model: its default would make one, so the argument is needed
+SHAPE = @[name: STRING(12)];
+SHAPE.area(s = SHAPE()) { ... : 0.0; }
+CIRCLE = @[SHAPE; r: FLOAT(8)];
+CIRCLE.area(c = CIRCLE()) { : 3.0 * c.r * c.r; }
+as_shape(s = SHAPE()) { : s; }
+name_of(s = SHAPE()) { : s.name; }
+>> name_of();
