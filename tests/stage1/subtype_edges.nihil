@@ -1,0 +1,55 @@
+// a child's record where its parent is expected (SPEC §20.9): an explicit argument, and an element
+// stored into a collection of the parent; nothing that infers a type
+PESSOA = @[nome: STRING(20); _nascimento: INT(4)];
+PESSOA.idade(p = PESSOA(), ano = 0) { : ano - p._nascimento; }
+ALUNO = @[PESSOA; turma: STRING(4)];
+PROFESSOR = @[PESSOA; materia: STRING(12)];
+MONITOR = @[ALUNO; horas: INT(3)];
+
+mostrar(p = PESSOA()) { : p.nome + " (" + $p.idade(2026) + ")"; }
+como_pessoa(p = PESSOA()) { : p; }      // a PESSOA-typed reference to the record it was given
+talvez(p? = PESSOA()) { p == _ { : "nobody"; } : (p || PESSOA()).nome; }
+
+a = ALUNO("Ana", 2008, "3B");
+t = PROFESSOR("Rui", 1980, "fisica");
+m = MONITOR("Bia", 2007, "3A", 10);
+>> mostrar(a) + ", " + mostrar(t) + ", " + mostrar(m) + "\n";
+
+// optionals: a child into P? is present; a child's optional into P? keeps its presence
+>> talvez(a) + " " + talvez(_) + "\n";
+quem? = a;
+quem = _;
+>> talvez(quem) + " ";
+quem = a;
+>> talvez(quem) + "\n";
+
+// a mixed team: a LIST, an ARRAY and a MAP of PESSOA, each element a child
+equipe = [PESSOA() ; *];
+equipe[] = a;
+equipe[] = t;
+equipe[] = m;
+equipe[1] = m;
+nomes = "";
+equipe : e { nomes = nomes + e.nome + " "; }
+>> nomes + "\n";
+fixo = [PESSOA() ; 2];
+fixo[0] = t;
+fixo[1] = a;
+>> fixo[0].nome + " " + fixo[1].nome + " " + $fixo[0].idade(2026) + "\n";
+por_turma = {"": PESSOA() ; 8};
+por_turma["3B"] = a;
+por_turma["prof"] = t;
+>> (por_turma["prof"] || PESSOA()).nome + " " + $#por_turma + "\n";
+
+// the same record, not a copy: a change through the parent shows in the child
+p = como_pessoa(a);
+p.nome = "Ana Lima";
+>> a.nome + " " + a.turma + "\n";
+
+// copies, lines and JSON through the parent: the parent's part (the static model)
+copias = [p ; 2];
+copias[0].nome = "copy";
+>> $#copias + " " + copias[0].nome + " " + a.nome + "\n";
+>> $p;
+>> p.to_json() + "\n";
+>> a.to_json() + "\n";

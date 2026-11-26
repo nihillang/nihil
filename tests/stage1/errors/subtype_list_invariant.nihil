@@ -1,0 +1,6 @@
+// a LIST of a child is not a LIST of its parent
+PESSOA = @[nome: STRING(20)];
+ALUNO = @[PESSOA; turma: STRING(4)];
+todos(ps = [PESSOA() ; *]) { : #ps; }
+l = [ALUNO() ; *];
+>> todos(l);

@@ -785,7 +785,7 @@ call_method(k = 0, pre = 0) {
         ai = tok_start; al = tok_len; an = tok_line; ali = tok_lstart;
         u = expression();
         pt = p_type[base + i];
-        !convert(u, pt) {
+        !convert_argument(u, pt) {
             restore_pos(ai, al, an, ali);
             error_start();
             put_str("argument ");
