@@ -54,35 +54,32 @@ put_q(pos = 0, v = 0) {
 
 // the operation whose code is code[at .. size_code) was just emitted
 op_note(k = 0, r = 0, v = 0, at = 0, o = 0) {
-    n_ops - ops_low >= OPS_RING { ops_low = ops_low + 1; }
-    i = n_ops % OPS_RING;
+    n_ops - ops_low >= ops_cap {
+        ops_low = ops_low + 1;
+    }
+    i = n_ops % ops_cap;
     op_at[i] = at;
     op_end[i] = size_code;
     op_k[i] = k;
     op_r[i] = r;
     op_v[i] = v;
     op_o[i] = o;
-    op_tx[i] = arm_len;
     n_ops = n_ops + 1;
-    want_arm && at < size_code { a_label_l(at); a_str(":"); a_nl(); }
 }
 
 // the last operation, if its code is exactly code[a .. size_code) → its place in the ring, else -1
 op_last_at(a = 0) {
     n_ops == ops_low { : -1; }
-    i = (n_ops - 1) % OPS_RING;
+    i = (n_ops - 1) % ops_cap;
     op_at[i] == a && op_end[i] == size_code { : i; }
     : -1;
 }
 
-// the code is cut back to pos: the operations from there on are gone
+// the code is cut back to pos: the operations from there on are gone, and the labels bound after them
 code_cut(pos = 0) {
     size_code = pos;
-    * n_ops > ops_low && op_end[(n_ops - 1) % OPS_RING] > pos {
-        n_ops = n_ops - 1;
-        arm_len = op_tx[n_ops % OPS_RING];
-    }
-    want_arm && n_ops == ops_low && n_ops > 0 { error("internal error: code cut back past the operations kept (-arm)"); }
+    * n_ops > ops_low && op_end[(n_ops - 1) % ops_cap] > pos { n_ops = n_ops - 1; }
+    * n_binds > 0 && lab_op[binds[n_binds - 1]] > n_ops { n_binds = n_binds - 1; }
 }
 
 // the operation i of the ring, as it is: k, r, v, o
@@ -100,7 +97,13 @@ ops_last(n = 0) {
     : true;
 }
 
-op_back(j = 0) { : (n_ops - 1 - j) % OPS_RING; }
+// where the last operation starts, if it ends where the code does; else -1
+op_last_start() {
+    n_ops == ops_low || op_end[op_back(0)] != size_code { : -1; }
+    : op_at[op_back(0)];
+}
+
+op_back(j = 0) { : (n_ops - 1 - j) % ops_cap; }
 
 // r ← (k, v): a load into rax or rcx (R_AX, R_CX), in the shortest x86 form; o = 1: an optional,
 // its presence into rdx too
@@ -139,7 +142,6 @@ op_load(k = 0, r = 0, v = 0, o = 0) {
     at = size_code;
     x86_load(k, r, v, o);
     op_note(k, r, v, at, o);
-    want_arm { arm_load(k, r, v, o); }
 }
 
 // r ← the address of the constant at offset c (fixed up when the constants are placed)
@@ -149,7 +151,6 @@ op_lea_const(r = 0, c = 0) {
     register_fixup(size_code, c, false);
     emit_d(0);
     op_note(OP_LEA_CONST, r, c, at);
-    want_arm { arm_lea_const(r, c); }
 }
 
 // a call of the method k (fixed up at the end of the pass)
@@ -159,14 +160,12 @@ op_call_method(k = 0) {
     register_fixup(size_code, k, true);
     emit_d(0);
     op_note(OP_CALL, 0, k, at);
-    want_arm { a_ins("bl Lm"); a_num(k); a_nl(); }
 }
 
 op_ret() {
     at = size_code;
     emit(0xC3);
     op_note(OP_RET, 0, 0, at);
-    want_arm { a_pop(30); a_line("ret"); }
 }
 
 // r ← s
@@ -198,14 +197,12 @@ op_ld(r = 0, base = 0, disp = 0, wide = 0) {
     at = size_code;
     x86_mem(0x8B, r, base, disp, wide);    // mov r, [base + disp]
     op_note(OP_LD, r, disp, at, base * 2 + wide);
-    want_arm { a_ldst(false, a_rn(r), 8, base, disp); }
 }
 
 op_st(base = 0, disp = 0, r = 0, wide = 0) {
     at = size_code;
     x86_mem(0x89, r, base, disp, wide);    // mov [base + disp], r
     op_note(OP_ST, r, disp, at, base * 2 + wide);
-    want_arm { a_ldst(true, a_rn(r), 8, base, disp); }
 }
 
 // r ← [base + index * 8]
@@ -213,7 +210,6 @@ op_ldx(r = 0, base = 0, index = 0) {
     at = size_code;
     eb(0x48, 0x8B, 0x04 | (r << 3), 0xC0 | (index << 3) | base);
     op_note(OP_LDX, r, base, at, index);
-    want_arm { a_ins("ldr "); a_reg(r); a_str(", ["); a_reg(base); a_str(", "); a_reg(index); a_str(", lsl #3]"); a_nl(); }
 }
 
 // [base + index * 8] ← r
@@ -221,7 +217,6 @@ op_stx(base = 0, index = 0, r = 0) {
     at = size_code;
     eb(0x48, 0x89, 0x04 | (r << 3), 0xC0 | (index << 3) | base);
     op_note(OP_STX, r, base, at, index);
-    want_arm { a_ins("str "); a_reg(r); a_str(", ["); a_reg(base); a_str(", "); a_reg(index); a_str(", lsl #3]"); a_nl(); }
 }
 
 // r ← the byte at [base + index], zero-extended
@@ -229,7 +224,6 @@ op_ldbx(r = 0, base = 0, index = 0) {
     at = size_code;
     eb(0x0F, 0xB6, 0x04 | (r << 3), (index << 3) | base);   // movzx r32, byte [base + index]
     op_note(OP_LDBX, r, base, at, index);
-    want_arm { a_ins("ldrb "); a_w(a_rn(r)); a_str(", ["); a_reg(base); a_str(", "); a_reg(index); a_str("]"); a_nl(); }
 }
 
 // ---- more operations: each one's x86 form, and a note of it ----
@@ -255,35 +249,30 @@ op_stbx(base = 0, index = 0, r = 0) {
     at = size_code;
     eb(0x88, 0x04 | (r << 3), (index << 3) | base);   // mov [base + index], r8
     op_note(OP_STBX, r, base, at, index);
-    want_arm { a_ins("strb "); a_w(a_rn(r)); a_str(", ["); a_reg(base); a_str(", "); a_reg(index); a_str("]"); a_nl(); }
 }
 
 op_lea(r = 0, base = 0, disp = 0, wide = 0) {
     at = size_code;
     x86_mem(0x8D, r, base, disp, wide);    // lea r, [base + disp]
     op_note(OP_LEA, r, disp, at, base * 2 + wide);
-    want_arm { a_add_imm(a_rn(r), a_rn(base), disp); }
 }
 
 op_cmpm(r = 0, base = 0, disp = 0, wide = 0) {
     at = size_code;
     x86_mem(0x3B, r, base, disp, wide);    // cmp r, [base + disp]
     op_note(OP_CMPM, r, disp, at, base * 2 + wide);
-    want_arm { a_ldst(false, 16, 8, base, disp); a_ins("cmp "); a_reg(r); a_str(", x16"); a_nl(); }
 }
 
 op_subm(r = 0, base = 0, disp = 0, wide = 0) {
     at = size_code;
     x86_mem(0x2B, r, base, disp, wide);    // sub r, [base + disp]
     op_note(OP_SUBM, r, disp, at, base * 2 + wide);
-    want_arm { a_ldst(false, 16, 8, base, disp); a_ins("sub "); a_reg(r); a_str(", "); a_reg(r); a_str(", x16"); a_nl(); }
 }
 
 op_addtom(base = 0, disp = 0, r = 0, wide = 0) {
     at = size_code;
     x86_mem(0x01, r, base, disp, wide);    // add [base + disp], r
     op_note(OP_ADDTOM, r, disp, at, base * 2 + wide);
-    want_arm { a_ldst(false, 16, 8, base, disp); a_ins("add x16, x16, "); a_reg(r); a_nl(); a_ldst(true, 16, 8, base, disp); }
 }
 
 // the place of a memory operand and the disp, in one o: (base * 2 + wide) * 2^32 + disp (disp
@@ -296,21 +285,18 @@ op_sti(base = 0, disp = 0, v = 0, wide = 0) {
     x86_mem(0xC7, 0, base, disp, wide);    // mov qword [base + disp], imm32
     emit_d(v);
     op_note(OP_STI, 0, v, at, mem_o(base, disp, wide));
-    want_arm { a_imm(16, v); a_ldst(true, 16, 8, base, disp); }
 }
 
 op_pushm(base = 0, disp = 0, wide = 0) {
     at = size_code;
     x86_mem_now(0xFF, 6, base, disp, wide);   // push qword [base + disp]
     op_note(OP_PUSHM, 0, disp, at, base * 2 + wide);
-    want_arm { a_ldst(false, 16, 8, base, disp); a_push(16); }
 }
 
 op_pushi(v = 0) {
     at = size_code;
     eb(0x6A, v & 255);                      // push imm8
     op_note(OP_PUSHI, 0, v, at);
-    want_arm { a_imm(16, v); a_push(16); }
 }
 
 // r ← r + v: inc, dec, or add imm32
@@ -324,7 +310,6 @@ op_addi(r = 0, v = 0) {
         emit_d(v);
     }
     op_note(OP_ADDI, r, v, at);
-    want_arm { a_add_imm(a_rn(r), a_rn(r), v); }
 }
 
 // qword [base + disp] += v: inc, dec, or add imm32
@@ -339,7 +324,6 @@ op_addim(base = 0, disp = 0, v = 0, wide = 0) {
         emit_d(v);
     }
     op_note(OP_ADDIM, 0, v, at, mem_o(base, disp, wide));
-    want_arm { a_ldst(false, 16, 8, base, disp); a_add_imm(16, 16, v); a_ldst(true, 16, 8, base, disp); }
 }
 
 op_cmpi(r = 0, v = 0) {
@@ -351,7 +335,6 @@ op_cmpi(r = 0, v = 0) {
     }
     emit_d(v);
     op_note(OP_CMPI, r, v, at);
-    want_arm { a_imm(17, v); a_ins("cmp "); a_reg(r); a_str(", x17"); a_nl(); }
 }
 
 // cmp qword [base + disp], imm8
@@ -360,7 +343,6 @@ op_cmpim(base = 0, disp = 0, v = 0, wide = 0) {
     x86_mem(0x83, 7, base, disp, wide);
     emit(v & 255);
     op_note(OP_CMPIM, 0, v, at, mem_o(base, disp, wide));
-    want_arm { a_ldst(false, 16, 8, base, disp); a_imm(17, v); a_line("cmp x16, x17"); }
 }
 
 op_muli(r = 0, s = 0, v = 0) {
@@ -368,77 +350,66 @@ op_muli(r = 0, s = 0, v = 0) {
     eb(0x48 | rex_r(r) | rex_b(s), 0x69, 0xC0 | ((r & 7) << 3) | (s & 7));   // imul r, s, imm32
     emit_d(v);
     op_note(OP_MULI, r, v, at, s);
-    want_arm { a_imm(17, v); a_ins("mul "); a_reg(r); a_str(", "); a_reg(s); a_str(", x17"); a_nl(); }
 }
 
 op_mul(r = 0, s = 0) {
     at = size_code;
     eb(0x48 | rex_r(r) | rex_b(s), 0x0F, 0xAF, 0xC0 | ((r & 7) << 3) | (s & 7));   // imul r, s
     op_note(OP_MUL, r, 0, at, s);
-    want_arm { a_rrr("mul ", r, r, s); }
 }
 
 op_shri(r = 0, n = 0) {
     at = size_code;
     eb(0x48 | rex_b(r), 0xC1, 0xE8 | (r & 7), n);   // shr r, n
     op_note(OP_SHRI, r, n, at);
-    want_arm { a_ins("lsr "); a_reg(r); a_str(", "); a_reg(r); a_str(", #"); a_num(n); a_nl(); }
 }
 
 op_shl(r = 0) {
     at = size_code;
     eb(0x48 | rex_b(r), 0xD3, 0xE0 | (r & 7));   // shl r, cl
     op_note(OP_SHL, r, 0, at);
-    want_arm { a_rrr("lsl ", r, r, R_CX); }
 }
 
 op_sar(r = 0) {
     at = size_code;
     eb(0x48 | rex_b(r), 0xD3, 0xF8 | (r & 7));   // sar r, cl
     op_note(OP_SAR, r, 0, at);
-    want_arm { a_rrr("asr ", r, r, R_CX); }
 }
 
 op_neg(r = 0) {
     at = size_code;
     eb(0x48 | rex_b(r), 0xF7, 0xD8 | (r & 7));   // neg r
     op_note(OP_NEG, r, 0, at);
-    want_arm { a_rr("neg ", r, r); }
 }
 
 op_not(r = 0) {
     at = size_code;
     eb(0x48 | rex_b(r), 0xF7, 0xD0 | (r & 7));   // not r
     op_note(OP_NOT, r, 0, at);
-    want_arm { a_rr("mvn ", r, r); }
 }
 
 op_notb(r = 0) {
     at = size_code;
     eb(0x83, 0xF0 | r, 0x01);               // xor eR, 1
     op_note(OP_NOTB, r, 0, at);
-    want_arm { a_ins("eor "); a_reg(r); a_str(", "); a_reg(r); a_str(", #1"); a_nl(); }
 }
 
 op_fneg(r = 0) {
     at = size_code;
     eb(0x48 | rex_b(r), 0x0F, 0xBA, 0xF8 | (r & 7), 0x3F);   // btc r, 63
     op_note(OP_FNEG, r, 0, at);
-    want_arm { a_imm(16, 1 << 63); a_ins("eor "); a_reg(r); a_str(", "); a_reg(r); a_str(", x16"); a_nl(); }
 }
 
 op_test(r = 0) {
     at = size_code;
     eb(0x48 | rex_b(r) | rex_r(r), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
     op_note(OP_TEST, r, 0, at);
-    want_arm { a_rr("tst ", r, r); }
 }
 
 op_setcc(cc = 0, r = 0) {
     at = size_code;
     eb(0x0F, 0x90 | cc, 0xC0 | r);          // setcc r8 (al, cl, dl, bl)
     op_note(OP_SETCC, r, cc, at);
-    want_arm { a_ins("cset "); a_reg(r); a_str(", "); a_str(a_cond(cc)); a_nl(); }
 }
 
 // r ← s if cc
@@ -446,29 +417,26 @@ op_cmov(cc = 0, r = 0, s = 0) {
     at = size_code;
     eb(0x48 | rex_r(r) | rex_b(s), 0x0F, 0x40 | cc, 0xC0 | ((r & 7) << 3) | (s & 7));   // cmovcc r, s
     op_note(OP_CMOV, r, cc, at, s);
-    want_arm { a_ins("csel "); a_reg(r); a_str(", "); a_reg(s); a_str(", "); a_reg(r); a_str(", "); a_str(a_cond(cc)); a_nl(); }
 }
 
-// a forward jump on cc → the position to patch (patch_here)
+// a forward jump on cc → its label, to bind where it lands (patch_here)
 op_jcc(cc = 0) {
     at = size_code;
     eb(0x0F, 0x80 | cc);
-    pos = size_code;
+    l = label_new(LAB_JUMP, 0, size_code);
     emit_d(0);
-    op_note(OP_JCC, 0, cc, at, -1);
-    want_arm { arm_jcc(cc, pos); }
-    : pos;
+    op_note(OP_JCC, 0, cc, at, l);
+    : l;
 }
 
-// a forward jump → the position to patch (patch_here)
+// a forward jump → its label (patch_here)
 op_jmp() {
     at = size_code;
     emit(0xE9);
-    pos = size_code;
+    l = label_new(LAB_JUMP, 0, size_code);
     emit_d(0);
-    op_note(OP_JMP, 0, 0, at, -1);
-    want_arm { a_ins("b "); a_label_f(pos); a_nl(); }
-    : pos;
+    op_note(OP_JMP, 0, 0, at, l);
+    : l;
 }
 
 op_imm64(r = 0, v = 0) {
@@ -476,7 +444,6 @@ op_imm64(r = 0, v = 0) {
     eb(0x48 | rex_b(r), 0xB8 | (r & 7));    // mov r, imm64
     emit_q(v);
     op_note(OP_IMM64, r, v, at);
-    want_arm { a_imm(a_rn(r), v); }
 }
 
 op_imms(r = 0, v = 0) {
@@ -484,7 +451,6 @@ op_imms(r = 0, v = 0) {
     eb(0x48 | rex_b(r), 0xC7, 0xC0 | (r & 7));   // mov r, simm32
     emit_d(v);
     op_note(OP_IMMS, r, v, at);
-    want_arm { a_imm(a_rn(r), v); }
 }
 
 // xmm x ← the bits of r
@@ -492,7 +458,6 @@ op_xmov(x = 0, r = 0) {
     at = size_code;
     eb(0x66, 0x48 | rex_r(x) | rex_b(r), 0x0F, 0x6E, 0xC0 | ((x & 7) << 3) | (r & 7));   // movq xmm, r
     op_note(OP_XMOV, x, 0, at, r);
-    want_arm { a_ins("fmov d"); a_num(x); a_str(", "); a_reg(r); a_nl(); }
 }
 
 // r ← the bits of xmm x
@@ -500,7 +465,6 @@ op_rmovx(r = 0, x = 0) {
     at = size_code;
     eb(0x66, 0x48 | rex_r(x) | rex_b(r), 0x0F, 0x7E, 0xC0 | ((x & 7) << 3) | (r & 7));   // movq r, xmm
     op_note(OP_RMOVX, r, 0, at, x);
-    want_arm { a_ins("fmov "); a_reg(r); a_str(", d"); a_num(x); a_nl(); }
 }
 
 // xmm x ← [rbp + d]
@@ -511,7 +475,6 @@ op_xld(x = 0, d = 0) {
     eb(0x0F, 0x7E, 0x85 | ((x & 7) << 3));  // movq xmm, [rbp + disp32]
     emit_d(d);
     op_note(OP_XLD, x, d, at);
-    want_arm { a_ldst(false, 16, 8, R_BP, d); a_ins("fmov d"); a_num(x); a_str(", x16"); a_nl(); }
 }
 
 // xmm x ← xmm x op xmm y
@@ -521,21 +484,18 @@ op_xop(xop = 0, x = 0, y = 0) {
     x >= 8 || y >= 8 { emit(0x40 | rex_r(x) | rex_b(y)); }
     eb(0x0F, xop, 0xC0 | ((x & 7) << 3) | (y & 7));   // addsd / subsd / mulsd / divsd
     op_note(OP_XOP, x, xop, at, y);
-    want_arm { arm_xop(xop, x, y); }
 }
 
 op_i2f(x = 0, r = 0) {
     at = size_code;
     eb(0xF2, 0x48 | rex_r(x) | rex_b(r), 0x0F, 0x2A, 0xC0 | ((x & 7) << 3) | (r & 7));   // cvtsi2sd xmm, r
     op_note(OP_I2F, x, 0, at, r);
-    want_arm { a_ins("scvtf d"); a_num(x); a_str(", "); a_reg(r); a_nl(); }
 }
 
 op_f2i(r = 0, x = 0) {
     at = size_code;
     eb(0xF2, 0x48 | rex_r(r) | rex_b(x), 0x0F, 0x2C, 0xC0 | ((r & 7) << 3) | (x & 7));   // cvttsd2si r, xmm
     op_note(OP_F2I, r, 0, at, x);
-    want_arm { arm_f2i(r, x); }
 }
 
 // rax ← xmm0 ?t xmm1 (t: '>' T_GE '<' T_LE T_EQ T_NE); NaN: only != is true
@@ -558,39 +518,36 @@ op_fcmp_set(t = 0) {
     }
     eb(0x0F, 0xB6, 0xC0);                   // movzx eax, al
     op_note(OP_FCMP_SET, R_AX, t, at);
-    want_arm { arm_fcmp_set(t); }
 }
 
 op_zxb(r = 0) {
     at = size_code;
     eb(0x0F, 0xB6, 0xC0 | (r << 3) | r);    // movzx eR, r8
     op_note(OP_ZXB, r, 0, at);
-    want_arm { a_ins("and "); a_reg(r); a_str(", "); a_reg(r); a_str(", #0xff"); a_nl(); }
 }
 
-// r ← the address of a place further on → the position to patch (patch_to_here)
+// r ← the address of a place further on → its label (patch_to_here)
 op_lea_fwd(r = 0) {
     at = size_code;
     eb(0x48, 0x8D, 0x05 | (r << 3));        // lea r, [rip + rel32]
-    pos = size_code;
+    l = label_new(LAB_JUMP, 0, size_code);
     emit_d(0);
-    op_note(OP_LEA_FWD, r, 0, at);
-    want_arm { a_ins("adrp "); a_reg(r); a_str(", "); a_label_f(pos); a_str("@PAGE"); a_nl(); a_ins("add "); a_reg(r); a_str(", "); a_reg(r); a_str(", "); a_label_f(pos); a_str("@PAGEOFF"); a_nl(); }
-    : pos;
+    op_note(OP_LEA_FWD, r, l, at);
+    : l;
 }
 
-// a short forward jump on cc, over a few operations → the position to patch (patch8_here)
+// a short forward jump on cc, over a few operations → its label (patch8_here)
 op_jcc8(cc = 0) {
     at = size_code;
-    eb(0x70 | cc, 0);
-    op_note(OP_JCC8, 0, cc, at);
-    want_arm { arm_jcc(cc, size_code - 1); }
-    : size_code - 1;
+    emit(0x70 | cc);
+    l = label_new(LAB_JUMP8, 0, size_code);
+    emit(0);
+    op_note(OP_JCC8, 0, cc, at, l);
+    : l;
 }
 
-patch8_here(pos = 0) {
-    code[pos] = size_code - (pos + 1);
-    a_land(pos);
+patch8_here(l = 0) {
+    label_bind(l);
 }
 
 // rsp ← rsp - the frame's size, known at the end → the position for put_frame
@@ -600,7 +557,7 @@ op_frame() {
     pos = size_code;
     emit_d(0);
     op_note(OP_FRAME, 0, 0, at);
-    want_arm { arm_frame(pos); }
+    want_arm { arm_frame(pos, n_ops - 1); }
     : pos;
 }
 
@@ -609,15 +566,14 @@ put_frame(pos = 0, size = 0) {
     want_arm { arm_put_frame(pos, size); }
 }
 
-// a call of a place further on → the position to patch (patch_here)
+// a call of a place further on → its label (patch_here), where the return address is kept
 op_call_fwd() {
     at = size_code;
     emit(0xE8);
-    pos = size_code;
+    l = label_new(LAB_CALLED, 0, size_code);
     emit_d(0);
-    op_note(OP_CALL_FWD, 0, 0, at);
-    want_arm { a_ins("bl "); a_label_f(pos); a_nl(); }
-    : pos;
+    op_note(OP_CALL_FWD, 0, l, at);
+    : l;
 }
 
 op_push(r = 0) {
@@ -625,7 +581,6 @@ op_push(r = 0) {
     r >= 8 { emit(0x41); }
     emit(0x50 | (r & 7));                  // push r
     op_note(OP_PUSH, r, 0, at);
-    want_arm { a_push(a_rn(r)); }
 }
 
 op_pop(r = 0) {
@@ -633,14 +588,12 @@ op_pop(r = 0) {
     r >= 8 { emit(0x41); }
     emit(0x58 | (r & 7));                  // pop r
     op_note(OP_POP, r, 0, at);
-    want_arm { a_pop(a_rn(r)); }
 }
 
 op_zero(r = 0) {
     at = size_code;
     eb(0x31, 0xC0 | (r << 3) | r);          // xor eR, eR
     op_note(OP_ZERO, r, 0, at);
-    want_arm { a_imm(a_rn(r), 0); }
 }
 
 // rsp + n: n > 0 drops n bytes, n < 0 makes room; wide = 1: imm32 even when it fits a byte
@@ -656,7 +609,6 @@ op_stack(n = 0, wide = 0) {
         emit_d(m);
     }
     op_note(OP_STACK, 4, n, at, wide);
-    want_arm { arm_stack(n); }
 }
 
 // rax ← rax ?cc rcx, 0 or 1
@@ -664,7 +616,6 @@ op_cmp_set(cc = 0) {
     at = size_code;
     eb(0x48, 0x39, 0xC8, 0x0F, 0x90 | cc, 0xC0, 0x0F, 0xB6, 0xC0);   // cmp rax, rcx ; setcc al ; movzx eax, al
     op_note(OP_CMP_SET, R_AX, cc, at);
-    want_arm { arm_cmp_set(cc); }
 }
 
 // the flags ← rax - rcx
@@ -672,7 +623,6 @@ op_cmp() {
     at = size_code;
     eb(0x48, 0x39, 0xC8);                   // cmp rax, rcx
     op_note(OP_CMP, R_AX, 0, at);
-    want_arm { a_line("cmp x9, x10"); }
 }
 
 // r ← r op s (alu: ALU_*)
@@ -680,7 +630,6 @@ op_alu(alu = 0, r = 0, s = 0) {
     at = size_code;
     eb(0x48 | rex_b(r) | rex_r(s), alu, 0xC0 | ((s & 7) << 3) | (r & 7));   // op r, s
     op_note(OP_ALU, r, alu, at, s);
-    want_arm { arm_alu(alu, r, s); }
 }
 
 // code that puts v in rax, in the shortest form
@@ -757,13 +706,12 @@ emit_store_var(k = 0) {
     }
 }
 
-// a jump back to dest
-emit_jmp_to(dest = 0) {
+// a jump back to the label l (label_here)
+emit_jmp_to(l = 0) {
     at = size_code;
     emit(0xE9);
-    emit_d(dest - size_code - 4);
-    op_note(OP_JMP, 0, 0, at, dest);
-    want_arm { a_ins("b "); a_label_l(dest); a_nl(); }
+    emit_d(lab_at[l] - size_code - 4);
+    op_note(OP_JMP, 0, 0, at, l);
 }
 
 emit_call_rt(rt = 0) {
@@ -771,7 +719,6 @@ emit_call_rt(rt = 0) {
     emit(0xE8);
     emit_d(rt + SIZE_HEADER - size_code - 4);
     op_note(OP_CALL_RT, 0, rt, at);
-    want_arm { arm_call_rt(rt); }
 }
 
 // cmp rcx, [rax-8] ; jae erro_indice
@@ -786,19 +733,64 @@ op_jcc_rt(cc = 0, rt = 0) {
     eb(0x0F, 0x80 | cc);
     emit_d(rt + SIZE_HEADER - size_code - 4);
     op_note(OP_JCC_RT, 0, cc, at, rt);
-    want_arm { a_ins("b."); a_str(a_cond(cc)); a_str(" "); a_label_rt(rt); a_nl(); }
 }
 
-// the rel32 at pos now points to the current position
-patch_here(pos = 0) {
-    patch_to_here(pos);
+// the forward jump of label l lands here
+patch_here(l = 0) {
+    label_bind(l);
     last_target = size_code;               // a jump lands here: the code before it cannot change
 }
 
 // the same, for an address taken (op_lea_fwd), not a jump
-patch_to_here(pos = 0) {
-    put_d(pos, size_code - (pos + 4));
-    a_land(pos);
+patch_to_here(l = 0) {
+    label_bind(l);
+}
+
+// ---- labels (00_data.nihil) ----
+
+// a new label; fix: the displacement of the forward jump to it (-1: none)
+label_new(kind = 0, v = 0, fix = -1) {
+    l = lab_free;
+    l >= 0 {
+        lab_free = lab_next[l];
+    } || {
+        n_labs >= lab_cap { error("too many labels"); }
+        l = n_labs;
+        n_labs = n_labs + 1;
+    }
+    lab_at[l] = -1;
+    lab_fix[l] = fix;
+    lab_kind[l] = kind;
+    lab_v[l] = v;
+    : l;
+}
+
+// the label l is here: its forward jump is patched
+label_bind(l = 0) {
+    lab_at[l] = size_code;
+    f = lab_fix[l];
+    f >= 0 && lab_kind[l] == LAB_JUMP8 { code[f] = size_code - (f + 1); }
+    f >= 0 && lab_kind[l] != LAB_JUMP8 { put_d(f, size_code - (f + 4)); }
+    want_arm {
+        lab_op[l] = n_ops;                 // before the next operation
+        binds[n_binds] = l;
+        n_binds = n_binds + 1;
+    } || f >= 0 {
+        label_drop(l);                     // nothing names it again
+    }
+}
+
+// a label bound here, for jumps back to it
+label_here() {
+    l = label_new(LAB_JUMP);
+    label_bind(l);
+    : l;
+}
+
+// a label no longer used (its jump was cut): free again, without -arm
+label_drop(l = 0) {
+    lab_next[l] = lab_free;
+    lab_free = l;
 }
 
 // ---- registers: r = 3 (rbx) or 12 … 15 ----
@@ -819,7 +811,6 @@ emit_return() {
     limit_regs == 0 {
         eb(0xC9, 0xC3);                     // leave ; ret
         op_note(OP_EPILOGUE, 0, 0, at);
-        want_arm { arm_epilogue(0); }
         :;
     }
     eb(0x48, 0x8D, 0x65, (-8 * limit_regs) & 255);   // lea rsp, [rbp - 8·n]
@@ -831,7 +822,6 @@ emit_return() {
     }
     eb(0x5D, 0xC3);                         // pop rbp ; ret
     op_note(OP_EPILOGUE, 0, limit_regs, at);
-    want_arm { arm_epilogue(limit_regs); }
 }
 
 // ---- optimizations on code already emitted ----

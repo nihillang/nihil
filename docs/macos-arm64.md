@@ -60,9 +60,11 @@ rebuilds its compiler by itself (`macos/nihil src1/nihilc1.nihil build/macos/nih
 
 Every instruction the compiler emits is an operation (`src1/40_emit.nihil`: `op_load`, `op_push`,
 `op_ld`, `op_jcc` … about 60 kinds, `OP_*` in `src1/00_data.nihil`), noted in a ring that the
-optimizations read instead of the x86 bytes. With `-arm`, each operation also writes its ARM64 text
-(`src1/42_arm.nihil`), on stderr after the map and a line `nihil-arm`; the translator then uses that
-text for the program and translates only the runtime:
+optimizations read instead of the x86 bytes. Jumps name labels (`label_new`, `label_bind`,
+`label_here`), not positions in the code. With `-arm`, all of a pass's operations are kept, with
+where each label was bound, and after the last pass `src1/42_arm.nihil` writes them as ARM64 text,
+on stderr after the map and a line `nihil-arm`; the translator then uses that text for the program
+and translates only the runtime:
 
     NIHIL_ARM=1 macos/nihil prog.nihil [out]
     NIHIL_ARM=1 macos/test-native.sh          (127 programs, also with NIHIL_O0=1)

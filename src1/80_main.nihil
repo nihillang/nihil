@@ -110,9 +110,11 @@ globals_learn() {
 // redone; types discovered for methods and globals persist)
 one_pass() {
     size_code = 0;
-    n_ops = 0;                             // the operations, and their ARM64 text, start again
+    n_ops = 0;                             // the operations and the labels start again
     ops_low = 0;
-    arm_len = 0;
+    n_labs = 0;
+    lab_free = -1;
+    n_binds = 0;
     n_frames = 0;
     n_fix = 0;
     last_target = -1;
@@ -157,7 +159,6 @@ one_pass() {
 
     // inicializa_globals: every STRING or ARRAY global starts empty
     patch_here(pos_init);
-    a_entry();
     i = 0;
     n_sym_base {
         s_flags[i] & FLAG_TOP != 0 {
@@ -202,6 +203,7 @@ want_map {
     !>> $map_line;
 }
 want_arm {
+    arm_text();
     !>> "nihil-arm\n";
     arm_out = [0 ; arm_len];
     i_arm = 0;

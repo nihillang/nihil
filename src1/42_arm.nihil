@@ -1,12 +1,12 @@
 // =============================================================================
-// ARM64 text for the operations (-arm): each operation (40_emit.nihil) also writes its ARM64
-// assembly here, with the conventions of macos/translate.nihil, so that the runtime it translates
-// serves the program unchanged:
+// ARM64 text for the operations (-arm): after the last pass, the operations kept (40_emit.nihil,
+// all of them with -arm) are written as ARM64 assembly, with the conventions of
+// macos/translate.nihil, so that the runtime it translates serves the program unchanged:
 //   rax rcx rdx rsi rdi → x9 x10 x11 x12 x13; rbx r12 … r15 → x19 … x23; rbp → x29; rsp → x28, the
 //   x86 stack emulated exactly (8-byte slots); globals through x27 (_nh_globals_start); the
 //   constants at Lconst; a runtime routine rt at L_<its jump table address>_c (call) or L_<…> (jump).
-// Every operation starts with the label L_<its x86 address>, so jumps back name it; a forward jump
-// names Lf<the position patched>, written where patch_here lands; a method k starts at Lm<k>.
+// A label l (00_data.nihil) is Lj<l>, written before the operation it was bound before; a method k
+// starts at Lm<k>; the program starts at L_<its x86 address>, where the translated runtime jumps.
 // The text goes to stderr after the map line and "nihil-arm" (macos/nihil, macos/translate.nihil).
 // =============================================================================
 
@@ -148,26 +148,111 @@ a_rr(op = "", d = 0, s = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(s); a_nl()
 a_rrr(op = "", d = 0, a = 0, b = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(a); a_str(", "); a_reg(b); a_nl(); }
 
 a_label_l(pos = 0) { a_str("L_"); a_hex(BASE_CODE + pos); }
-a_label_f(pos = 0) { a_str("Lf"); a_num(pos); }
+a_label(l = 0) { a_str("Lj"); a_num(l); }
 a_label_rt(rt = 0) { a_str("L_"); a_hex(BASE_CODE + SIZE_HEADER + rt); }
 
-// where patch_here (or patch_to_here, patch8_here) lands: the label of the jump at pos
-a_land(pos = 0) {
-    !want_arm { :; }
-    a_label_f(pos); a_str(":"); a_nl();
-}
-
-// a method k starts here: its label, and its return address on the x86 stack (as call does)
+// a method k starts here (cmd_method): a label for the text
 a_method(k = 0) {
-    !want_arm { :; }
-    a_str("Lm"); a_num(k); a_str(":"); a_nl();
-    a_line("str x30, [x28, #-8]!");
+    want_arm { label_bind(label_new(LAB_METHOD, k)); }
 }
 
-// the start of a place called (op_call_fwd): the return address on the x86 stack
-a_entry() {
-    !want_arm { :; }
-    a_line("str x30, [x28, #-8]!");
+// the label l, where it was bound; a method's start, or a place called, keeps its return address on
+// the x86 stack (as call does)
+arm_bind(l = 0) {
+    kind = lab_kind[l];
+    kind == LAB_METHOD { a_str("Lm"); a_num(lab_v[l]); } || { a_label(l); }
+    a_str(":"); a_nl();
+    kind == LAB_METHOD || kind == LAB_CALLED { a_line("str x30, [x28, #-8]!"); }
+}
+
+// the whole text: the program's start, then each operation, each label before the one it was bound before
+arm_text() {
+    arm_len = 0;
+    a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl();
+    j = 0;
+    i = 0;
+    * i <= n_ops {
+        * j < n_binds && lab_op[binds[j]] <= i { arm_bind(binds[j]); j = j + 1; }
+        i < n_ops { arm_op(i); }
+        i = i + 1;
+    }
+}
+
+// the operation i
+arm_op(i = 0) {
+    k = op_k[i];
+    r = op_r[i];
+    v = op_v[i];
+    o = op_o[i];
+    k >= OP_IMM && k <= OP_REG { arm_load(k, r, v, o); :; }
+    k == OP_CMP_SET { arm_cmp_set(v); :; }
+    k == OP_CMP { a_line("cmp x9, x10"); :; }
+    k == OP_CALL_RT { arm_call_rt(v); :; }
+    k == OP_ALU { arm_alu(v, r, o); :; }
+    k == OP_PUSH { a_push(a_rn(r)); :; }
+    k == OP_POP { a_pop(a_rn(r)); :; }
+    k == OP_ZERO { a_imm(a_rn(r), 0); :; }
+    k == OP_STACK { arm_stack(v); :; }
+    k == OP_LEA_CONST { arm_lea_const(r, v); :; }
+    k == OP_CALL { a_ins("bl Lm"); a_num(v); a_nl(); :; }
+    k == OP_RET { a_pop(30); a_line("ret"); :; }
+    // [base + disp]: o = base * 2 + wide, v = disp
+    b = o >> 1;
+    k == OP_LD { a_ldst(false, a_rn(r), 8, b, v); :; }
+    k == OP_ST { a_ldst(true, a_rn(r), 8, b, v); :; }
+    k == OP_LEA { a_add_imm(a_rn(r), a_rn(b), v); :; }
+    k == OP_CMPM { a_ldst(false, 16, 8, b, v); a_ins("cmp "); a_reg(r); a_str(", x16"); a_nl(); :; }
+    k == OP_SUBM { a_ldst(false, 16, 8, b, v); a_ins("sub "); a_reg(r); a_str(", "); a_reg(r); a_str(", x16"); a_nl(); :; }
+    k == OP_ADDTOM { a_ldst(false, 16, 8, b, v); a_ins("add x16, x16, "); a_reg(r); a_nl(); a_ldst(true, 16, 8, b, v); :; }
+    k == OP_PUSHM { a_ldst(false, 16, 8, b, v); a_push(16); :; }
+    // [base + index (* 8)]: v = base, o = index
+    k == OP_LDX { a_ins("ldr "); a_reg(r); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str(", lsl #3]"); a_nl(); :; }
+    k == OP_STX { a_ins("str "); a_reg(r); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str(", lsl #3]"); a_nl(); :; }
+    k == OP_LDBX { a_ins("ldrb "); a_w(a_rn(r)); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str("]"); a_nl(); :; }
+    k == OP_STBX { a_ins("strb "); a_w(a_rn(r)); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str("]"); a_nl(); :; }
+    // qword [base + disp] with a constant v: o = mem_o(base, disp, wide)
+    mb = (o >> 32) >> 1;
+    md = ((o & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000;
+    k == OP_STI { a_imm(16, v); a_ldst(true, 16, 8, mb, md); :; }
+    k == OP_ADDIM { a_ldst(false, 16, 8, mb, md); a_add_imm(16, 16, v); a_ldst(true, 16, 8, mb, md); :; }
+    k == OP_CMPIM { a_ldst(false, 16, 8, mb, md); a_imm(17, v); a_line("cmp x16, x17"); :; }
+    k == OP_PUSHI { a_imm(16, v); a_push(16); :; }
+    k == OP_ADDI { a_add_imm(a_rn(r), a_rn(r), v); :; }
+    k == OP_CMPI { a_imm(17, v); a_ins("cmp "); a_reg(r); a_str(", x17"); a_nl(); :; }
+    k == OP_MULI { a_imm(17, v); a_ins("mul "); a_reg(r); a_str(", "); a_reg(o); a_str(", x17"); a_nl(); :; }
+    k == OP_MUL { a_rrr("mul ", r, r, o); :; }
+    k == OP_SHRI { a_ins("lsr "); a_reg(r); a_str(", "); a_reg(r); a_str(", #"); a_num(v); a_nl(); :; }
+    k == OP_SHL { a_rrr("lsl ", r, r, R_CX); :; }
+    k == OP_SAR { a_rrr("asr ", r, r, R_CX); :; }
+    k == OP_NEG { a_rr("neg ", r, r); :; }
+    k == OP_NOT { a_rr("mvn ", r, r); :; }
+    k == OP_NOTB { a_ins("eor "); a_reg(r); a_str(", "); a_reg(r); a_str(", #1"); a_nl(); :; }
+    k == OP_FNEG { a_imm(16, 1 << 63); a_ins("eor "); a_reg(r); a_str(", "); a_reg(r); a_str(", x16"); a_nl(); :; }
+    k == OP_TEST { a_rr("tst ", r, r); :; }
+    k == OP_SETCC { a_ins("cset "); a_reg(r); a_str(", "); a_str(a_cond(v)); a_nl(); :; }
+    k == OP_CMOV { a_ins("csel "); a_reg(r); a_str(", "); a_reg(o); a_str(", "); a_reg(r); a_str(", "); a_str(a_cond(v)); a_nl(); :; }
+    k == OP_JCC || k == OP_JCC8 { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label(o); a_nl(); :; }
+    k == OP_JMP { a_ins("b "); a_label(o); a_nl(); :; }
+    k == OP_IMM64 || k == OP_IMMS { a_imm(a_rn(r), v); :; }
+    k == OP_XMOV { a_ins("fmov d"); a_num(r); a_str(", "); a_reg(o); a_nl(); :; }
+    k == OP_RMOVX { a_ins("fmov "); a_reg(r); a_str(", d"); a_num(o); a_nl(); :; }
+    k == OP_XLD { a_ldst(false, 16, 8, R_BP, v); a_ins("fmov d"); a_num(r); a_str(", x16"); a_nl(); :; }
+    k == OP_XOP { arm_xop(v, r, o); :; }
+    k == OP_I2F { a_ins("scvtf d"); a_num(r); a_str(", "); a_reg(o); a_nl(); :; }
+    k == OP_F2I { arm_f2i(r, o); :; }
+    k == OP_FCMP_SET { arm_fcmp_set(v); :; }
+    k == OP_ZXB { a_ins("and "); a_reg(r); a_str(", "); a_reg(r); a_str(", #0xff"); a_nl(); :; }
+    k == OP_LEA_FWD {
+        a_ins("adrp "); a_reg(r); a_str(", "); a_label(v); a_str("@PAGE"); a_nl();
+        a_ins("add "); a_reg(r); a_str(", "); a_reg(r); a_str(", "); a_label(v); a_str("@PAGEOFF"); a_nl();
+        :;
+    }
+    k == OP_FRAME { arm_stack(-v); :; }
+    k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
+    k == OP_ALIGN { :; }
+    k == OP_JCC_RT { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label_rt(o); a_nl(); :; }
+    k == OP_EPILOGUE { arm_epilogue(v); :; }
+    error("internal error: an operation with no ARM64 text");
 }
 
 // ---- each operation ----
@@ -206,16 +291,13 @@ arm_lea_const(r = 0, c = 0) {
 
 arm_stack(n = 0) { a_add_imm(28, 28, n); }
 
-arm_jcc(cc = 0, pos = 0) { a_ins("b."); a_str(a_cond(cc)); a_str(" "); a_label_f(pos); a_nl(); }
-
-// the frame's size, patched by put_frame: two 16-bit halves in fixed-width hex
+// the frame's size, known at the end (put_frame), goes into its operation (op_v): the frames open
 FRAMES = 16;
 frame_pos = [0 ; FRAMES];
-frame_tx = [0 ; FRAMES];               // where the low half's 4 hex digits are in the text
-frame_tx2 = [0 ; FRAMES];              // and the high half's
+frame_op = [0 ; FRAMES];
 n_frames = 0;
 
-arm_frame(pos = 0) {
+arm_frame(pos = 0, i_op = 0) {
     i = 0;
     * i < n_frames && frame_pos[i] != pos { i = i + 1; }
     i == n_frames {
@@ -223,34 +305,18 @@ arm_frame(pos = 0) {
         n_frames = n_frames + 1;
     }
     frame_pos[i] = pos;
-    a_ins("movz x17, #0x");
-    frame_tx[i] = arm_len;
-    a_str("0000, lsl #0"); a_nl();
-    a_ins("movk x17, #0x");
-    frame_tx2[i] = arm_len;
-    a_str("0000, lsl #16"); a_nl();
-    a_line("sub x28, x28, x17");
-}
-
-a_put_hex4(at = 0, v = 0) {
-    k = 0;
-    4 {
-        h = (v >> (12 - 4 * k)) & 15;
-        h < 10 { arm[at + k] = '0' + h; } || { arm[at + k] = 'a' + h - 10; }
-        k = k + 1;
-    }
+    frame_op[i] = i_op;
 }
 
 arm_put_frame(pos = 0, size = 0) {
     i = 0;
     * i < n_frames && frame_pos[i] != pos { i = i + 1; }
-    i == n_frames { :; }                   // (its text was cut back)
-    a_put_hex4(frame_tx[i], size & 0xFFFF);
-    a_put_hex4(frame_tx2[i], (size >> 16) & 0xFFFF);
+    i == n_frames { :; }
+    j = frame_op[i];
+    j < n_ops && op_k[j] == OP_FRAME && op_end[j] == pos + 4 { op_v[j] = size; }   // (unless it was cut back)
     n_frames = n_frames - 1;               // closed: its place goes to the last one open
     frame_pos[i] = frame_pos[n_frames];
-    frame_tx[i] = frame_tx[n_frames];
-    frame_tx2[i] = frame_tx2[n_frames];
+    frame_op[i] = frame_op[n_frames];
 }
 
 arm_epilogue(n = 0) {

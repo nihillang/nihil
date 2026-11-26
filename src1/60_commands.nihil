@@ -241,7 +241,7 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     op_st(R_BP, n, R_CX, 1);         // mov [rbp + n], rcx
     op_sti(R_BP, ix, 0, 1);    // mov qword [rbp + i], 0
     align_loop();
-    top = size_code;
+    top = label_here();
     last_target = size_code;
     op_ld(R_CX, R_BP, ix, 1);        // mov rcx, [rbp + i]
     op_cmpm(R_CX, R_BP, n, 1);         // cmp rcx, [rbp + n]
@@ -335,7 +335,7 @@ counted_loop(with_block = true) {
         // counter in a register: mov r, rax ; top: test r, r ; jle end ; … ; dec r ; jmp top
         emit_mov_reg_rax(r);
         align_loop();
-        top = size_code;
+        top = label_here();
         op_test(r);   // test r, r
         leave = op_jcc(CC_LE);                     // jle rel32
         loop_depth = loop_depth + 1;
@@ -351,7 +351,7 @@ counted_loop(with_block = true) {
     d = new_slot();
     emit_store_local(d);
     align_loop();
-    top = size_code;
+    top = label_here();
     op_cmpim(R_BP, d, 0, 1);                // cmp qword [rbp+disp32], 0
     leave = op_jcc(CC_LE);                  // jle rel32
     loop_depth = loop_depth + 1;
@@ -415,7 +415,7 @@ cmd_while() {
     next_token();
     loop_depth = loop_depth + 1;            // the condition runs on every turn too
     align_loop();
-    top = size_code;
+    top = label_here();
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
     !is_bool(t) {

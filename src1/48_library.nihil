@@ -696,7 +696,7 @@ query_call(t = 0) {
         q_store(d_res);
     }
     align_loop();
-    top = size_code;
+    top = label_here();
     last_target = size_code;               // the loop comes back here
     q_load(0, d_i);
     q_load(1, d_arr);

@@ -183,7 +183,7 @@ fix_method = [false ; MAX_FIX];
 n_fix = 0;
 
 // ---- the operations last emitted (40_emit.nihil): what the optimizations read, instead of the x86
-// bytes, so that another backend can emit the same operations. A ring of the last OPS_RING.
+// bytes, so that another backend can emit the same operations. A ring of the last ops_cap.
 OP_IMM = 1;             // r ← v, a constant
 OP_LOCAL = 2;           // r ← the local at frame offset v
 OP_GLOBAL = 3;          // r ← the global at address v
@@ -274,11 +274,12 @@ OP_POP = 10;            // pop r
 OP_ZERO = 11;           // r ← 0 (xor)
 OP_STACK = 12;          // the stack pointer + v (v < 0: room; v > 0: dropped); o = 1: the wide x86 form
 OPS_RING = 256;
-want_arm = false;       // -arm: each operation also writes its ARM64 text (42_arm.nihil)
+ops_cap = OPS_RING;     // the ring's size: -arm keeps all of a pass's operations (OPS_ARM), not wrapping
+OPS_ARM = 1 << 23;
+want_arm = false;       // -arm: the ARM64 text of the operations, written after each pass (42_arm.nihil)
 ARM_SIZE = 64 << 20;
 arm = [0 ; 1];          // the text (made the size of ARM_SIZE by -arm)
 arm_len = 0;
-op_tx = [0 ; OPS_RING]; // where each operation's text starts
 op_at = [0 ; OPS_RING];     // where its code starts
 op_end = [0 ; OPS_RING];    // where its code ends
 op_k = [0 ; OPS_RING];
@@ -287,6 +288,27 @@ op_v = [0 ; OPS_RING];
 op_o = [0 ; OPS_RING];
 n_ops = 0;              // operations noted so far; the ring holds those from ops_low on
 ops_low = 0;
+
+// ---- labels (40_emit.nihil): where a jump lands. A forward jump makes one, bound where it lands
+// (patch_here); a jump back names one bound before it (label_here). Without -arm, a bound forward
+// label is free again; with -arm all are kept, and where each was bound (lab_op) puts it in the text.
+LAB_JUMP = 0;           // a jump's
+LAB_JUMP8 = 1;          // a short jump's (op_jcc8: an 8-bit displacement)
+LAB_CALLED = 2;         // a place called (op_call_fwd): its return address is kept where it starts
+LAB_METHOD = 3;         // the start of the method lab_v
+LABELS = 1 << 16;
+LABELS_ARM = 1 << 21;
+lab_cap = LABELS;
+lab_at = [0 ; LABELS];      // its place in the code, once bound (-1 before)
+lab_fix = [0 ; LABELS];     // the displacement of the forward jump to patch when it is bound (-1: none)
+lab_kind = [0 ; LABELS];
+lab_v = [0 ; LABELS];
+lab_op = [0 ; LABELS];      // (-arm) the operation it is bound before
+lab_next = [0 ; LABELS];    // the next free label
+n_labs = 0;
+lab_free = -1;
+binds = [0 ; 1];            // (-arm) the labels in the order they were bound
+n_binds = 0;
 
 // ---- symbol table (one column per field) ----
 s_ofs = [0 ; MAX_SYM];

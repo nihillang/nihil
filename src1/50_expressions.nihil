@@ -23,14 +23,18 @@ expr_or() {
         is_opt(t) {
             // fallback: the value of t if present, otherwise the right one
             next_token();
-            op_test(R_DX); pos = op_jcc(CC_NE);   // test rdx, rdx ; jnz end
+            op_test(R_DX);               // test rdx, rdx
+            jump_at = size_code;
+            pos = op_jcc(CC_NE);           // jnz end
+            after = size_code;
             u = expr_and();
             b = base_opt(t);
             r = 0;
-            u == b && load_simple(pos + 4) >= 0 {
+            u == b && load_simple(after) >= 0 {
                 // no jump: mov rcx, fallback ; cmovz rax, rcx
-                simple_to_rcx(pos + 4, pos - 2);
+                simple_to_rcx(after, jump_at);
                 op_cmov(CC_E, R_AX, R_CX);     // cmovz rax, rcx
+                label_drop(pos);
                 pos = -1;
                 r = b;
             } || u == b || u == TYPE_UNKNOWN {
@@ -210,14 +214,16 @@ binary(nv = 0) {
         }
         pos_push = size_code;
         !late { op_push(R_AX); }              // push rax
+        after_push = size_code;
         u = binary(nv + 1);
         // "…" + $n: the $ (the right side's last code, a call to RT_INT_TEXT) is dropped and the
         // two go to RT_CONCAT_INT together, which writes the digits straight into the result
         fused = false;
+        lc = op_last_start();
         optimize && t == TYPE_STR && op == '+' && u == TYPE_STR && last_int_text == size_code
-            && is_call_rt(size_code - 5, RT_INT_TEXT)
-            && last_target <= size_code - 5 && (n_fix == 0 || fix_pos[n_fix - 1] < size_code - 5) {
-            code_cut(size_code - 5);
+            && lc >= 0 && is_call_rt(lc, RT_INT_TEXT)
+            && last_target <= lc && (n_fix == 0 || fix_pos[n_fix - 1] < lc) {
+            code_cut(lc);
             fused = true;
         }
         ri = -1;
@@ -233,9 +239,9 @@ binary(nv = 0) {
         } || late {
             op_load(OP_REG, R_CX, R_AX);    // mov rcx, rax ; the left one into rax
             op_load(lk, R_AX, lv);
-        } || load_simple(pos_push + 1) >= 0 {
+        } || load_simple(after_push) >= 0 {
             // the right side is a simple load: load it straight into rcx
-            simple_to_rcx(pos_push + 1, pos_push);
+            simple_to_rcx(after_push, pos_push);
         } || {
             op_mov(R_CX, R_AX); op_pop(R_AX);     // mov rcx, rax ; pop rax
         }
@@ -440,6 +446,7 @@ index_step(t = 0) {
     }
     pos_push = size_code;
     op_push(R_AX);                        // push rax
+    after_push = size_code;
     next_token();
     u = expression();
     u != TYPE_INT && u != TYPE_UNKNOWN {
@@ -449,8 +456,8 @@ index_step(t = 0) {
         error_end();
     }
     expect(']', "']'");
-    load_simple(pos_push + 1) >= 0 {
-        simple_to_rcx(pos_push + 1, pos_push);    // a simple index: straight into rcx, no stack
+    load_simple(after_push) >= 0 {
+        simple_to_rcx(after_push, pos_push);    // a simple index: straight into rcx, no stack
     } || {
         op_mov(R_CX, R_AX); op_pop(R_AX);     // mov rcx, rax ; pop rax
     }
