@@ -305,7 +305,7 @@ Carla&#x27;s order is #3
   #1 Ana: 42.5
   #3 Carla: 7.25</pre>
 <h2 id="modeling">13. Modeling data</h2>
-<p>There is no database apart from the program and no schema file: <b>the model is the schema</b>, declared in the code, and each model is a type, so the compiler checks every field name. A <b>table</b> is a text file in which every line is one record of the same width: it opens in an editor, goes into git, and record <i>i</i> starts at byte <i>i</i> × the width, so one record is read or changed without loading the rest. Next to it, <code>.nihil-idx</code> (the index of the key) and <code>.nihil-seq</code> (the counter of an automatic key) are caches that are rebuilt when they are missing or out of date.</p><p><b>Relations</b> are keys: a field holds the key of a record in another table (<code>customer</code> below holds a <code>CUSTOMER</code> id). The table does not enforce the link, so the program checks it when it writes (<code>sell</code>), and a <b>join</b> is a lookup by key (<code>CUSTOMER @{s.customer} CUSTOMERS</code>), a few small reads through the index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and <code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of its lines, so the old table no longer reads with the new model. Convert it once, reading it with the old model and writing it with the new one:</p><pre class="nihil">OLD = @[#id: INT(4); name: STRING(12)];
+<p>There is no database apart from the program and no schema file: <b>the model is the schema</b>, declared in the code, and each model is a type, so the compiler checks every field name. A <b>table</b> is a text file in which every line is one record of the same width: it opens in an editor, goes into git, and record <i>i</i> starts at byte <i>i</i> × the width, so one record is read or changed without loading the rest. Next to it, <code>.nihil-idx</code> (the index of the key) and <code>.nihil-seq</code> (the counter of an automatic key) are caches that are rebuilt when they are missing or out of date.</p><p><b>Relations</b> are keys: a field holds the key of a record in another table (<code>customer</code> below holds a <code>CUSTOMER</code> id). The table does not enforce the link, so the program checks it when it writes (<code>sell</code>), and a <b>join</b> is a lookup by key (<code>CUSTOMER @{s.customer} CUSTOMERS</code>), a few small reads through the index. Behaviour goes in <b>methods of the model</b> (<code>c.owes(sales)</code>), and a field whose name starts with <code>_</code> is <b>private</b>: only those methods read or change it (<code>_cents</code> at the end), so they keep the data consistent. <code>where</code>, <code>count</code>, <code>first</code>, <code>sort</code> and <code>sum</code> are compiled into loops where they are called.</p><p><b>Changing a model</b> changes the width of its lines, so the old table no longer reads with the new model. Convert it once, reading it with the old model and writing it with the new one:</p><pre class="nihil">OLD = @[#id: INT(4); name: STRING(12)];
 NEW = @[#id: INT(4); name: STRING(12); city: STRING(14)];
 
 old = OLD @ &quot;customers.dat&quot;;
@@ -366,7 +366,19 @@ i = 0;
 }
 // a join inside a query: the city of each sale&#x27;s customer
 lajeado = sales.where((CUSTOMER @{customer} CUSTOMERS).city == &quot;Lajeado&quot;);
-&gt;&gt; &quot;sold in Lajeado: &quot; + $lajeado.sum(total) + &quot;\n&quot;;</pre>
+&gt;&gt; &quot;sold in Lajeado: &quot; + $lajeado.sum(total) + &quot;\n&quot;;
+
+// a field whose name starts with _ is private: only the model&#x27;s own methods read or change it
+WALLET = @[owner: STRING(12); _cents: INT(8)];
+WALLET.pay(w = WALLET(), cents = 0) {
+    cents &gt; w._cents { ?! = &quot;not enough: &quot; + $w._cents + &quot; cents&quot;; }
+    w._cents = w._cents - cents;
+}
+WALLET.left(w = WALLET()) { : w._cents; }
+wallet = WALLET(&quot;Ana&quot;, 5000);
+wallet.pay(1200);
+?wallet.pay(9000);                      // refused by the method; wallet._cents = 0; would not compile
+&gt;&gt; &quot;left: &quot; + $wallet.left() + &quot; (&quot; + ?! + &quot;)\n&quot;;</pre>
 <p class="out">Output:</p>
 <pre class="output">no customer 9: sale refused
 sale #1  Ana (Lajeado)  120.0  paid
@@ -376,7 +388,8 @@ sale #4  Bruno (Porto Alegre)  300.0  paid
 Ana: 2 sale(s), owes 80.0
 Bruno: 1 sale(s), owes 0.0
 Carla: 1 sale(s), owes 45.5
-sold in Lajeado: 245.5</pre>
+sold in Lajeado: 245.5
+left: 3800 (not enough: 3800 cents)</pre>
 <h2 id="errors">14. Errors: protected calls and blocks</h2>
 <p>A runtime error (an index past the end, a division by zero, a file that cannot be read, a broken JSON document) ends the program with its message. A <code>?</code> before a call protects it: an error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when the call worked). <code>?! = text;</code> raises an error of your own, which a protected call catches like any other. <code>?{ … }</code> protects a whole block the same way, and <code>|| { … }</code> after it runs only when something inside failed; what the block did before the error stays done. A server keeps running when one request fails, and a program can skip a bad line of its input and go on.</p>
 <pre class="nihil">// a runtime error ends the program; a &quot;?&quot; before a call turns it into _, and ?! says why
