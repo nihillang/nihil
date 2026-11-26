@@ -1,0 +1,14 @@
+before
+caught: index 7 out of bounds (size 3)
+fine
+?! after a normal block: []
+alone: division by zero
+stopped: limit 7
+147
+2100
+g = 2225
+8
+outer still works: index 99 out of bounds (size 3)
+inner caught: inner
+outer caught: from the handler
+loop: 100

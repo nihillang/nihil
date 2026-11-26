@@ -1,0 +1,71 @@
+// ?{ … } || { … } (SPEC §25.1): a protected block
+v = [1, 2, 3];
+
+// the error goes to the block after ||, with ?! holding its text
+?{
+    >> "before\n";
+    x = v[7];
+    >> "not reached\n";
+} || {
+    >> "caught: " + ?! + "\n";
+}
+
+// a block that ends normally: the handler does not run, ?! is ""
+?{ >> "fine\n"; } || { >> "not run\n"; }
+>> "?! after a normal block: [" + ?! + "]\n";
+
+// without ||: the error is only in ?!
+?{ n = 10 / (#v - 3); }
+>> "alone: " + ?! + "\n";
+
+// what the block changed before the error stays changed (locals of a method, in loops: not kept
+// in registers, so they are not brought back to their old values)
+count(limit = 0) {
+    a = 0; b = 0; c = 0; d = 0; e = 0; f = 0;
+    i = 0;
+    ?{
+        * i < 100 {
+            a = a + 1; b = b + 2; c = c + 3; d = d + 4; e = e + 5; f = f + 6;
+            i = i + 1;
+            i == limit { ?! = "limit " + $limit; }
+        }
+    } || {
+        >> "stopped: " + ?! + "\n";
+    }
+    : a + b + c + d + e + f;
+}
+>> count(7) + 0;
+>> "\n";
+>> count(1000) + 0;
+>> "\n";
+
+// globals at the top level, changed in the block
+g = 0;
+k = 0;
+* k < 50 { g = g + k; k = k + 1; }
+?{ g = g + 1000; ?! = "after g"; } || { >> "g = " + $g + "\n"; }
+
+// ": value;" inside a protected block leaves it: a later error is not caught by it
+first_even(xs = [0]) {
+    ?{
+        xs : x { x % 2 == 0 { : x; } }
+        : -1;
+    } || { : -2; }
+}
+>> first_even([3, 5, 8, 9]) + 0;
+>> "\n";
+r? = ?first_even([1]);
+?{ z = v[99]; } || { >> "outer still works: " + ?! + "\n"; }
+
+// nested: the inner one catches; an error in the handler goes to the outer one
+?{
+    ?{ ?! = "inner"; } || { >> "inner caught: " + ?! + "\n"; ?! = "from the handler"; }
+} || {
+    >> "outer caught: " + ?! + "\n";
+}
+
+// in a loop: each turn protected on its own
+s = 0;
+j = 0;
+* j < 5 { ?{ s = s + 10 / (j - 2); } || { s = s + 100; } j = j + 1; }
+>> "loop: " + $s + "\n";

@@ -6,6 +6,8 @@ before v2.0.
 
 ## Unreleased
 
+- `?{ … } || { … }`: a protected block (SPEC §25.1), as `?f()` protects a call. A runtime error anywhere inside the block goes to the block after `||`, with `?!` holding its text; what the block changed before the error stays changed. `: value;` inside it leaves the protection too
+  - *Why:* Protecting a few commands took a method written only to be called with `?`. The symbols are the ones the language already has: `?` for "protected" and `||` for "otherwise", so no program changes meaning (`{ … } : { … }` was considered, but `: {…}` already returns a MAP after a plain block)
 - FLOAT → text takes its fast way, with exact integers, for numbers with up to 17 decimals (it was up to 3) from about 10^-5 to 2^53: ratios, percentages and measures no longer go through the general algorithm and its big integers. The text is the same (`make floatcheck`: 501,117 cases against Python and against the general algorithm, now with 4 to 17 decimals among them)
   - *Why:* A profile of a real program (a planogram generator writing JSON) showed 12% of its time in the general algorithm; it runs 8% faster (6.39 → 5.89 s), with the same output byte for byte
 

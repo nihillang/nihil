@@ -68,8 +68,10 @@ globals_learn() {
         }
         i = i + 1;
     }
-    // the 5 heaviest of the others get rbx, r12 … r15 (in that order)
+    // the 5 heaviest of the others get rbx, r12 … r15 (in that order); none when the top level has
+    // a protected block ?{ … } (cmd_protected_block)
     j = 0;
+    prot_at_top { j = 5; }
     last = -1;
     lastw = 0;
     taken = [0 ; 5];
@@ -110,6 +112,8 @@ globals_learn() {
 // redone; types discovered for methods and globals persist)
 one_pass() {
     size_code = 0;
+    prot_at_top = false;
+    prot_depth = 0;
     n_fix = 0;
     last_target = -1;
     slots = 0;
