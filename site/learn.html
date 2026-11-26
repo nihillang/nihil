@@ -34,7 +34,7 @@ The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC
 <li><a href="#globals">Globals and locals: the one rule to remember</a></li>
 <li><a href="#auto_keys">Automatic keys</a></li>
 <li><a href="#modeling">Modeling data</a></li>
-<li><a href="#errors">Errors: protected calls</a></li>
+<li><a href="#errors">Errors: protected calls and blocks</a></li>
 <li><a href="#lists">Lists: arrays that grow</a></li>
 </ol>
 <h2 id="hello">1. Hello</h2>
@@ -377,8 +377,8 @@ Ana: 2 sale(s), owes 80.0
 Bruno: 1 sale(s), owes 0.0
 Carla: 1 sale(s), owes 45.5
 sold in Lajeado: 245.5</pre>
-<h2 id="errors">14. Errors: protected calls</h2>
-<p>A runtime error (an index past the end, a division by zero, a file that cannot be read, a broken JSON document) ends the program with its message. A <code>?</code> before a call protects it: an error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when the call worked). <code>?! = text;</code> raises an error of your own, which a protected call catches like any other. A server keeps running when one request fails, and a program can skip a bad line of its input and go on.</p>
+<h2 id="errors">14. Errors: protected calls and blocks</h2>
+<p>A runtime error (an index past the end, a division by zero, a file that cannot be read, a broken JSON document) ends the program with its message. A <code>?</code> before a call protects it: an error anywhere inside gives <code>_</code> instead, and <code>?!</code> holds its text (empty when the call worked). <code>?! = text;</code> raises an error of your own, which a protected call catches like any other. <code>?{ … }</code> protects a whole block the same way, and <code>|| { … }</code> after it runs only when something inside failed; what the block did before the error stays done. A server keeps running when one request fails, and a program can skip a bad line of its input and go on.</p>
 <pre class="nihil">// a runtime error ends the program; a &quot;?&quot; before a call turns it into _, and ?! says why
 half(n = 0) { : 100 / n; }
 r? = ?half(4);
@@ -397,12 +397,22 @@ total = 0.0;
     v? = ?price(t);
     v != _ { total = total + (v || 0.0); } || { &gt;&gt; &quot;skipped, &quot; + ?! + &quot;\n&quot;; }
 }
-&gt;&gt; &quot;total &quot; + $total + &quot;\n&quot;;</pre>
+&gt;&gt; &quot;total &quot; + $total + &quot;\n&quot;;
+
+// ?{ … } protects a whole block; || { … } runs only when something inside failed
+rows = [3, 0, 5];
+sum = 0;
+?{
+    rows : n { sum = sum + 60 / n; }
+} || {
+    &gt;&gt; &quot;stopped at a bad row (&quot; + ?! + &quot;), sum so far &quot; + $sum + &quot;\n&quot;;
+}</pre>
 <p class="out">Output:</p>
 <pre class="output">25 []
 _ | division by zero
 skipped, not a price: abc
-total 15.5</pre>
+total 15.5
+stopped at a bad row (division by zero), sum so far 20</pre>
 <h2 id="lists">15. Lists: arrays that grow</h2>
 <p>An ARRAY keeps the size it was made with. A LIST grows: <code>[x ; *]</code> makes an empty one (<code>x</code> only gives the type of its items), <code>v[] = x;</code> adds at the end, and <code>v[i]</code>, <code>#v</code> and the each loop work as on an ARRAY. Like a MAP, it is shared: every name and every method that receives it sees the same items. <code>[x ; *1000]</code> makes room for 1,000 items at first, when the size is roughly known. The methods of ARRAY work on a copy of the items, and <code>v.array()</code> gives that copy, an ARRAY of fixed size.</p>
 <pre class="nihil">// [x ; *] makes an empty LIST; x only gives the type of its items
