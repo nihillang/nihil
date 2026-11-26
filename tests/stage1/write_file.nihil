@@ -10,8 +10,10 @@ path = "build/write_file_test.txt";
 >> #@path; >> "\n";
 @>> path, "";                               // an empty file
 >> #@path; >> "\n";
-t? = @?(path + ".nihil-tmp");               // no temporary file is left behind
->> t == _; >> "\n";
+left = 0;                                   // no temporary file is left behind
+names? = "build".list();
+(names || [""]) : name { name.starts_with("write_file_test.txt.nihil-tmp") { left = left + 1; } }
+>> left == 0; >> "\n";
 @>> path, $[0, 255, 10];                    // raw bytes, through $
 s = @path;
 >> #s; >> " "; >> s[0]; >> " "; >> s[1]; >> " "; >> s[2]; >> "\n";

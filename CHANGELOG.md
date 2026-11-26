@@ -4,6 +4,13 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## Unreleased
+
+- `@>>` writes its temporary as `path.nihil-tmp.PID` (this process's id) instead of `path.nihil-tmp`: two programs replacing the same file no longer write into one temporary. The longest path `@>>` accepts goes from 4080 to 4064 bytes
+  - *Why:* With one shared name, one program renamed the other's half-written temporary, and the other then failed with "could not write: no such file or directory" (two programs writing one file 1,500 times each: one of them failed before, both finish now)
+- Writing to the standard output and errors, reading the standard input and reading a file try again when the kernel interrupts the call (`EINTR`), as the network and the table reads already did
+  - *Why:* An interrupted write stopped silently and an interrupted read looked like the end of the input; a prerequisite for anything that delivers signals to the program
+
 ## v4.9.0
 
 - LIST, an ARRAY that grows (SPEC §28): `[x ; *]` is an empty list of x's type (`[x ; *n]` with room for n), `v[] = x;` adds at the end, and `v[i]`, `v[i] = x`, `#v` and `xs : x, i { … }` work as on an ARRAY. A list is a reference with a shared header, as a MAP is: every name of a list sees the same items however much it grows. `v.array()` copies the items to an ARRAY, every other ARRAY method works on such a copy, and `to_json` writes lists anywhere. Adding n items costs O(n) copies in all: 1,000,000 appends take 0.01 s
