@@ -16,5 +16,5 @@ printf '%s\n' "$option-native $abs" | "$compiler" > "$w/p.s" 2> "$w/msg" || { ca
 cat "$w/msg" >&2
 [ -n "${NIHIL_KEEP_S:-}" ] && cp "$w/p.s" "$NIHIL_KEEP_S"
 rt=$here/build/macos/native-rt.o
-[ -f "$rt" ] && [ "$rt" -nt "$here/macos/native/rt.c" ] || clang -O2 -arch arm64 -c "$here/macos/native/rt.c" -o "$rt"
+[ -f "$rt" ] && [ "$rt" -nt "$here/macos/native/rt.c" ] && [ "$rt" -nt "$here/arm64/rt.c" ] || { clang -O2 -arch arm64 -Wno-unused-result -c "$here/macos/native/rt.c" -o "$rt.a.o" && clang -O2 -arch arm64 -Wno-unused-result -c "$here/arm64/rt.c" -o "$rt.b.o" && ld -r "$rt.a.o" "$rt.b.o" -o "$rt"; }
 clang -arch arm64 -o "$out" "$w/p.s" "$rt"

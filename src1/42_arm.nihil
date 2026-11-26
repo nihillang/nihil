@@ -213,12 +213,26 @@ native_start() {
     a_str("_main:"); a_nl();
     a_line("stp x29, x30, [sp, #-16]!");
     a_line("mov x29, sp");
-    a_line("bl _nh_start");               // (argc, argv in x0, x1) → x0: the stack's top
+    a_line("mov x2, sp");                 // the sp of the program's code (protected calls restore it)
+    a_line("bl _nh_start");               // (argc, argv, sp) → x0: the top of the program's stack
     a_line("mov x28, x0");
     a_line("mov x29, x0");
     a_line("adrp x27, _nh_globals@PAGE");
     a_line("add x27, x27, _nh_globals@PAGEOFF");
     a_line("b Lprogram");
+    // nh_resume(record, sp): back where a protected call resumes, after a runtime error in it
+    // (rt.c: x28, x29, where, x19 … x23 as the call had them), with rax and rdx 0
+    a_line(".globl _nh_resume");
+    a_str("_nh_resume:"); a_nl();
+    a_line("mov sp, x1");
+    a_line("ldp x28, x29, [x0]");
+    a_line("ldr x16, [x0, #16]");
+    a_line("ldp x19, x20, [x0, #24]");
+    a_line("ldp x21, x22, [x0, #40]");
+    a_line("ldr x23, [x0, #56]");
+    a_line("mov x9, #0");
+    a_line("mov x11, #0");
+    a_line("br x16");
     a_str("Lprogram:"); a_nl();
 }
 
@@ -227,17 +241,43 @@ native_end() {
     rt = 0;
     * rt < 64 {
         rt_used[rt] {
-            a_str("Lrt"); a_num(rt * 5); a_str(":"); a_nl();
+            n = rt * 5;
+            a_str("Lrt"); a_num(n); a_str(":"); a_nl();
             a_line("stp x29, x30, [sp, #-16]!");
-            a_line("mov x0, x9");
-            a_line("mov x1, x10");
-            a_line("mov x2, x11");
-            a_line("mov x3, x12");
-            a_line("mov x4, x13");
-            a_line("mov x5, x28");
-            a_ins("bl _nh_"); a_str(rt_name(rt * 5)); a_nl();
+            a_line("adrp x16, _nh_sp@PAGE");      // the program's stack, for the collector
+            a_line("str x28, [x16, _nh_sp@PAGEOFF]");
+            n == RT_ALLOC {
+                a_line("stp x10, x12, [sp, #-32]!");   // alloc keeps rcx, rsi, rdi (roots, on C's stack)
+                a_line("str x13, [sp, #16]");
+            }
+            n == RT_PROTECT {
+                a_line("mov x0, x9");             // where to resume, and what to restore
+                a_line("mov x1, x28");
+                a_line("mov x2, x29");
+                a_line("mov x3, x19");
+                a_line("mov x4, x20");
+                a_line("mov x5, x21");
+                a_line("mov x6, x22");
+                a_line("mov x7, x23");
+            } || {
+                a_line("mov x0, x9");
+                a_line("mov x1, x10");
+                a_line("mov x2, x11");
+                a_line("mov x3, x12");
+                a_line("mov x4, x13");
+                a_line("mov x5, x28");
+            }
+            a_ins("bl _nh_"); a_str(rt_name(n)); a_nl();
             a_line("mov x9, x0");
             a_line("mov x11, x1");
+            n == RT_ALLOC {
+                a_line("ldr x13, [sp, #16]");
+                a_line("ldp x10, x12, [sp], #32");
+            }
+            n == RT_READ_AT {
+                a_line("adrp x16, _nh_ret_rcx@PAGE");
+                a_line("ldr x10, [x16, _nh_ret_rcx@PAGEOFF]");
+            }
             a_line("ldp x29, x30, [sp], #16");
             a_line("ret");
         }

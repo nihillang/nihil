@@ -85,9 +85,29 @@ builds arrays on it, with 8-byte elements), allocated by the runtime; `sp` is on
     macos/nihil-native prog.nihil [out]
     macos/test-native-c.sh                    the battery; lists the routines the C runtime lacks
 
-First milestone: the routines of small programs (output, strings, arrays, errors), a heap that only
-grows (no collector yet). Next: the collector's contract (roots: the x28 stack, x19 … x23, the
-globals; where it may run), then the rest of the routines.
+The runtime is complete: every routine of src/runtime.asm, with its messages; the system calls go
+through `nh_linux_syscall` (`arm64/rt.c`), with Linux's numbers, as the prelude speaks them. The 127
+tests pass (optimized and `-O0`), the compiler built this way gives the same output (its fixed
+point), and the planogram server serves the same pages.
+
+The collector (`macos/native/rt.c`) is conservative mark and sweep, like the x86 runtime's. Its
+contract with the code the compiler writes:
+- it runs only inside a call of the runtime (alloc): every call of the runtime is a safepoint;
+- roots: the globals, the program's stack (x28, saved by each adapter in `nh_sp`, to its top), C's
+  stack from the collection up to `nh_start` (where the adapters keep x29, x30 and alloc's rcx, rsi,
+  rdi, and where C keeps x19 … x23, callee-saved; `setjmp` writes the registers there), and the
+  registers each protected call saved;
+- any word that points into an allocated block keeps it (a record's texts are inside its block);
+- a large block is scanned only where it was written (`mincore`): a big array of zeros costs nothing.
+
+`NIHIL_GC_STATS=1` shows each collection; `NIHIL_GC_TORTURE=1` collects every 64 KiB (the battery and
+the compiler's fixed point pass so, with 1558 collections for the compiler).
+
+Measured on an M4 (`CHECK=1 SIZES=1000000 sh bench/compare/run.sh macos/nihil-native`): the same as
+the translator's path, but making the records and reading the table take about 15 ms more each,
+the collections the x86 runtime marks in a child process (fork) while the program goes on; the
+peak memory is 378–390 MB against 325 MB. Next: that concurrent mark (or fewer collections of
+a large heap), then the code itself: registers for the temporaries, `sp` as the stack.
 
 ## The original plan (a second backend)
 

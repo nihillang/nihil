@@ -9,7 +9,7 @@ T=build/macos/tc
 mkdir -p $T
 native=${NIHILC1_NATIVE:-build/macos/nihilc1-native}
 opt=""; [ "${NIHIL_O0:-0}" = 1 ] && opt="-O0 "
-clang -O2 -arch arm64 -c macos/native/rt.c -o $T/rt.o || exit 1
+{ clang -O2 -arch arm64 -Wno-unused-result -c macos/native/rt.c -o $T/a.o && clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o $T/b.o && ld -r $T/a.o $T/b.o -o $T/rt.o; } || exit 1
 ok=0; failed=0; skipped=0; nolink=0
 : > $T/missing
 for src in tests/*.nihil tests/stage1/*.nihil; do
@@ -21,7 +21,7 @@ for src in tests/*.nihil tests/stage1/*.nihil; do
     continue
   fi
   input=/dev/null; [ -f $name.in ] && input=$name.in
-  perl -e 'alarm shift; exec @ARGV' 60 $T/$n.bin < $input > $T/$n.out 2> $T/$n.err; code=$?
+  perl -e 'alarm shift; exec @ARGV' ${TIMEOUT:-60} $T/$n.bin < $input > $T/$n.out 2> $T/$n.err; code=$?
   exp=0; [ -f $name.code ] && exp=$(cat $name.code)
   : > $T/$n.exp; [ -f $name.out ] && cp $name.out $T/$n.exp
   if [ "$code" != "$exp" ]; then failed=$((failed + 1)); echo "FAILED  $src: exit $code, expected $exp $(head -c 120 $T/$n.err)"; continue; fi
