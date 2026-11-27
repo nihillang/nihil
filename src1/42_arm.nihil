@@ -146,8 +146,53 @@ a_cond(cc = 0) {
 }
 
 // x<n> ← v (movz / movk, as the translator's imm)
+// v is an ARM64 bitmask immediate: an element of 2 … 64 bits repeated, a run of ones rotated in it
+// (0x2020202020202020, 0x7F7F7F7F7F7F7F7F, 0xFF00: one instruction, mov as orr)
+imm_bitmask(v = 0) {
+    v == 0 || v == -1 { : false; }
+    e = 2;
+    * e <= 64 {
+        same = true;
+        b = e;
+        * same && b < 64 { ((v >> b) & 1) != ((v >> (b % e)) & 1) { same = false; } b = b + 1; }
+        same {
+            turns = 0;
+            b = 0;
+            * b < e { ((v >> b) & 1) != ((v >> ((b + 1) % e)) & 1) { turns = turns + 1; } b = b + 1; }
+            : turns == 2;
+        }
+        e = e * 2;
+    }
+    : false;
+}
+
+// v's 16-bit parts that are not p (0: movz and movk; 0xFFFF: movn and movk)
+imm_parts(v = 0, p = 0) {
+    c = 0;
+    k = 0;
+    * k < 4 { (v >> (16 * k)) & 0xFFFF != p { c = c + 1; } k = k + 1; }
+    : c;
+}
+
 a_imm(n = 0, v = 0) {
     v == 0 { a_ins("mov "); a_x(n); a_str(", #0"); a_nl(); :; }
+    nz = imm_parts(v, 0);
+    nf = imm_parts(v, 0xFFFF);
+    nz >= 2 && nf >= 2 && imm_bitmask(v) { a_ins("mov "); a_x(n); a_str(", #0x"); a_hex(v); a_nl(); :; }
+    nf < nz {                              // mostly ones: movn, then the parts that are not 0xFFFF
+        first = true;
+        k = 0;
+        * k < 4 {
+            part = (v >> (16 * k)) & 0xFFFF;
+            part != 0xFFFF || first && k == 3 {
+                first { a_ins("movn "); a_x(n); a_str(", #"); a_num(part ^ 0xFFFF); } || { a_ins("movk "); a_x(n); a_str(", #"); a_num(part); }
+                a_str(", lsl #"); a_num(16 * k); a_nl();
+                first = false;
+            }
+            k = k + 1;
+        }
+        :;
+    }
     first = true;
     k = 0;
     * k < 4 {
@@ -499,9 +544,10 @@ n_top_cst = 0;
 
 // the instructions a_imm takes for v
 imm_cost(v = 0) {
-    n = 0;
-    k = 0;
-    * k < 4 { (v >> (16 * k)) & 0xFFFF != 0 { n = n + 1; } k = k + 1; }
+    n = imm_parts(v, 0);
+    nf = imm_parts(v, 0xFFFF);
+    nf < n { n = nf; }
+    n >= 2 && imm_bitmask(v) { : 1; }
     n == 0 { : 1; }
     : n;
 }
@@ -553,11 +599,16 @@ calls_count() {
     * i < n_ops { calls_upto[i + 1] = calls_upto[i]; op_is_call(i) { calls_upto[i + 1] = calls_upto[i] + 1; } i = i + 1; }
 }
 
-// no call while slot s is live (its range widened to the loops around it)
-slot_call_free(s = 0) {
+// slot s's range widened to the loops around it: slot_wlo, slot_whi (-1: untouched)
+slot_wlo = [-1 ; SLOTS];
+slot_done = [false ; SLOTS];
+slot_whi = [-1 ; SLOTS];
+slot_widen(s = 0) {
     lo = slot_lo[s];
     hi = slot_hi[s];
-    lo < 0 { : false; }
+    slot_wlo[s] = -1;
+    slot_whi[s] = -1;
+    lo < 0 { :; }
     changed = true;
     * changed {
         changed = false;
@@ -571,7 +622,181 @@ slot_call_free(s = 0) {
             b = b + 1;
         }
     }
-    : calls_upto[hi + 1] - calls_upto[lo] == 0;
+    slot_wlo[s] = lo;
+    slot_whi[s] = hi;
+}
+
+// no call while slot s is live (after slot_widen, or slot_live)
+slot_call_free(s = 0) {
+    slot_wlo[s] < 0 { : false; }
+    slot_exact { : !sl_cross[s] && !sl_entry[s]; }
+    : calls_upto[slot_whi[s] + 1] - calls_upto[slot_wlo[s]] == 0;
+}
+
+// A method's slots, live where (slot_live): backwards over its operations and their jumps, again
+// until nothing changes, the slots live before each one (bits, by the slot's place in uslot: SL_G
+// words of 64). Two slots clash when one is live where the other is written (sl_intf); a slot live
+// after a call crosses it (sl_cross), and one live at the start that is no parameter (read before it
+// is written on some way) clashes with every other (sl_entry). Without it, a slot's range widened to
+// the loops around it: in a loop every slot looks live in all of it.
+slot_exact = false;
+SL_G = 1;
+sl_live = [0 ; 1];
+sl_intf = [0 ; 1];
+sl_out = [0 ; 1];
+sl_idx = [0 ; SLOTS];
+sl_cross = [false ; SLOTS];
+sl_entry = [false ; SLOTS];
+os_q = -1;                     // op_slot: the slot operation i touches (its place in uslot, or -1),
+os_use = false;                // and whether it reads or writes it
+os_def = false;
+
+op_slot(i = 0) {
+    os_q = -1;
+    os_use = false;
+    os_def = false;
+    k = op_k[i];
+    base = -1;
+    disp = 0;
+    k == OP_LOCAL && op_o[i] == 0 || k == OP_XLD { base = R_BP; disp = op_v[i]; os_use = true; }
+    k == OP_LD || k == OP_CMPM || k == OP_SUBM || k == OP_PUSHM { base = op_o[i] >> 1; disp = op_v[i]; os_use = true; }
+    k == OP_ST { base = op_o[i] >> 1; disp = op_v[i]; os_def = true; }
+    k == OP_ADDTOM { base = op_o[i] >> 1; disp = op_v[i]; os_use = true; os_def = true; }
+    k == OP_STI || k == OP_ADDIM || k == OP_CMPIM {
+        base = (op_o[i] >> 32) >> 1;
+        disp = ((op_o[i] & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000;
+        k == OP_STI { os_def = true; } || { os_use = true; }
+        k == OP_ADDIM { os_def = true; }
+    }
+    base != R_BP { :; }
+    sl = slot_of(disp);
+    sl < 0 || !slot_in[sl] { :; }
+    os_q = sl_idx[sl];
+}
+
+// the slots live after operation i (its successors' live), into sl_out
+sl_out_of(i = 0, lo = 0, hi = 0) {
+    g = 0;
+    * g < SL_G { sl_out[g] = 0; g = g + 1; }
+    k = op_k[i];
+    k != OP_JMP && k != OP_EPILOGUE && i + 1 < hi {
+        g = 0;
+        * g < SL_G { sl_out[g] = sl_live[(i + 1 - lo) * SL_G + g]; g = g + 1; }
+    }
+    k == OP_JMP || k == OP_JCC || k == OP_JCC8 {
+        t = lab_op[op_o[i]];
+        t >= lo && t < hi {
+            g = 0;
+            * g < SL_G { sl_out[g] = sl_out[g] | sl_live[(t - lo) * SL_G + g]; g = g + 1; }
+        }
+    }
+}
+
+// a place further on reached otherwise than by a jump (an address taken, a call inside the method):
+// its ways are not known, so no exact liveness
+flow_known(lo = 0, hi = 0) {
+    i = lo;
+    * i < hi {
+        k = op_k[i];
+        (k == OP_LEA_FWD || k == OP_CALL_FWD) && lab_op[op_v[i]] >= lo && lab_op[op_v[i]] < hi { : false; }
+        i = i + 1;
+    }
+    : true;
+}
+
+slot_live(lo = 0, hi = 0) {
+    SL_G = (n_uslot + 63) / 64;
+    q = 0;
+    * q < n_uslot { u = uslot[q]; sl_idx[u] = q; sl_cross[u] = false; sl_entry[u] = false; q = q + 1; }
+    size = (hi - lo + 1) * SL_G;
+    #sl_live < size { sl_live = [0 ; size * 2]; }
+    j = 0;
+    * j < size { sl_live[j] = 0; j = j + 1; }
+    #sl_intf < n_uslot * SL_G { sl_intf = [0 ; n_uslot * SL_G * 2]; }
+    j = 0;
+    * j < n_uslot * SL_G { sl_intf[j] = 0; j = j + 1; }
+    #sl_out < SL_G { sl_out = [0 ; SL_G]; }
+    changed = true;
+    * changed {
+        changed = false;
+        i = hi - 1;
+        * i >= lo {
+            sl_out_of(i, lo, hi);
+            op_slot(i);
+            g = 0;
+            * g < SL_G {
+                nw = sl_out[g];
+                os_q >= 0 && os_q / 64 == g {
+                    bit = 1 << (os_q % 64);
+                    os_def { nw = nw & ~bit; }
+                    os_use { nw = nw | bit; }
+                }
+                j = (i - lo) * SL_G + g;
+                nw != sl_live[j] { sl_live[j] = nw; changed = true; }
+                g = g + 1;
+            }
+            i = i - 1;
+        }
+    }
+    cm = [0 ; SL_G];               // the slots live after some call
+    i = lo;
+    * i < hi {
+        sl_out_of(i, lo, hi);
+        op_slot(i);
+        os_q >= 0 && os_def {
+            g = 0;
+            * g < SL_G { sl_intf[os_q * SL_G + g] = sl_intf[os_q * SL_G + g] | sl_out[g]; g = g + 1; }
+        }
+        op_is_call(i) {
+            g = 0;
+            * g < SL_G { cm[g] = cm[g] | sl_out[g]; g = g + 1; }
+        }
+        i = i + 1;
+    }
+    q = 0;
+    * q < n_uslot {
+        u = uslot[q];
+        g = q / 64;
+        bit = 1 << (q % 64);
+        cm[g] & bit != 0 { sl_cross[u] = true; }
+        sl_live[g] & bit != 0 {
+            u >= PBASE {                   // a parameter: written at the start, with the others live there
+                g = 0;
+                * g < SL_G { sl_intf[q * SL_G + g] = sl_intf[q * SL_G + g] | sl_live[g]; g = g + 1; }
+            } || { sl_entry[u] = true; }
+        }
+        q = q + 1;
+    }
+}
+
+// slots a and b are live at once somewhere (after slot_live)
+slot_clash(a = 0, b = 0) {
+    sl_entry[a] || sl_entry[b] { : true; }
+    qa = sl_idx[a];
+    qb = sl_idx[b];
+    (sl_intf[qa * SL_G + qb / 64] >> (qb % 64)) & 1 != 0 { : true; }
+    : (sl_intf[qb * SL_G + qa / 64] >> (qa % 64)) & 1 != 0;
+}
+
+// register reg can take slot s too: no slot it holds is live while s is (a method's only: the
+// program's own code does not run in the order of its operations)
+reg_fits(reg = 0, s = 0) {
+    unit_top { : false; }
+    slot_exact {
+        q = 0;
+        * q < n_uslot { u = uslot[q]; u != s && unit_reg[u] == reg && slot_clash(u, s) { : false; } q = q + 1; }
+        : true;
+    }
+    lo = slot_wlo[s];
+    hi = slot_whi[s];
+    lo < 0 { : false; }
+    q = 0;
+    * q < n_uslot {
+        u = uslot[q];
+        unit_reg[u] == reg && slot_wlo[u] <= hi && slot_whi[u] >= lo { : false; }
+        q = q + 1;
+    }
+    : true;
 }
 promote_off = false;
 
@@ -590,6 +815,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
     unit_csr = 0;
     n_cst = 0;
     promote_off = false;
+    slot_exact = false;
     used = 0;
     calls = false;                         // (a leaf: no call in it)
     leaf_bad = false;
@@ -649,52 +875,74 @@ unit_slots(lo = 0, hi = 0, top = false) {
     promote_off { :; }
     // first the registers no call keeps, for the slots no call crosses (a parameter: from the start)
     q = 0;
-    * q < n_uslot { u = uslot[q]; u >= PBASE && slot_lo[u] >= 0 { slot_lo[u] = lo; } q = q + 1; }
-    reg = 1;
-    unit_leaf { reg = unit_n + 1; }
-    top { reg = 9; }                       // (the program's own code calls its globals' start, placed at its end:
+    * q < n_uslot { u = uslot[q]; u >= PBASE && slot_lo[u] >= 0 { slot_lo[u] = lo; } slot_widen(u); q = q + 1; }
+    slot_exact = false;
+    !top && n_uslot > 0 && flow_known(lo, hi) { slot_live(lo, hi); slot_exact = true; }
+    reg0 = 1;
+    unit_leaf { reg0 = unit_n + 1; }
+    top { reg0 = 9; }                      // (the program's own code calls its globals' start, placed at its end:
                                            // its order is not the order it runs in)
-    * reg <= 8 {
+    // the heaviest slot first, into the first register that is free while it is live (two slots
+    // whose ranges do not meet share one)
+    q = 0;
+    * q < n_uslot { slot_done[uslot[q]] = false; q = q + 1; }
+    more = reg0 <= 8;
+    * more {
         best = -1;
         bw = 7;                            // (inside a loop at least)
         q = 0;
         * q < n_uslot {
             u = uslot[q];
             w = slot_w[u];
-            u >= PBASE && unit_leaf || u == 0 { w = -1; }
+            u >= PBASE && unit_leaf || u == 0 || slot_done[u] { w = -1; }
             w > bw && slot_call_free(u) { best = u; bw = w; }
             q = q + 1;
         }
-        best >= 0 {
-            unit_reg[best] = reg;
-            slot_w[best] = -1;
-            unit_csr = unit_csr | (1 << reg);
-        }
-        reg = reg + 1;
-    }
-    // the registers free, the heaviest slots first (weight 3 or more: a register saved costs two)
-    reg = 19;
-    * reg <= 26 {
-        used & (1 << reg) == 0 {
-            best = -1;
-            bw = 2;
-            q = 0;
-            * q < n_uslot {
-                u = uslot[q];
-                w = slot_w[u];
-                u >= PBASE { w = w - 1; }       // a parameter: also loaded at the start
-                u >= PBASE && unit_leaf || u == 0 { w = -1; }   // a leaf's: in x1 … x8 already
-                w > bw { best = u; bw = w; }
-                q = q + 1;
-            }
-            best >= 0 {
+        more = best >= 0;
+        more {
+            slot_done[best] = true;
+            reg = reg0;
+            * reg <= 8 && (unit_csr & (1 << reg)) != 0 && !reg_fits(reg, best) { reg = reg + 1; }
+            reg <= 8 {
                 unit_reg[best] = reg;
                 slot_w[best] = -1;
-                used = used | (1 << reg);
-                !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
+                unit_csr = unit_csr | (1 << reg);
             }
         }
-        reg = reg + 1;
+    }
+    // the registers free, the heaviest slots first (weight 3 or more: a register saved costs two)
+    // A slot goes first into a register the unit saves already, free while the slot is live (weight 1
+    // is enough there), or else takes a new one
+    mine = 0;                              // (the registers of x19 … x26 slots took)
+    more = true;
+    * more {
+        best = -1;
+        bw = 0;
+        q = 0;
+        * q < n_uslot {
+            u = uslot[q];
+            w = slot_w[u];
+            u >= PBASE { w = w - 1; }       // a parameter: also loaded at the start
+            u >= PBASE && unit_leaf || u == 0 { w = -1; }   // a leaf's: in x1 … x8 already
+            w > bw { best = u; bw = w; }
+            q = q + 1;
+        }
+        more = best >= 0;
+        more {
+            slot_w[best] = -1;
+            reg = 19;
+            * reg <= 26 && !((mine & (1 << reg)) != 0 && reg_fits(reg, best)) { reg = reg + 1; }
+            reg > 26 && bw > 2 {
+                reg = 19;
+                * reg <= 26 && (used & (1 << reg)) != 0 { reg = reg + 1; }
+                reg <= 26 {
+                    used = used | (1 << reg);
+                    mine = mine | (1 << reg);
+                    !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
+                }
+            }
+            reg <= 26 { unit_reg[best] = reg; }
+        }
     }
     // the registers still free: the heaviest constants (in a loop: weight 8 or more; a method saves it)
     reg = 19;
