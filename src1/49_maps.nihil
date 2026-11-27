@@ -204,7 +204,7 @@ up_scan(p = 0, stop = 0, is_e = false) {
             c == '[' { ok = prev == 'w' || prev == ']'; depth = depth + 1; }  // an index, not a literal
             c == ')' || c == ']' { depth = depth - 1; ok = depth >= 0; }
             c == '*' || c == '%' { ok = true; }
-            c == '/' { ok = source[p + 1] != '/'; }                          // not a comment
+            c == '/' { ok = source[p + 1] != '/' && source[p + 1] != '*'; }  // not a comment
             c == '+' { ok = !is_e || depth > 0; }
             c == '-' { ok = !is_e || depth > 0 || first; }
             !ok { : -1; }
