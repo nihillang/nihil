@@ -1792,9 +1792,11 @@ __nihil_sort_by(v = [0], keys = [0], kind = 0) {
 }
 
 // ---- MAP (SPEC §22): a hash table in memory ------------------------------------
-// A map is an ARRAY of INT [count, capacity, keys, values, used, hint], keys, values
-// and used being addresses of ARRAYs of `capacity` elements, and hint the slot the
-// last map_get looked at (see map_set). kind: 1 = INT keys, 3 =
+// A map is an ARRAY of INT [count, capacity, keys, values, used, hint]: keys and
+// values the addresses of ARRAYs of `capacity` elements, used the address of
+// `capacity` bytes (1: the slot holds an entry; a byte, not an INT, keeps the table
+// in cache: 17 bytes a slot, not 24), and hint the slot the last map_get looked at
+// (see map_set). kind: 1 = INT keys, 3 =
 // STRING keys (their addresses). Linear probing, at most 2/3 full; deleting
 // moves back the entries after the hole, so no slot is ever "deleted".
 
@@ -1805,7 +1807,7 @@ __nihil_map_new(n = 0, kind = 0) {
     __m[1] = __c;
     __m[2] = __nihil_addr([0 ; __c]);
     __m[3] = __nihil_addr([0 ; __c]);
-    __m[4] = __nihil_addr([0 ; __c]);
+    __m[4] = __nihil_addr(__nihil_bytes(__c));   // used: a byte per slot
     : __nihil_addr(__m);
 }
 
@@ -1821,7 +1823,7 @@ __nihil_map_slot(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
     __mask = __mm[1] - 1;
     __ks = __nihil_arr_at(__mm[2]);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     kind == 3 {
         __j = __nihil_key_hash(__nihil_str_at(k)) & __mask;
         __s = __nihil_str_at(k);
@@ -1840,7 +1842,7 @@ __nihil_map_slot(m = 0, k = 0, kind = 0) {
 // m[k] → the value, or _ (the compiler types it V?)
 __nihil_map_get(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     __j = 0;
     kind == 3 {
         __j = __nihil_map_slot(m, k, kind);
@@ -1860,7 +1862,7 @@ __nihil_map_get(m = 0, k = 0, kind = 0) {
 // the same for an INT key, with no call: a leaf (the compiler calls it for maps with INT keys)
 __nihil_map_get_int(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     __ks = __nihil_arr_at(__mm[2]);
     __mask = __mm[1] - 1;
     __h = k * -7046029254386353131;
@@ -1874,7 +1876,7 @@ __nihil_map_get_int(m = 0, k = 0, kind = 0) {
 
 __nihil_map_has(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     : __us[__nihil_map_slot(m, k, kind)] != 0;
 }
 
@@ -1884,12 +1886,12 @@ __nihil_map_grow(m = 0, kind = 0) {
     __c = __mm[1];
     __ks = __nihil_arr_at(__mm[2]);
     __vs = __nihil_arr_at(__mm[3]);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     __n = __c * 2;
     __mask = __n - 1;
     __nk = [0 ; __n];
     __nv = [0 ; __n];
-    __nu = [0 ; __n];
+    __nu = __nihil_bytes(__n);
     __i = 0;
     __c {
         __us[__i] != 0 {
@@ -1897,7 +1899,7 @@ __nihil_map_grow(m = 0, kind = 0) {
             * __nu[__j] != 0 { __j = (__j + 1) & __mask; }
             __nk[__j] = __ks[__i];
             __nv[__j] = __vs[__i];
-            __nu[__j] = 1;
+            __nihil_poke(__nu, __j, 1);
         }
         __i = __i + 1;
     }
@@ -1910,7 +1912,7 @@ __nihil_map_grow(m = 0, kind = 0) {
 // m[k] = v;
 __nihil_map_set(m = 0, k = 0, v = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     __ks = __nihil_arr_at(__mm[2]);
     // the slot the last map_get of this map looked at, so m[k] = (m[k] || 0) + v; looks k up once.
     // Only a hint: taken only when that slot of the map as it is now holds k itself (the same INT,
@@ -1922,11 +1924,11 @@ __nihil_map_set(m = 0, k = 0, v = 0, kind = 0) {
         (__mm[0] + 1) * 3 > __mm[1] * 2 {
             __nihil_map_grow(m, kind);
             __j = __nihil_map_slot(m, k, kind);
-            __us = __nihil_arr_at(__mm[4]);
+            __us = __nihil_str_at(__mm[4]);
         }
         __ks = __nihil_arr_at(__mm[2]);
         __ks[__j] = k;
-        __us[__j] = 1;
+        __nihil_poke(__us, __j, 1);
         __mm[0] = __mm[0] + 1;
     }
     __vs = __nihil_arr_at(__mm[3]);
@@ -1942,7 +1944,7 @@ __nihil_map_put(k = 0, v = 0, m = 0, kind = 0) {
 __nihil_map_del(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
     __j = __nihil_map_slot(m, k, kind);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     __us[__j] == 0 { :; }
     __ks = __nihil_arr_at(__mm[2]);
     __vs = __nihil_arr_at(__mm[3]);
@@ -1960,7 +1962,7 @@ __nihil_map_del(m = 0, k = 0, kind = 0) {
         }
         __k = (__k + 1) & __mask;
     }
-    __us[__j] = 0;
+    __nihil_poke(__us, __j, 0);
     __ks[__j] = 0;
     __vs[__j] = 0;
 }
@@ -1969,7 +1971,7 @@ __nihil_map_del(m = 0, k = 0, kind = 0) {
 __nihil_map_list(m = 0, which = 0) {
     __mm = __nihil_arr_at(m);
     __src = __nihil_arr_at(__mm[which]);
-    __us = __nihil_arr_at(__mm[4]);
+    __us = __nihil_str_at(__mm[4]);
     __r = [0 ; __mm[0]];
     __n = 0;
     __i = 0;
