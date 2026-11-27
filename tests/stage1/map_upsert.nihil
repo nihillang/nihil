@@ -37,3 +37,9 @@ count(xs = [0]) {
 }
 cs = count([1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 >> $#cs + " " + $(cs[4] || 0) + " " + $(cs[15] || 0) + "\n";
+// not fused either: an ARRAY literal indexed, an index after parentheses (both could allocate)
+p = {0: 0 ; 2};
+w1 = "ab"; w2 = "c";
+p[[1, 2][0]] = (p[[1, 2][0]] || 0) + 5;
+p[2] = (p[2] || 0) + (w1 + w2)[0];
+>> $(p[1] || 0) + " " + $(p[2] || 0) + "\n";

@@ -1,0 +1,4 @@
+// the form m[k] = (m[k] || d) + e; is recognised in the source's bytes, so the first error is the
+// one compiling reports (an unknown name), not one further on (a number too big) found by looking ahead
+m = {0: 0 ; 2};
+m[1] = (m[1] || 0) + missing * 99999999999999999999;
