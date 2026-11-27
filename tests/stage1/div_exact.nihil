@@ -1,0 +1,16 @@
+// x / 2^k right after `x % c == 0 {` (c a multiple of 2^k) is exact: a shift alone on -native.
+// Negative values, other multiples, and the way where the rest was not 0 all divide as before.
+xs = [-9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, -12, 24, -24];
+xs : x {
+    a = 0;
+    x % 2 == 0 { a = x / 2; } || { a = x / 2 + 100; }
+    b = 0;
+    x % 4 == 0 { b = x / 2; } || { b = x / 4; }
+    c = 0;
+    x % 6 == 0 { c = x / 2; } || { c = -1; }
+    d = 0;
+    x % 2 == 0 { d = x / 4; }
+    e = 0;
+    x % 8 != 0 { e = x / 8; }
+    >> $x + ": " + $a + " " + $b + " " + $c + " " + $d + " " + $e + "\n";
+}

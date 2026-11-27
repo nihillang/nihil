@@ -1483,6 +1483,26 @@ a_rotate(j = 0, i = 0) {
     : false;
 }
 
+// the division at operation i (rax / cv, cv a power of 2) is of a multiple of cv: it comes right
+// after `x % c == 0 {` (c a multiple of cv), on the way where it held, and divides the same x —
+// rax ← x ; rcx ← c ; rest ; rcx ← 0 ; cmp ; jne ; rax ← x ; rcx ← cv ; division, no way in between
+div_exact(i = 0, cv = 0) {
+    i < 8 { : false; }
+    j = i - 7;
+    * j <= i { lab_live(j) || thr_lab[j] != 0 { : false; } j = j + 1; }
+    op_k[i - 1] != OP_IMM || op_r[i - 1] != R_CX || op_v[i - 1] != cv { : false; }
+    k = op_k[i - 2];
+    (k != OP_LOCAL && k != OP_GLOBAL && k != OP_REG) || op_r[i - 2] != R_AX { : false; }
+    (op_k[i - 3] != OP_JCC && op_k[i - 3] != OP_JCC8) || op_v[i - 3] != CC_NE { : false; }
+    op_k[i - 4] != OP_CMP { : false; }
+    op_k[i - 5] != OP_IMM || op_r[i - 5] != R_CX || op_v[i - 5] != 0 { : false; }
+    op_k[i - 6] != OP_CALL_RT || op_v[i - 6] != RT_MOD { : false; }
+    c = op_v[i - 7];
+    op_k[i - 7] != OP_IMM || op_r[i - 7] != R_CX || c <= 0 || c % cv != 0 { : false; }
+    op_k[i - 8] != k || op_r[i - 8] != R_AX || op_v[i - 8] != op_v[i - 2] || op_o[i - 8] != op_o[i - 2] { : false; }
+    : true;
+}
+
 // b.<cc> to label l (the values live there into their registers first)
 a_jump(cc = "", l = 0) {
     pend_to(lab_op[l]);
@@ -1657,8 +1677,20 @@ arm_lazy(i = 0) {
         }
         d = dest_of(i, R_AX);
         sk = skip;
-        a_ins("asr x16, "); a_x(a); a_str(", #63"); a_nl();
-        a_ins("add x16, "); a_x(a); a_str(", x16, lsr #"); a_num(64 - kk); a_nl();
+        v == RT_DIV && div_exact(i, cv) {      // a multiple of 2^k: the shift alone
+            a < 19 { a_ins("asr x16, "); a_x(a); a_str(", #"); a_num(kk); a_nl(); }
+            dest_clear(R_AX, d);
+            a < 19 { a_ins("mov "); a_x(d); a_str(", x16"); a_nl(); }
+            || { a_ins("asr "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(kk); a_nl(); }
+            dest_done(R_AX, d);
+            pend_k[R_DX] = 0;
+            : 1 + sk;
+        }
+        kk == 1 { a_ins("add x16, "); a_x(a); a_str(", "); a_x(a); a_str(", lsr #63"); a_nl(); }   // (its sign bit)
+        || {
+            a_ins("asr x16, "); a_x(a); a_str(", #63"); a_nl();
+            a_ins("add x16, "); a_x(a); a_str(", x16, lsr #"); a_num(64 - kk); a_nl();
+        }
         dest_clear(R_AX, d);
         v == RT_DIV { a_ins("asr "); a_x(d); a_str(", x16, #"); a_num(kk); a_nl(); }
         || {
