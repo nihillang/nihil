@@ -1,0 +1,35 @@
+// values pushed in the middle of an expression, with jumps and labels before their pop (&&, ||,
+// comparisons of indexed values, calls with such arguments): -native keeps such pushes in
+// registers and must make them before a label another path reaches
+same(s = "", t = "", start = 0, n = 0) {
+    n != #t { : false; }
+    i = 0;
+    * i < n {
+        s[start + i] != t[i] { : false; }
+        i = i + 1;
+    }
+    : true;
+}
+pick(a = 0, ok = false, b = 0) {
+    ok { : a * 1000 + b; }
+    : b * 1000 + a;
+}
+line = "-native /tmp/x.nihil";
+>> same(line, "-native ", 0, 8); >> " "; >> same(line, "-arm ", 0, 5); >> " "; >> same(line, "/tmp", 8, 4); >> "\n";
+xs = [3, 1, 4, 1, 5, 9, 2, 6];
+ys = [2, 7, 1, 8, 2, 8, 1, 8];
+i = 0;
+total = 0;
+* i < #xs {
+    total = total + pick(xs[i] + ys[i], xs[i] > ys[i] && ys[i] != 1 || xs[i] == 9, xs[i] * (ys[i] - 1));
+    total = total + (xs[i] - ys[i]) * pick(i, i % 2 == 0 || xs[i] < 3, ys[i]);
+    i = i + 1;
+}
+>> total; >> "\n";
+k = 0;
+n = 0;
+* k < 50 {
+    n = n + k * 3 - (k % 7) * pick(k, k > 10 && k < 40 && k % 3 != 0, k / 2);
+    k = k + 1;
+}
+>> n; >> "\n";

@@ -33,6 +33,10 @@
 //   - rep movs/stos, repne scas, rep cmps → loops; div after xor edx, edx and idiv after cqo →
 //     udiv/sdiv (a 128-bit dividend is not translated).
 // The disassembly comes from clang and objdump (the Xcode Command Line Tools).
+//
+// When the map file goes on with a line "nihil-arm" (the compiler's -arm), what follows is the program
+// already in ARM64 (src1/42_arm.nihil), written with the conventions above: it is used as it is, and
+// only the runtime is translated.
 // =============================================================================
 
 BASE = 0x400000;
@@ -74,6 +78,8 @@ SIGNED_CMP = ["l", "le", "g", "ge", "nl", "ng", "nge", "nle"];
 TRANSPARENT = ["mov", "movabs", "movzx", "movsx", "movsxd", "lea", "push", "pop", "nop", "prefetcht0",
                "cqo", "bswap", "not", "xchg", "movq", "cvtsi2sd", "divsd"];
 HEXITS = "0123456789abcdef";
+ARM_TEXT = "";                              // the program already in ARM64 (the compiler's -arm), or ""
+JUMP_TABLE = 53;                            // the runtime's jump table: 5-byte jmps after the first one
 
 // ---- failures: a translation that cannot be made stops the instruction (a protected call: ?!
 // holds why, SPEC §25) ----
@@ -1437,11 +1443,18 @@ translate_all(prog = "", out = "") {
         t >= 0 && R_RAW[k][0] == 0xE8 { RT_CALL_TARGETS[t] = true; }
         k = k + 1;
     }
-    // the program's
-    disassemble(prog, RUNTIME_END, CODE_END, out + ".dis");
-    P_ADDR = D_ADDR; P_RAW = D_RAW; P_TEXT = D_TEXT; P_N = D_N;
+    // the program's (none to translate when it comes in ARM64: every routine of the jump table may be called)
     targets = {0: true ; 4096};
     entries = {0: true ; 1024};
+    P_N = 0;
+    #ARM_TEXT == 0 {
+        disassemble(prog, RUNTIME_END, CODE_END, out + ".dis");
+        P_ADDR = D_ADDR; P_RAW = D_RAW; P_TEXT = D_TEXT; P_N = D_N;
+    } || {
+        j = 1;
+        * j <= JUMP_TABLE { RT_CALLS[BASE + HEADER + 5 * j] = true; j = j + 1; }
+        targets[BASE + RUNTIME_END] = true;           // (its label is in the program's text)
+    }
     k = 0;
     * k < P_N {
         addr = P_ADDR[k];
@@ -1482,6 +1495,7 @@ translate_all(prog = "", out = "") {
     !targets.contains(BASE + RUNTIME_END) { line(entry + ":"); }
 
     // the program
+    #ARM_TEXT > 0 { line(ARM_TEXT); }
     NERRORS = 0;
     k = 0;
     * k < P_N {
@@ -1548,6 +1562,8 @@ main() {
     << map;
     << out;
     m = @ map;
+    arm? = m.find("\nnihil-arm\n");
+    arm != _ { ARM_TEXT = m.slice((arm || 0) + 11); m = m.slice(0, arm || 0); }
     at? = m.find("nihil-map ");
     at == _ { !>> "translate: no \"nihil-map\" line in " + map + "\n"; :: 1; }
     nums = m.slice((at || 0) + 10).split("\n")[0].trim().split(" ");

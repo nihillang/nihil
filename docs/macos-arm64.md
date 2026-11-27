@@ -56,6 +56,134 @@ Bootstrapping a new Mac: `build/macos/nihilc1-native` comes from translating the
 `printf -- "-map src1/nihilc1.nihil\n" | build/nihilc1` (Linux), once; after that the Mac
 rebuilds its compiler by itself (`macos/nihil src1/nihilc1.nihil build/macos/nihilc1-native`).
 
+## Next: the compiler writes ARM64 itself (branch arm64-backend)
+
+Every instruction the compiler emits is an operation (`src1/40_emit.nihil`: `op_load`, `op_push`,
+`op_ld`, `op_jcc` … about 60 kinds, `OP_*` in `src1/00_data.nihil`), noted in a ring that the
+optimizations read instead of the x86 bytes. Jumps name labels (`label_new`, `label_bind`,
+`label_here`), not positions in the code. With `-arm`, all of a pass's operations are kept, with
+where each label was bound, and after the last pass `src1/42_arm.nihil` writes them as ARM64 text,
+on stderr after the map and a line `nihil-arm`; the translator then uses that text for the program
+and translates only the runtime:
+
+    NIHIL_ARM=1 macos/nihil prog.nihil [out]
+    NIHIL_ARM=1 macos/test-native.sh          (127 programs, also with NIHIL_O0=1)
+    macos/same-bytes.sh                       the x86 output, byte for byte, against a reference
+
+The first step keeps the translator's conventions (rax → x9, the x86 stack emulated in x28), so its
+runtime serves as it is; the speed is the translator's. The gains come next, operation by operation:
+the native stack and more registers for locals inside methods, then a native runtime.
+
+### -native: no translator, and a runtime in Nihil
+
+`-native` writes the whole program as ARM64 assembly on stdout (`_main`, the program, its runtime,
+the constants, the globals); clang links it with the system's library (libSystem) alone: no x86
+code, no translator, no C of ours. The program's stack stays a stack of 8-byte slots in x28 (the
+code builds arrays on it, with 8-byte elements), mapped by `_main`; `sp` is only the system's.
+
+    macos/nihil-native prog.nihil [out]
+    macos/test-native-c.sh                    the battery (NIHIL_O0=1, NIHIL_GC_TORTURE=1)
+
+The runtime is Nihil: `src1/native.nihil`, embedded in the compiler like the prelude (`make
+build/native_text.nihil`) and put before it in every `-native` program. A routine `RT_<NAME>` is the
+method `__nihil_rt_<name>`: the registers it reads (rax, rcx, rdx, rsi, rdi, in that order) are its
+arguments; a second result (read_at's size and stamp, unprotect's rdx) comes back through globals;
+a routine reached by a jump (an index out of bounds, a division by zero) through a label `Lrt<n>`
+that pushes them. Its locals are named `__…`: a program's global of the same name would be used
+otherwise. It reaches the system with intrinsics the compiler knows only with `-native`:
+- `__nihil_c("name", a1 … a8)`, `__nihil_c32` (an `int` result) and `__nihil_cvar("name", F, …)`
+  (F fixed arguments, the others on C's stack: `openat`'s mode, `fcntl`'s) call a function of
+  libSystem; `__nihil_peek`, `__nihil_peekb` and `__nihil_poke8` read and write memory;
+- the prelude speaks Linux's system calls (it is the same on both systems): `__nihil_rt_sys` makes
+  them with macOS's functions, with Linux's numbers, flags, layouts (stat, dirent, sockaddr) and
+  errno values, and the files of /proc programs read (environ, uptime, a random uuid).
+
+All of src/runtime.asm's routines are there, with their messages. The tests pass (optimized, `-O0`,
+and with the collector every 64 KiB), the compiler built this way gives the same output (its fixed
+point), and the planogram server serves the same pages. Written in Nihil, the hottest routines
+were slower than in C at first (reading a table of a million records: 60 → 120 ms); the code the
+compiler writes then learned registers for arguments and more of them for locals (below), and the
+routines their own fast ways: 86–93 ms now. What is left is mostly `rec_parse`, whose loop has more
+values than registers.
+
+The collector (in `src1/native.nihil`) is conservative mark and sweep, like the x86 runtime's. Its
+memory is its own (mmap, calloc): it never makes a block of the heap it collects. Its contract with
+the code the compiler writes:
+- it runs only inside a call of the runtime (alloc): every call of the runtime is a safepoint;
+- roots: the globals, the program's stack (from x28 to its top: the methods keep there the
+  registers they save, and the calls the rcx, rsi, rdi that stay live), the registers x19 … x28
+  (`_nh_regs`), and the records of the protected calls;
+- any word that points into an allocated block keeps it (a record's texts are inside its block);
+- a large block is scanned only where it was written (`mincore`): a big array of zeros costs nothing.
+
+How it works:
+- what is in use lives in a map, not in the blocks: a byte for each 32 bytes of the heap. A mark
+  fills a second map with the blocks it reaches; then the two swap. There is no sweep: each size
+  class hands out the next block whose byte is clear, in the pages the mark left with room, and a
+  page with nothing marked goes back to the system without being read;
+- from 64 MB live on, a child process (fork) marks, as in the x86 runtime, while the program goes
+  on; the program marks in the map each block it hands out meanwhile, and waits for the child only
+  after making as many bytes as were live. Since nothing writes the heap's pages but the program,
+  the fork costs only the pages the program itself writes (copy on write);
+- an allocation of a small block is done inside `__nihil_rt_alloc` when its class's page has room
+  and no collection is due (the class from a table; the block zeroed 8 bytes at a time);
+- the C collector asked for each block ahead of reading it (prefetch); in the Nihil one it made the
+  child's mark slower (22 → 38 ms), at the push or 16 blocks ahead, and it is not used
+  (`__nihil_prefetch` is there). Marking with several threads was tried and was slower: a big array
+  is one block.
+
+`NIHIL_GC_STATS=1` shows each collection (and the program's own peak at its end);
+`NIHIL_GC_TORTURE=1` collects every 64 KiB and forks from 1 MB live (the battery and the
+compiler's fixed point pass so, the compiler with about 100 forks).
+
+Measured on an M4 (`CHECK=1 SIZES=1000000 sh bench/compare/run.sh macos/nihil-native`, three runs),
+against the translator's path: making the records 70–112 ms (60–80), reading the table 61–67 ms
+(74), the first key lookup, which builds the index, 72–78 ms (72–79); peak memory 352 MB (325). The
+program stops for at most 3 ms in a forked collection. The compiler compiles itself in 0.25 s (0.43
+s with the collector before this one).
+
+The code (`src1/42_arm.nihil`, `-native` optimized) keeps x86's operations but not their copies:
+- liveness of rax, rcx, rdx, rsi, rdi and the flags for every operation (backwards over the jumps;
+  each runtime routine reads only its own arguments);
+- a constant, or a local in a register, loaded into rax or rcx waits where it is: the operations
+  that read it read it there (`cmp x24, #1000`, `ldr x9, [x25, #8]`), and it is copied only where
+  it is still live (a label, a jump's target, an operation not followed);
+- a comparison whose 0 or 1 only a jump looks at becomes the jump (`cmp ; b.lt`, `cbz`); a result
+  goes straight into the local it is stored in; push … pop of a value waiting is no memory; a 0 is
+  stored from `xzr`;
+- division and remainder are `sdiv`/`msub` (by a power of 2, shifts), with x86's results (INT_MIN /
+  -1, the remainder's sign) and the runtime's error for a division by zero.
+
+Calls and methods:
+- a method call reads no register and leaves none (liveness); a method's start and end are one
+  `stp`/`ldp` of x29 and x30; an empty frame costs nothing;
+- a method whose arguments take 8 slots or fewer gets them in x1 … x8: the caller pushes nothing and
+  drops nothing; a leaf (it calls nothing) whose frame does not escape keeps its parameters there,
+  another method pushes them at its start, where its body reads them;
+- a slot no call crosses while it is live (from its first operation to its last, widened to the
+  loops around it) may live in x1 … x8, with no save; the others in x19 … x26 (saved by a method);
+  the program's own code keeps to x19 … x26 (it calls its globals' start, placed at its end);
+- a constant of more than one instruction used in a loop gets a register of x19 … x26 still free,
+  loaded once;
+- a jump on which rax is known to be 0 or not, to the join of `&&` or `||`, goes on past the join's
+  own test (`Lt<n>`); a join no jump reaches any more is no label, so `d < 0 || d > 9` is
+  `cmp ; b.lt ; cmp ; b.le`;
+- a value computed and pushed in the middle of an expression (`a[i] * b[i]`) waits in a free
+  register of x0 … x7, not on the stack, when nothing before its pop calls C or a method;
+- each method has a local symbol `_m_<name>_<k>`, so profilers and backtraces name it
+  (`xctrace record --template 'Time Profiler'`).
+
+The compiler's own arrays for `-arm`/`-native` (operations, labels, the text) start small and
+double: a collection reads only what is there (`mincore` of 1.6 GB of untouched arrays took 25 ms a
+collection). Compiling itself natively: 0.22 → 0.14 s, with no collection at all.
+
+Measured (best of 3, M4; C with `cc -O2`): a double loop of `+`, `^` and `%`, 0.37 → 0.154 s (C
+0.142); Collatz up to 3 000 000, 1.45 → 0.69 s (C 0.32); a dot product in a method called 100 000
+times, 0.083 → 0.056 s (C without vectorizing 0.052). A sieve and `fib(35)` do not change: a BOOL
+array takes 8 bytes an element, and `fib` is about 7 cycles a call already (clang transforms the
+recursion). The compiler compiles itself in 0.157 s (its own profile: the symbol lookup, a linear
+search, is the largest part).
+
 ## The original plan (a second backend)
 
 ## The target

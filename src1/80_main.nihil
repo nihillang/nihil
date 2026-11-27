@@ -5,6 +5,7 @@
 // -profile: the symbols the executable writes with its samples, a line each, "start end name"
 // (addresses, decimal): the runtime's routines, each method of this pass and the top level
 // (the rest of the program's code, around the methods)
+prof_op = 0;                               // -profile: the operation of its lea (-arm)
 profile_symbols() {
     base = BASE_CODE + SIZE_HEADER;
     const_init();
@@ -43,7 +44,9 @@ profile_symbols() {
     const_put_num(BASE_CODE + size_code);
     const_put_str(" (top level)");
     const_put_byte(10);
-    register_fixup(pos_profile, const_close(), false);
+    c = const_close();
+    register_fixup(pos_profile, c, false);
+    want_arm && prof_op < n_ops { op_v[prof_op] = c; }   // (-arm: the lea's constant)
 }
 
 const_put_num(v = 0) {
@@ -164,6 +167,14 @@ globals_learn() {
 // redone; types discovered for methods and globals persist)
 one_pass() {
     size_code = 0;
+    n_ops = 0;                             // the operations and the labels start again
+    ops_low = 0;
+    n_labs = 0;
+    lab_free = -1;
+    n_binds = 0;
+    n_meths = 0;
+    n_prot_ops = 0;
+    n_frames = 0;
     prot_at_top = false;
     prot_depth = 0;
     n_fix = 0;
@@ -194,16 +205,17 @@ one_pass() {
     put_d(SIZE_HEADER + 1, size_code - (SIZE_HEADER + 5));   // jmp programa
 
     // top-level frame: push rbp ; mov rbp, rsp ; sub rsp, imm32 (patched at the end)
-    eb(0x55, 0x48, 0x89, 0xE5, 0x48, 0x81, 0xEC);
-    pos_frame = size_code;
-    emit_d(0);
-    emit(0xE8);                            // call inicializa_globais
-    pos_init = size_code;
-    emit_d(0);
+    op_push(R_BP);
+    op_mov(R_BP, R_SP);
+    pos_frame = op_frame();
+    pos_init = op_call_fwd();              // call inicializa_globais
     want_profile {
-        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + symbols] (made at the end of the pass)
+        at = size_code;                    // lea rax, [rip + symbols] (made at the end of the pass)
+        eb(0x48, 0x8D, 0x05);
         pos_profile = size_code;
         emit_d(0);
+        op_note(OP_LEA_CONST, R_AX, 0, at);   // (its constant: profile_symbols)
+        prof_op = n_ops - 1;
         emit_call_rt(RT_PROF_START);
     }
 
@@ -211,8 +223,8 @@ one_pass() {
     next_token();
     * tok_type != T_END { command(); }
 
-    put_d(pos_frame, (max_slots * 8 + 15) & -16);
-    eb(0x31, 0xFF);                         // xor edi, edi
+    put_frame(pos_frame, (max_slots * 8 + 15) & -16);
+    op_zero(R_DI);                         // xor edi, edi
     emit_call_rt(RT_EXIT);
 
     // inicializa_globals: every STRING or ARRAY global starts empty
@@ -222,9 +234,7 @@ one_pass() {
         s_flags[i] & FLAG_TOP != 0 {
             // kept at the top level: created by its first assignment, before any read
         } || s_flags[i] & FLAG_GLOBAL != 0 && (s_type[i] == TYPE_STR || s_type[i] & TYPE_ARR != 0) {
-            eb(0x48, 0x8D, 0x05);           // lea rax, [rip + ""]
-            register_fixup(size_code, const_empty, false);
-            emit_d(0);
+            op_lea_const(R_AX, const_empty);           // lea rax, [rip + ""]
             emit_store_global(s_end[i]);
         }
         s_flags[i] & FLAG_TOP == 0 && s_flags[i] & FLAG_GLOBAL != 0 && is_map(s_type[i]) {
@@ -241,7 +251,7 @@ one_pass() {
         }
         i = i + 1;
     }
-    emit(0xC3);                            // ret
+    op_ret();
     want_profile { profile_symbols(); }
     emit_constantes();
     close_elf();
@@ -321,6 +331,22 @@ want_map {
     i_map = 0;
     msg_len { map_line[i_map] = msg[i_map]; i_map = i_map + 1; }
     !>> $map_line;
+}
+arm_native {
+    arm_text();
+    arm_out = [0 ; arm_len];                 // the text whole, written at once (not a byte at a time)
+    i_arm = 0;
+    arm_len { arm_out[i_arm] = arm[i_arm]; i_arm = i_arm + 1; }
+    >> $arm_out;
+    :: 0;
+}
+want_arm {
+    arm_text();
+    !>> "nihil-arm\n";
+    arm_out = [0 ; arm_len];
+    i_arm = 0;
+    arm_len { arm_out[i_arm] = arm[i_arm]; i_arm = i_arm + 1; }
+    !>> $arm_out;
 }
 output_byte = 0;
 size_code {

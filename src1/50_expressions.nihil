@@ -23,17 +23,18 @@ expr_or() {
         is_opt(t) {
             // fallback: the value of t if present, otherwise the right one
             next_token();
-            eb(0x48, 0x85, 0xD2, 0x0F, 0x85);   // test rdx, rdx ; jnz end
-            pos = size_code;
-            emit_d(0);
+            op_test(R_DX);               // test rdx, rdx
+            jump_at = size_code;
+            pos = op_jcc(CC_NE);           // jnz end
+            after = size_code;
             u = expr_and();
             b = base_opt(t);
             r = 0;
-            u == b && load_simple(pos + 4) > 0 {
+            u == b && load_simple(after) >= 0 {
                 // no jump: mov rcx, fallback ; cmovz rax, rcx
-                move_code_back(pos + 4, pos - 2);
-                reload_in_rcx(pos - 2);
-                eb(0x48, 0x0F, 0x44, 0xC1);     // cmovz rax, rcx
+                simple_to_rcx(after, jump_at);
+                op_cmov(CC_E, R_AX, R_CX);     // cmovz rax, rcx
+                label_drop(pos);
                 pos = -1;
                 r = b;
             } || u == b || u == TYPE_UNKNOWN {
@@ -59,9 +60,7 @@ expr_or() {
             // logical OR, with short-circuit
             !is_bool(t) { error_op_types(pi, pl, pn, pli, t, 0); }
             next_token();
-            eb(0x48, 0x85, 0xC0, 0x0F, 0x85);   // test rax, rax ; jnz end
-            pos = size_code;
-            emit_d(0);
+            op_test(R_AX); pos = op_jcc(CC_NE);   // test rax, rax ; jnz end
             u = expr_and();
             or_unknown = t == TYPE_UNKNOWN && !is_bool(u);
             or_unknown {
@@ -83,9 +82,7 @@ expr_and() {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         !is_bool(t) { error_op_types(pi, pl, pn, pli, t, 0); }
         next_token();
-        eb(0x48, 0x85, 0xC0, 0x0F, 0x84);   // test rax, rax ; jz end
-        pos = size_code;
-        emit_d(0);
+        op_test(R_AX); pos = op_jcc(CC_E);   // test rax, rax ; jz end
         u = binary(0);
         !is_bool(u) { error_op_types(pi, pl, pn, pli, t, u); }
         t = TYPE_BOOL;
@@ -117,20 +114,20 @@ mode_op(t = 0) {
 
 // left in rax, right in rcx
 emit_op(t = 0) {
-    t == T_EQ { eb(0x48, 0x39, 0xC8, 0x0F, 0x94, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == T_NE { eb(0x48, 0x39, 0xC8, 0x0F, 0x95, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == '<' { eb(0x48, 0x39, 0xC8, 0x0F, 0x9C, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == '>' { eb(0x48, 0x39, 0xC8, 0x0F, 0x9F, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == T_LE { eb(0x48, 0x39, 0xC8, 0x0F, 0x9E, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == T_GE { eb(0x48, 0x39, 0xC8, 0x0F, 0x9D, 0xC0, 0x0F, 0xB6, 0xC0); }
-    || t == '|' { eb(0x48, 0x09, 0xC8); }
-    || t == '^' { eb(0x48, 0x31, 0xC8); }
-    || t == '&' { eb(0x48, 0x21, 0xC8); }
-    || t == T_SHL { eb(0x48, 0xD3, 0xE0); }
-    || t == T_SHR { eb(0x48, 0xD3, 0xF8); }
-    || t == '+' { eb(0x48, 0x01, 0xC8); }
-    || t == '-' { eb(0x48, 0x29, 0xC8); }
-    || t == '*' { eb(0x48, 0x0F, 0xAF, 0xC1); }
+    t == T_EQ { op_cmp_set(CC_E); }
+    || t == T_NE { op_cmp_set(CC_NE); }
+    || t == '<' { op_cmp_set(CC_L); }
+    || t == '>' { op_cmp_set(CC_G); }
+    || t == T_LE { op_cmp_set(CC_LE); }
+    || t == T_GE { op_cmp_set(CC_GE); }
+    || t == '|' { op_alu(ALU_OR, R_AX, R_CX); }
+    || t == '^' { op_alu(ALU_XOR, R_AX, R_CX); }
+    || t == '&' { op_alu(ALU_AND, R_AX, R_CX); }
+    || t == T_SHL { op_shl(R_AX); }
+    || t == T_SHR { op_sar(R_AX); }
+    || t == '+' { op_alu(ALU_ADD, R_AX, R_CX); }
+    || t == '-' { op_alu(ALU_SUB, R_AX, R_CX); }
+    || t == '*' { op_mul(R_AX, R_CX); }
     || t == '/' { emit_call_rt(RT_DIV); }
     || t == '%' { emit_call_rt(RT_MOD); }
 }
@@ -140,66 +137,37 @@ emit_op_float(op = 0, pi = 0, pl = 0, pn = 0, pli = 0) {
     op == '%' || op == '|' || op == '^' || op == '&' || op == T_SHL || op == T_SHR {
         error_op_types(pi, pl, pn, pli, TYPE_FLOAT, TYPE_FLOAT);
     }
-    eb(0x66, 0x48, 0x0F, 0x6E, 0xC0);       // movq xmm0, rax
-    eb(0x66, 0x48, 0x0F, 0x6E, 0xC9);       // movq xmm1, rcx
+    op_xmov(0, R_AX);       // movq xmm0, rax
+    op_xmov(1, R_CX);       // movq xmm1, rcx
     op == '+' || op == '-' || op == '*' || op == '/' {
-        op == '+' { eb(0xF2, 0x0F, 0x58, 0xC1); }       // addsd
-        || op == '-' { eb(0xF2, 0x0F, 0x5C, 0xC1); }    // subsd
-        || op == '*' { eb(0xF2, 0x0F, 0x59, 0xC1); }    // mulsd
-        || { eb(0xF2, 0x0F, 0x5E, 0xC1); }              // divsd
-        eb(0x66, 0x48, 0x0F, 0x7E, 0xC0);   // movq rax, xmm0
+        op == '+' { op_xop(XOP_ADD, 0, 1); }       // addsd
+        || op == '-' { op_xop(XOP_SUB, 0, 1); }    // subsd
+        || op == '*' { op_xop(XOP_MUL, 0, 1); }    // mulsd
+        || { op_xop(XOP_DIV, 0, 1); }              // divsd
+        op_rmovx(R_AX, 0);   // movq rax, xmm0
         : TYPE_FLOAT;
     }
-    // comparisons (NaN: only != is true)
-    op == '>' {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x97, 0xC0);   // ucomisd xmm0, xmm1 ; seta al
-    } || op == T_GE {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x93, 0xC0);   // ucomisd xmm0, xmm1 ; setae al
-    } || op == '<' {
-        eb(0x66, 0x0F, 0x2E, 0xC8, 0x0F, 0x97, 0xC0);   // ucomisd xmm1, xmm0 ; seta al
-    } || op == T_LE {
-        eb(0x66, 0x0F, 0x2E, 0xC8, 0x0F, 0x93, 0xC0);   // ucomisd xmm1, xmm0 ; setae al
-    } || op == T_EQ {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x94, 0xC0);   // ucomisd ; sete al
-        eb(0x0F, 0x9B, 0xC1, 0x20, 0xC8);               // setnp cl ; and al, cl
-    } || {
-        eb(0x66, 0x0F, 0x2E, 0xC1, 0x0F, 0x95, 0xC0);   // ucomisd ; setne al
-        eb(0x0F, 0x9A, 0xC1, 0x08, 0xC8);               // setp cl ; or al, cl
-    }
-    eb(0x0F, 0xB6, 0xC0);                   // movzx eax, al
+    op_fcmp_set(op);                      // comparisons (NaN: only != is true)
     : TYPE_BOOL;
 }
 
 // the code at a … is one load of a constant or of a local in a register (rbx, r12 … r15, which
 // the runtime and every method keep, and which only this method changes) → its length, else 0.
 // Not a global (a method the right side calls may change it), and not a local in memory: there
-// the processor runs push … pop faster than a late load (measured).
+// the processor runs push … pop faster than a late load (measured). → its place in the ring, or -1.
 left_late(a = 0) {
-    n = load_simple(a);
-    n == 5 || n == 10 { : n; }
-    n == 7 && code[a + 1] == 0xC7 { : n; }
-    n == 3 {
-        r = (code[a + 2] >> 3) & 7;
-        code[a] == 0x4C { r = r + 8; }
-        r == 3 || r >= 12 { : n; }
-    }
-    : 0;
+    i = load_simple(a);
+    i < 0 { : -1; }
+    op_k[i] == OP_IMM { : i; }
+    op_k[i] == OP_REG && (op_v[i] == 3 || op_v[i] >= 12) { : i; }
+    : -1;
 }
 
-// code[a ..] is the call emit_call_rt(rt) made at a
+// the code from a on is the call emit_call_rt(rt) made at a
 is_call_rt(a = 0, rt = 0) {
-    a < 0 || code[a] != 0xE8 { : false; }
-    v = rt + SIZE_HEADER - a - 5;
-    : code[a + 1] == v & 255 && code[a + 2] == (v >> 8) & 255 && code[a + 3] == (v >> 16) & 255 && code[a + 4] == (v >> 24) & 255;
-}
-
-// emits n bytes kept in w (the first 8, the first in the low byte) and w2 (the rest)
-emit_packed(w = 0, w2 = 0, n = 0) {
-    i = 0;
-    n {
-        i < 8 { emit(w >> (i * 8) & 255); } || { emit(w2 >> ((i - 8) * 8) & 255); }
-        i = i + 1;
-    }
+    a < 0 { : false; }
+    i = op_last_at(a);
+    : i >= 0 && op_k[i] == OP_CALL_RT && op_v[i] == rt;
 }
 
 // binary: level 0 … 6; from 7 on it becomes unary
@@ -221,11 +189,11 @@ binary(nv = 0) {
             }
             next_token();
             next_token();
-            eb(0x48, 0x85, 0xD2);               // test rdx, rdx
+            op_test(R_DX);               // test rdx, rdx
             op == T_EQ {
-                eb(0x0F, 0x94, 0xC0, 0x0F, 0xB6, 0xC0);   // sete al ; movzx eax, al
+                op_setcc(CC_E, R_AX); op_zxb(R_AX);   // sete al ; movzx eax, al
             } || {
-                eb(0x0F, 0x95, 0xC0, 0x0F, 0xB6, 0xC0);   // setne al ; movzx eax, al
+                op_setcc(CC_NE, R_AX); op_zxb(R_AX);  // setne al ; movzx eax, al
             }
             t = TYPE_BOOL;
             op = find_op(nv, tok_type);
@@ -235,51 +203,47 @@ binary(nv = 0) {
         next_token();
         // the left side is a constant or a local (which only this method can change: the right
         // side cannot, whatever it calls): it is loaded after the right side, without the stack
-        lk = left_late(ls);
-        lw = 0;                            // its bytes (up to 10), kept in this call: the right
-        lw2 = 0;                           // side compiles other binary operations
-        lk > 0 {
-            i = lk;
-            * i > 8 { i = i - 1; lw2 = lw2 << 8 | code[ls + i]; }
-            * i > 0 { i = i - 1; lw = lw << 8 | code[ls + i]; }
-            size_code = ls;
+        li = left_late(ls);
+        late = li >= 0;
+        lk = 0;                            // its operation, kept in this call: the right side
+        lv = 0;                            // compiles other binary operations
+        late {
+            lk = op_k[li];
+            lv = op_v[li];
+            code_cut(ls);
         }
         pos_push = size_code;
-        lk == 0 { emit(0x50); }            // push rax
+        !late { op_push(R_AX); }              // push rax
+        after_push = size_code;
         u = binary(nv + 1);
         // "…" + $n: the $ (the right side's last code, a call to RT_INT_TEXT) is dropped and the
         // two go to RT_CONCAT_INT together, which writes the digits straight into the result
         fused = false;
+        lc = op_last_start();
         optimize && t == TYPE_STR && op == '+' && u == TYPE_STR && last_int_text == size_code
-            && is_call_rt(size_code - 5, RT_INT_TEXT)
-            && last_target <= size_code - 5 && (n_fix == 0 || fix_pos[n_fix - 1] < size_code - 5) {
-            size_code = size_code - 5;
+            && lc >= 0 && is_call_rt(lc, RT_INT_TEXT)
+            && last_target <= lc && (n_fix == 0 || fix_pos[n_fix - 1] < lc) {
+            code_cut(lc);
             fused = true;
         }
-        rn = 0;
-        lk > 0 { rn = load_simple(pos_push); }
-        rn > 0 {
+        ri = -1;
+        late { ri = load_simple(pos_push); }
+        ri >= 0 {
             // both simple: the left one into rax, then the right one into rcx, in this order (as
             // x = x + 1 is recognized by increment, and as the processor runs it fastest)
-            rw = 0;
-            rw2 = 0;
-            i = rn;
-            * i > 8 { i = i - 1; rw2 = rw2 << 8 | code[pos_push + i]; }
-            * i > 0 { i = i - 1; rw = rw << 8 | code[pos_push + i]; }
-            size_code = pos_push;
-            emit_packed(lw, lw2, lk);
-            pr = size_code;
-            emit_packed(rw, rw2, rn);
-            reload_in_rcx(pr);
-        } || lk > 0 {
-            eb(0x48, 0x89, 0xC1);           // mov rcx, rax ; the left one into rax
-            emit_packed(lw, lw2, lk);
-        } || load_simple(pos_push + 1) > 0 {
+            rk = op_k[ri];
+            rv = op_v[ri];
+            code_cut(pos_push);
+            op_load(lk, R_AX, lv);
+            op_load(rk, R_CX, rv);
+        } || late {
+            op_load(OP_REG, R_CX, R_AX);    // mov rcx, rax ; the left one into rax
+            op_load(lk, R_AX, lv);
+        } || load_simple(after_push) >= 0 {
             // the right side is a simple load: load it straight into rcx
-            move_code_back(pos_push + 1, pos_push);
-            reload_in_rcx(pos_push);
+            simple_to_rcx(after_push, pos_push);
         } || {
-            eb(0x48, 0x89, 0xC1, 0x58);     // mov rcx, rax ; pop rax
+            op_mov(R_CX, R_AX); op_pop(R_AX);     // mov rcx, rax ; pop rax
         }
         mode = mode_op(op);
         r = 0;
@@ -303,7 +267,7 @@ binary(nv = 0) {
             r = TYPE_BOOL;
             t == TYPE_STR {
                 emit_call_rt(RT_STR_EQUAL);        // STRING: compares the contents
-                op == T_NE { eb(0x83, 0xF0, 0x01); }
+                op == T_NE { op_notb(R_AX); }
             } || {
                 emit_op(op);
             }
@@ -330,43 +294,43 @@ unary() {
         ok = u == TYPE_UNKNOWN;
         t == '#' && u & TYPE_ARR != 0 && !is_opt(u) { ok = true; }
         t == '#' && (is_map(u) || is_list(u)) {
-            eb(0x48, 0x8B, 0x00);           // mov rax, [rax]: the count, first word of the map (or list)
+            op_ld(R_AX, R_AX, 0, 0);           // mov rax, [rax]: the count, first word of the map (or list)
             : TYPE_INT;
         }
         t == T_AT_OPT {
             !ok && u != TYPE_STR { error_op_types(pi, pl, pn, pli, u, 0); }
             emit_call_rt(RT_READ_FILE_OPT);   // @? path → STRING? (_ if it does not open)
-            eb(0x31, 0xD2, 0x48, 0x85, 0xC0, 0x0F, 0x95, 0xC2);   // xor edx,edx ; test rax,rax ; setne dl
+            op_zero(R_DX); op_test(R_AX); op_setcc(CC_NE, R_DX);   // xor edx,edx ; test rax,rax ; setne dl
             : TYPE_STR | TYPE_OPT;
         }
         t == '-' && u == TYPE_FLOAT {
-            eb(0x48, 0x0F, 0xBA, 0xF8, 0x3F);   // btc rax, 63 (flips the sign)
+            op_fneg(R_AX);   // btc rax, 63 (flips the sign)
             : TYPE_FLOAT;
         }
         t == '.' {
             !ok && u != TYPE_INT { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0xF2, 0x48, 0x0F, 0x2A, 0xC0);   // cvtsi2sd xmm0, rax
-            eb(0x66, 0x48, 0x0F, 0x7E, 0xC0);   // movq rax, xmm0
+            op_i2f(0, R_AX);   // cvtsi2sd xmm0, rax
+            op_rmovx(R_AX, 0);   // movq rax, xmm0
             : TYPE_FLOAT;
         }
         t == '#' && u == TYPE_FLOAT {
-            eb(0x66, 0x48, 0x0F, 0x6E, 0xC0);   // movq xmm0, rax
-            eb(0xF2, 0x48, 0x0F, 0x2C, 0xC0);   // cvttsd2si rax, xmm0 (trunca)
+            op_xmov(0, R_AX);   // movq xmm0, rax
+            op_f2i(R_AX, 0);   // cvttsd2si rax, xmm0 (trunca)
             : TYPE_INT;
         }
         t == '-' {
             !ok && u != TYPE_INT { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0x48, 0xF7, 0xD8);           // neg rax
+            op_neg(R_AX);           // neg rax
             : TYPE_INT;
         }
         t == '!' {
             !ok && u != TYPE_BOOL { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0x83, 0xF0, 0x01);           // xor eax, 1
+            op_notb(R_AX);           // xor eax, 1
             : TYPE_BOOL;
         }
         t == '~' {
             !ok && u != TYPE_INT { error_op_types(pi, pl, pn, pli, u, 0); }
-            eb(0x48, 0xF7, 0xD0);           // not rax
+            op_not(R_AX);           // not rax
             : TYPE_INT;
         }
         t == '@' {
@@ -384,19 +348,15 @@ unary() {
             : TYPE_STR;
         }
         t == '$' && u == TYPE_FLOAT {
-            emit(0x50);
+            op_push(R_AX);
             call_prelude("__nihil_ft_text", 8);   // $ x → the shortest text that reads back as x
             : TYPE_STR;
         }
         t == '$' && u == TYPE_BOOL {
-            eb(0x48, 0x89, 0xC2);           // mov rdx, rax
-            eb(0x48, 0x8D, 0x05);           // lea rax, [rip + "true"]
-            register_fixup(size_code, bool_text(true), false);
-            emit_d(0);
-            eb(0x48, 0x8D, 0x0D);           // lea rcx, [rip + "false"]
-            register_fixup(size_code, bool_text(false), false);
-            emit_d(0);
-            eb(0x48, 0x85, 0xD2, 0x48, 0x0F, 0x44, 0xC1);   // test rdx, rdx ; cmovz rax, rcx
+            op_mov(R_DX, R_AX);           // mov rdx, rax
+            op_lea_const(R_AX, bool_text(true));           // lea rax, [rip + "true"]
+            op_lea_const(R_CX, bool_text(false));           // lea rcx, [rip + "false"]
+            op_test(R_DX); op_cmov(CC_E, R_AX, R_CX);   // test rdx, rdx ; cmovz rax, rcx
             : TYPE_STR;
         }
         t == '$' {
@@ -405,7 +365,7 @@ unary() {
             : TYPE_STR;
         }
         !ok && u != TYPE_STR { error_op_types(pi, pl, pn, pli, u, 0); }
-        eb(0x48, 0x8B, 0x40, 0xF8);         // mov rax, [rax-8]
+        op_ld(R_AX, R_AX, -8, 0);         // mov rax, [rax-8]
         : TYPE_INT;
     }
     : postfix();
@@ -424,9 +384,7 @@ protected_expr() {
     }
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     next_token();                        // "?" → the call
-    eb(0x48, 0x8D, 0x05);                // lea rax, [rip + resume]
-    resume_pos = size_code;
-    emit_d(0);
+    resume_pos = op_lea_fwd(R_AX);       // lea rax, [rip + resume]
     emit_call_rt(RT_PROTECT);
     start = size_code;
     t = postfix();
@@ -435,8 +393,8 @@ protected_expr() {
         error("'?' goes before a call");
     }
     emit_call_rt(RT_UNPROTECT);
-    t != TYPE_NONE && t != TYPE_UNKNOWN && !is_opt(t) { eb(0xBA, 1, 0, 0, 0); }   // mov edx, 1
-    put_d(resume_pos, size_code - (resume_pos + 4));
+    t != TYPE_NONE && t != TYPE_UNKNOWN && !is_opt(t) { op_load(OP_IMM, R_DX, 1); }   // mov edx, 1
+    patch_to_here(resume_pos);
     last_target = size_code;             // the runtime lands here
     call_end = size_code;                // may stand alone as a command, like a call
     t == TYPE_NONE || t == TYPE_UNKNOWN { : t; }
@@ -463,37 +421,25 @@ emit_dispatch(k = 0, base = 0, np = 0, dn = 0, dm = [0], dt = [0]) {
     a = 0;
     j = 1;
     np { j < np { a = a + size_param(base + j); } j = j + 1; }
-    eb(0x48, 0x8B, 0x84, 0x24);             // mov rax, [rsp + a]: the receiver
-    emit_d(a);
-    eb(0x48, 0x8B, 0x48, 0xF0);             // mov rcx, [rax - 16]
-    eb(0x48, 0xC1, 0xE9, 48);               // shr rcx, 48: its model + 1
+    op_ld(R_AX, R_SP, a, 1);                // mov rax, [rsp + a]: the receiver
+    op_ld(R_CX, R_AX, -16, 0);              // mov rcx, [rax - 16]
+    op_shri(R_CX, 48);                      // shr rcx, 48: its model + 1
     jumps = [0 ; dn];
     j = 0;
     * j < dn {
-        eb(0x48, 0x81, 0xF9);               // cmp rcx, model + 1
-        emit_d(dm[j] + 1);
-        eb(0x0F, 0x84);                     // je its call
-        jumps[j] = size_code;
-        emit_d(0);
+        op_cmpi(R_CX, dm[j] + 1);           // cmp rcx, model + 1
+        jumps[j] = op_jcc(CC_E);            // je its call
         j = j + 1;
     }
-    emit(0xE8);                            // call k: every other model
-    register_fixup(size_code, k, true);
-    emit_d(0);
-    emit(0xE9);                            // jmp done
+    op_call_method(k);                      // call k: every other model
     ends = [0 ; dn + 1];
-    ends[0] = size_code;
-    emit_d(0);
+    ends[0] = op_jmp();                     // jmp done
     j = 0;
     * j < dn {
         patch_here(jumps[j]);
         note_call(dt[j]);
-        emit(0xE8);                        // call the method of model dm[j]
-        register_fixup(size_code, dt[j], true);
-        emit_d(0);
-        emit(0xE9);
-        ends[j + 1] = size_code;
-        emit_d(0);
+        op_call_method(dt[j]);              // call the method of model dm[j]
+        ends[j + 1] = op_jmp();
         j = j + 1;
     }
     j = 0;
@@ -520,7 +466,7 @@ type_only_record(list = false) {
     next_token();                        // name → "("
     next_token();                        // "(" → ")"
     next_token();                        // ")" → ";"
-    eb(0x31, 0xC0);                         // xor eax, eax: no record
+    op_zero(R_AX);                          // xor eax, eax: no record
     : model_type(s_extra[k]);
 }
 
@@ -557,7 +503,8 @@ index_step(t = 0) {
         error_end();
     }
     pos_push = size_code;
-    emit(0x50);                        // push rax
+    op_push(R_AX);                        // push rax
+    after_push = size_code;
     next_token();
     u = expression();
     u != TYPE_INT && u != TYPE_UNKNOWN {
@@ -567,18 +514,17 @@ index_step(t = 0) {
         error_end();
     }
     expect(']', "']'");
-    load_simple(pos_push + 1) > 0 {
-        move_code_back(pos_push + 1, pos_push);   // a simple index: straight into rcx, no stack
-        reload_in_rcx(pos_push);
+    load_simple(after_push) >= 0 {
+        simple_to_rcx(after_push, pos_push);    // a simple index: straight into rcx, no stack
     } || {
-        eb(0x48, 0x89, 0xC1, 0x58);     // mov rcx, rax ; pop rax
+        op_mov(R_CX, R_AX); op_pop(R_AX);     // mov rcx, rax ; pop rax
     }
     emit_check_limit();
     t == TYPE_STR {
-        eb(0x0F, 0xB6, 0x04, 0x08);     // movzx eax, byte [rax + rcx]
+        op_ldbx(R_AX, R_AX, R_CX);     // movzx eax, byte [rax + rcx]
         t = TYPE_INT;
     } || {
-        eb(0x48, 0x8B, 0x04, 0xC8);     // mov rax, [rax + rcx*8]
+        op_ldx(R_AX, R_AX, R_CX);     // mov rax, [rax + rcx*8]
         t = t & ~TYPE_ARR;
     }
     : t;
@@ -598,19 +544,17 @@ primary() {
         : TYPE_FLOAT;
     }
     t == T_TRUE {
-        eb(0xB8, 1, 0, 0, 0);               // mov eax, 1
+        op_load(OP_IMM, R_AX, 1);           // mov eax, 1
         next_token();
         : TYPE_BOOL;
     }
     t == T_FALSE {
-        eb(0x31, 0xC0);                     // xor eax, eax
+        op_zero(R_AX);                     // xor eax, eax
         next_token();
         : TYPE_BOOL;
     }
     t == T_STR {
-        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + rel32]
-        register_fixup(size_code, tok_value, false);
-        emit_d(0);
+        op_lea_const(R_AX, tok_value);               // lea rax, [rip + rel32]
         next_token();
         : TYPE_STR;
     }
@@ -622,7 +566,7 @@ primary() {
         : u;
     }
     t == T_UNDERSCORE {
-        eb(0x31, 0xC0, 0x31, 0xD2);         // xor eax, eax ; xor edx, edx
+        op_zero(R_AX); op_zero(R_DX);         // xor eax, eax ; xor edx, edx
         next_token();
         : TYPE_ABSENT;
     }
@@ -666,6 +610,13 @@ primary_name() {
         k < 0 && name_is(pi, pl, "__nihil_bytes") { : bytes_intrinsic(1); }
         k < 0 && name_is(pi, pl, "__nihil_poke") { : bytes_intrinsic(2); }
         k < 0 && name_is(pi, pl, "__nihil_fail_rt") { : fail_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_peek") { : peek_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_peekb") { : peekb_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_prefetch") { : prefetch_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_poke8") { : poke8_intrinsic(); }
+        k < 0 && name_is(pi, pl, "__nihil_c") { : ccall_intrinsic(false); }
+        k < 0 && name_is(pi, pl, "__nihil_c32") { : ccall_intrinsic(true); }
+        k < 0 && name_is(pi, pl, "__nihil_cvar") { : ccall_intrinsic(false); }
         k < 0 && name_is(pi, pl, "__nihil_set_model") { : model_intrinsic(1); }
         k < 0 && name_is(pi, pl, "__nihil_model_of") { : model_intrinsic(2); }
         k < 0 && name_is(pi, pl, "tools") { : tools_text(); }
@@ -756,7 +707,7 @@ primary_array() {
     }
     tok_type == ';' {
         // [value ; n]
-        emit(0x50);
+        op_push(R_AX);
         next_token();
         tok_type == '*' { : list_literal(t); }   // [value ; *]: an empty LIST (SPEC §28)
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
@@ -771,17 +722,17 @@ primary_array() {
         is_rec(t) {
             // [record ; n]: n independent copies of the record
             refuse_abstract(t >> 8, "no copies of it are made ([NAME() ; *] is an empty LIST of it)");
-            emit(0x50);
+            op_push(R_AX);
             push_const(m_schema[t >> 8]);
             call_prelude("__nihil_rec_rep", 24);
         } || {
-            eb(0x48, 0x89, 0xC1, 0x5A);     // mov rcx, rax ; pop rdx
+            op_mov(R_CX, R_AX); op_pop(R_DX);     // mov rcx, rax ; pop rdx
             emit_call_rt(RT_ARRAY_REP);
         }
         expect(']', "']' (in [value ; size])");
     } || {
         // [a, b, c]: pushes the values, allocates, pops from the last to the first
-        emit(0x50);
+        op_push(R_AX);
         n = 1;
         * tok_type == ',' {
             next_token();
@@ -796,18 +747,17 @@ primary_array() {
                 put_type(u);
                 error_end();
             }
-            emit(0x50);
+            op_push(R_AX);
             n = n + 1;
         }
         expect(']', "']'");
-        emit(0xB9);                        // mov ecx, n
-        emit_d(n);
+        op_load(OP_IMM, R_CX, n);                        // mov ecx, n
+        
         emit_call_rt(RT_ALLOC);
         r = n;
         * r > 0 {
             r = r - 1;
-            eb(0x59, 0x48, 0x89, 0x88);     // pop rcx ; mov [rax + disp32], rcx
-            emit_d(r * 8);
+            op_pop(R_CX); op_st(R_AX, r * 8, R_CX, 1);     // pop rcx ; mov [rax + disp32], rcx
         }
     }
     t == TYPE_UNKNOWN { : t; }
@@ -879,8 +829,8 @@ call_method(k = 0, pre = 0) {
             put_type(u);
             error_end();
         }
-        is_opt(pt) { emit(0x52); }         // push rdx (presence)
-        emit(0x50);                        // push rax
+        is_opt(pt) { op_push(R_DX); }         // push rdx (presence)
+        op_push(R_AX);                        // push rax
         i = i + 1;
         tok_type == ',' {
             next_token();
@@ -894,27 +844,25 @@ call_method(k = 0, pre = 0) {
         e = base + i;
         p_type[e] & TYPE_ARR != 0 {
             // ARRAY: a new one-element array on every call
-            eb(0xB9, 1, 0, 0, 0);           // mov ecx, 1
+            op_load(OP_IMM, R_CX, 1);           // mov ecx, 1
             emit_call_rt(RT_ALLOC);
-            emit(0x50);
+            op_push(R_AX);
             emit_default(e);
-            eb(0x48, 0x8B, 0x0C, 0x24, 0x48, 0x89, 0x01, 0x58);   // mov rcx,[rsp] ; mov [rcx],rax ; pop rax
+            op_ld(R_CX, R_SP, 0, 0); op_st(R_CX, 0, R_AX, 0); op_pop(R_AX);   // mov rcx,[rsp] ; mov [rcx],rax ; pop rax
         } || {
             emit_default(e);
         }
         is_opt(p_type[e]) {
-            eb(0xBA, 1, 0, 0, 0);           // mov edx, 1 (the default is present)
-            emit(0x52);                    // push rdx
+            op_load(OP_IMM, R_DX, 1);           // mov edx, 1 (the default is present)
+            op_push(R_DX);                    // push rdx
         }
-        emit(0x50);
+        op_push(R_AX);
         i = i + 1;
     }
     next_token();                        // consome ")"
     note_call(k);
     dn == 0 {
-        emit(0xE8);                        // call method (patched at the end of the pass)
-        register_fixup(size_code, k, true);
-        emit_d(0);
+        op_call_method(k);                 // call method (patched at the end of the pass)
     } || {
         emit_dispatch(k, base, np, dn, dm, dt);
     }
@@ -922,8 +870,8 @@ call_method(k = 0, pre = 0) {
         total = 0;
         j = 0;
         np { total = total + size_param(base + j); j = j + 1; }
-        eb(0x48, 0x81, 0xC4);               // add rsp, size of the arguments
-        emit_d(total);
+        op_stack(total, 1);               // add rsp, size of the arguments
+        
     }
     call_end = size_code;
     r = s_type[k];
@@ -959,9 +907,7 @@ emit_default(e = 0) {
         :;
     }
     b == TYPE_STR {
-        eb(0x48, 0x8D, 0x05);               // lea rax, [rip + string]
-        register_fixup(size_code, p_default[e], false);
-        emit_d(0);
+        op_lea_const(R_AX, p_default[e]);               // lea rax, [rip + string]
     } || {
         emit_immediate(p_default[e]);
     }

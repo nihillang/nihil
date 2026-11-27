@@ -80,6 +80,13 @@ build/prelude_text.nihil: $(PRELUDE)
 	  cat $(PRELUDE) | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{ printf "%s\\n", $$0 }'; \
 	  printf '";\n'; } > $@
 
+# the runtime written in Nihil for -native (macOS): a STRING inside nihilc1, put after the prelude
+build/native_text.nihil: src1/native.nihil
+	@mkdir -p build
+	{ printf '// generated from src1/native.nihil — do not edit\nNATIVE_TEXT = "'; \
+	  cat src1/native.nihil | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{ printf "%s\\n", $$0 }'; \
+	  printf '";\n'; } > $@
+
 # the standard library (std/*.nihil, SPEC §16): each file becomes a STRING inside nihilc1,
 # included by programs as @ "std:name.nihil";
 STD := $(sort $(wildcard std/*.nihil))
@@ -93,7 +100,7 @@ build/std_text.nihil: $(STD)
 	  done; \
 	  printf '    : "";\n}\n'; } > $@
 
-STAGE1_INPUTS := build/prelude_text.nihil build/std_text.nihil $(SOURCES1)
+STAGE1_INPUTS := build/prelude_text.nihil build/native_text.nihil build/std_text.nihil $(SOURCES1)
 
 ifneq ($(STAGE0),)
 build/nihilc1: build/nihilc $(STAGE1_INPUTS)
