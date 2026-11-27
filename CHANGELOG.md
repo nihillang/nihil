@@ -14,6 +14,21 @@ before v2.0.
     same 8-byte elements, C took the same 0.50 s. With one byte, the native macOS build takes 0.13 s (C: 0.135 s) and
     62 MB instead of 482 MB; its collector does not look inside such a block (no address can be in it)
 
+## v4.13.0
+
+On a Mac the compiler now writes ARM64 itself, with no translator; maps, division and the ARM64 code get faster; and
+the macOS package starts on macOS 11 again. `bench/workload` (1,000,000 sales) went from 282 to 205 ms on an M4
+(1.4 times C, 0.8 times Go); on Linux, its map phase from 96 to 70 ms.
+
+- macOS: `nihil` compiles every program with `-native` (docs/macos-arm64.md): the compiler writes the whole program as ARM64 assembly, its runtime included (written in Nihil), and clang links it with the system's library alone. The package's compiler is built the same way and compiles itself to the same assembly. `NIHIL_TRANSLATE=1` keeps the translator of the x86-64 code for this version; the next one removes it, with `arm64/rt.c`
+  - *Why:* The direct way is faster than the translated one and is one way to keep instead of two (every optimization had to be made and tested for both). The ARM64 session checked the whole suite gives the same output, error text and exit code both ways; the 16 Learn chapters, the IDE and an MCP server were checked on an installed package
+- fix: the macOS package starts on macOS 11 and later. Its binaries carried the version of the machine that built them (v4.12.0's need macOS 26), so older Macs refused to start the compiler; programs `nihil` builds carry 11.0 too. The release workflow now checks it
+  - *Why:* clang stamps the build machine's macOS as the minimum unless told otherwise; found while making `-native` the default
+- maps: `m[k] = (m[k] || 0) + v` looks the key up once (the map keeps the slot its last read looked at, and a write takes it only when that slot holds the same key); an INT key's look-up makes no call inside, and its hash is written out; the `used` table takes a byte a slot instead of eight (17 bytes a slot, not 24). `bench/workload`'s map phase: 96 → 70 ms on Linux (i3-1115G4), 80 → 42 ms on an M4 (with the ARM64 changes below)
+  - *Why:* Maps were the largest gap after making records: every such update made six calls and looked the key up twice
+- x86-64: a division or rest by a constant power of 2 (up to 2^31) is shifts, rounding towards 0 as before, instead of a call to `idiv`
+  - *Why:* `x / 16`, `x % 256` and a random generator's `% 2^31` are common; `idiv` costs tens of cycles (less on recent Intel: `bench/workload`'s generate went 81 → 76 ms on an i3-1115G4)
+- ARM64 (`-native`): pushes and pops in pairs (`stp`/`ldp`), constants negated or shifted at compile time, and no reload of a global just stored. `bench/workload` on an M4: 221 → 208 ms
 ## v4.12.0
 
 Queries that use a model's methods, a FLOAT sum that was wrong inside methods, a chapter on objects for the Learn
