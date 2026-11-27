@@ -108,8 +108,20 @@ a_nl() { a_byte(10); }
 a_ins(s = "") { a_str("    "); a_str(s); }
 a_line(s = "") { a_ins(s); a_nl(); }
 
+// A method that calls nothing keeps the x86 registers its prologue saves (rbx, r12 … r15) in free
+// registers of x1 … x8 instead of x19 … x23: no save, no restore (rn_map; 0: the usual one)
+rn_map = [0 ; 16];
+rn_taken = 0;                  // (their ARM registers, bits)
+unit_lo = 0;
+rn_clear() {
+    q = 0;
+    * q < 16 { rn_map[q] = 0; q = q + 1; }
+    rn_taken = 0;
+}
+
 // the ARM register of an x86 one
 a_rn(r = 0) {
+    r >= 0 && r < 16 && rn_map[r] != 0 { : rn_map[r]; }
     r == 0 { : 9; }
     r == 1 { : 10; }
     r == 2 { : 11; }
@@ -424,7 +436,7 @@ arm_text() {
             unit_n = 0;
             unit_leaf = false;
             m = m + 1;
-            promote { unit_csr = top_csr; }
+            promote { unit_csr = top_csr; rn_clear(); }
         }
         * j < n_binds && lab_op[binds[j]] <= i { arm_bind(binds[j]); j = j + 1; }
         step = 1;
@@ -810,6 +822,8 @@ slots_clear() {
 
 unit_slots(lo = 0, hi = 0, top = false) {
     unit_top = top;
+    unit_lo = lo;
+    rn_clear();
     slots_clear();
     n_backs = 0;
     unit_csr = 0;
@@ -880,6 +894,21 @@ unit_slots(lo = 0, hi = 0, top = false) {
     !top && n_uslot > 0 && flow_known(lo, hi) { slot_live(lo, hi); slot_exact = true; }
     reg0 = 1;
     unit_leaf { reg0 = unit_n + 1; }
+    !top && !calls && !leaf_bad {
+        reg = 8;
+        j = 0;
+        * j < unit_limit {
+            r = op_r[lo + 2 + j];
+            reg >= reg0 && r >= 0 && r < 16 && reg_bit(r) != 0 {
+                rn_map[r] = reg;
+                rn_taken = rn_taken | (1 << reg);
+                unit_csr = unit_csr | (1 << reg);
+                used = used & ~reg_bit(r);
+                reg = reg - 1;
+            }
+            j = j + 1;
+        }
+    }
     top { reg0 = 9; }                      // (the program's own code calls its globals' start, placed at its end:
                                            // its order is not the order it runs in)
     // the heaviest slot first, into the first register that is free while it is live (two slots
@@ -889,7 +918,8 @@ unit_slots(lo = 0, hi = 0, top = false) {
     more = reg0 <= 8;
     * more {
         best = -1;
-        bw = 7;                            // (inside a loop at least)
+        bw = 7;                            // (inside a loop at least; in a leaf any: x19 … x26 cost a save)
+        unit_leaf { bw = 0; }
         q = 0;
         * q < n_uslot {
             u = uslot[q];
@@ -902,7 +932,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
         more {
             slot_done[best] = true;
             reg = reg0;
-            * reg <= 8 && (unit_csr & (1 << reg)) != 0 && !reg_fits(reg, best) { reg = reg + 1; }
+            * reg <= 8 && ((rn_taken >> reg) & 1 != 0 || (unit_csr & (1 << reg)) != 0 && !reg_fits(reg, best)) { reg = reg + 1; }
             reg <= 8 {
                 unit_reg[best] = reg;
                 slot_w[best] = -1;
@@ -1428,6 +1458,13 @@ arm_lazy(i = 0) {
         meth_entry = false;
         a_line("stp x29, x30, [x28, #-16]!");
         : 1;
+    }
+    // the prologue's pushes of x86 registers kept in x1 … x8 (rn_map): only their room
+    k == OP_PUSH && rn_taken != 0 && i >= unit_lo + 2 && i < unit_lo + 2 + unit_limit && rn_map[r] != 0 {
+        c = 1;
+        * i + c < unit_lo + 2 + unit_limit && rn_map[op_r[i + c]] != 0 { c = c + 1; }
+        a_ins("sub x28, x28, #"); a_num(8 * c); a_nl();
+        : c;
     }
     // pushes and pops of values waiting
     k == OP_PUSH && (pend_k[r] != 0 || r == R_BX || r >= 12) && n_vs < VS {
@@ -2214,12 +2251,18 @@ arm_put_frame(pos = 0, size = 0) {
 }
 
 arm_epilogue(n = 0) {
-    n == 0 {
+    kept = 0;                              // (registers of n kept in x1 … x8: nothing to restore)
+    i = 0;
+    * i < n { rn_map[REGS[i]] != 0 { kept = kept + 1; } i = i + 1; }
+    n == 0 || kept == n {
         a_line("mov x28, x29");
     } || {
         a_add_imm(28, 29, -8 * n);
         i = n;
-        * i > 0 { i = i - 1; a_pop(a_rn(REGS[i])); }
+        * i > 0 {
+            i = i - 1;
+            rn_map[REGS[i]] != 0 { a_line("add x28, x28, #8"); } || { a_pop(a_rn(REGS[i])); }
+        }
     }
     arm_native { a_line("ldp x29, x30, [x28], #16"); } || { a_pop(29); a_pop(30); }
     unit_k >= 0 && in_regs(unit_k) && !unit_leaf && unit_n > 0 { arm_stack(8 * unit_n); }   // its arguments

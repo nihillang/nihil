@@ -196,7 +196,8 @@ __nihil_rt_alloc(n = 0) {
 __nihil_rt_alloc_slow(n = 0) { : __nihil_gc_alloc(n, true); }
 
 __nihil_rt_array_rep(n = 0, fill = 0) {
-    __a = __nihil_gc_alloc(n, fill == 0);
+    __a = __nihil_rt_alloc(n);              // the usual case first (a small block: lazy does not matter)
+    __a == 0 { __a = __nihil_gc_alloc(n, fill == 0); }
     fill != 0 {
         __p = __a;
         __end = __a + 8 * n;
