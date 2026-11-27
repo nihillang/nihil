@@ -1792,15 +1792,16 @@ __nihil_sort_by(v = [0], keys = [0], kind = 0) {
 }
 
 // ---- MAP (SPEC §22): a hash table in memory ------------------------------------
-// A map is an ARRAY of INT [count, capacity, keys, values, used], the last three
-// being addresses of ARRAYs of `capacity` elements. kind: 1 = INT keys, 3 =
+// A map is an ARRAY of INT [count, capacity, keys, values, used, hint], keys, values
+// and used being addresses of ARRAYs of `capacity` elements, and hint the slot the
+// last map_get looked at (see map_set). kind: 1 = INT keys, 3 =
 // STRING keys (their addresses). Linear probing, at most 2/3 full; deleting
 // moves back the entries after the hole, so no slot is ever "deleted".
 
 __nihil_map_new(n = 0, kind = 0) {
     __c = 8;
     * __c * 2 < n * 3 { __c = __c * 2; }
-    __m = [0 ; 5];
+    __m = [0 ; 6];
     __m[1] = __c;
     __m[2] = __nihil_addr([0 ; __c]);
     __m[3] = __nihil_addr([0 ; __c]);
@@ -1814,33 +1815,58 @@ __nihil_map_hash(k = 0, kind = 0) {
     : __h ^ (__h >> 29);
 }
 
-// the slot of key k, or the free slot where it would go
+// the slot of key k, or the free slot where it would go (an INT key's hash is written out here and
+// in map_get: a call less on every look-up)
 __nihil_map_slot(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
     __mask = __mm[1] - 1;
     __ks = __nihil_arr_at(__mm[2]);
     __us = __nihil_arr_at(__mm[4]);
-    __j = __nihil_map_hash(k, kind) & __mask;
     kind == 3 {
+        __j = __nihil_key_hash(__nihil_str_at(k)) & __mask;
         __s = __nihil_str_at(k);
         * __us[__j] != 0 {
-            __nihil_str_at(__ks[__j]) == __s { : __j; }
+            __ks[__j] == k || __nihil_str_at(__ks[__j]) == __s { : __j; }
             __j = (__j + 1) & __mask;
         }
         : __j;
     }
-    * __us[__j] != 0 {
-        __ks[__j] == k { : __j; }
-        __j = (__j + 1) & __mask;
-    }
+    __h = k * -7046029254386353131;
+    __j = (__h ^ (__h >> 29)) & __mask;
+    * __us[__j] != 0 && __ks[__j] != k { __j = (__j + 1) & __mask; }
     : __j;
 }
 
 // m[k] → the value, or _ (the compiler types it V?)
 __nihil_map_get(m = 0, k = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
-    __j = __nihil_map_slot(m, k, kind);
     __us = __nihil_arr_at(__mm[4]);
+    __j = 0;
+    kind == 3 {
+        __j = __nihil_map_slot(m, k, kind);
+    } || {
+        __mask = __mm[1] - 1;
+        __ks = __nihil_arr_at(__mm[2]);
+        __h = k * -7046029254386353131;
+        __j = (__h ^ (__h >> 29)) & __mask;
+        * __us[__j] != 0 && __ks[__j] != k { __j = (__j + 1) & __mask; }
+    }
+    __mm[5] = __j;                          // the hint for a map_set of the same key
+    __us[__j] == 0 { : _; }
+    __vs = __nihil_arr_at(__mm[3]);
+    : __vs[__j];
+}
+
+// the same for an INT key, with no call: a leaf (the compiler calls it for maps with INT keys)
+__nihil_map_get_int(m = 0, k = 0, kind = 0) {
+    __mm = __nihil_arr_at(m);
+    __us = __nihil_arr_at(__mm[4]);
+    __ks = __nihil_arr_at(__mm[2]);
+    __mask = __mm[1] - 1;
+    __h = k * -7046029254386353131;
+    __j = (__h ^ (__h >> 29)) & __mask;
+    * __us[__j] != 0 && __ks[__j] != k { __j = (__j + 1) & __mask; }
+    __mm[5] = __j;                          // the hint for a map_set of the same key
     __us[__j] == 0 { : _; }
     __vs = __nihil_arr_at(__mm[3]);
     : __vs[__j];
@@ -1884,8 +1910,13 @@ __nihil_map_grow(m = 0, kind = 0) {
 // m[k] = v;
 __nihil_map_set(m = 0, k = 0, v = 0, kind = 0) {
     __mm = __nihil_arr_at(m);
-    __j = __nihil_map_slot(m, k, kind);
     __us = __nihil_arr_at(__mm[4]);
+    __ks = __nihil_arr_at(__mm[2]);
+    // the slot the last map_get of this map looked at, so m[k] = (m[k] || 0) + v; looks k up once.
+    // Only a hint: taken when that slot holds k itself (the same INT, or the same STRING by
+    // address), so an older look-up or a map that grew since is never taken for a match
+    __j = __mm[5] & (__mm[1] - 1);
+    __us[__j] == 0 || __ks[__j] != k { __j = __nihil_map_slot(m, k, kind); }
     __us[__j] == 0 {
         (__mm[0] + 1) * 3 > __mm[1] * 2 {
             __nihil_map_grow(m, kind);

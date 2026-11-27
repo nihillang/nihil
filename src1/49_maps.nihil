@@ -160,7 +160,11 @@ map_get(t = 0) {
     expect(']', "']'");
     op_push(R_AX);
     emit_kind(map_kind(t));
-    call_prelude("__nihil_map_get", 24);   // rax = value, rdx = present
+    map_kind(t) == 1 {
+        call_prelude("__nihil_map_get_int", 24);   // the same, with no call inside: a leaf
+    } || {
+        call_prelude("__nihil_map_get", 24);   // rax = value, rdx = present
+    }
     : map_val(t) | TYPE_OPT;
 }
 

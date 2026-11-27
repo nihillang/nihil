@@ -1,0 +1,63 @@
+// a map remembers the slot its last look-up found (a hint for the next m[k] = …): it must never be
+// taken for another key, another map, or a map that grew or lost keys since (docs in the prelude)
+a = {0: 0 ; 4};
+b = {0: 0 ; 4};
+a[1] = 10;
+a[2] = 20;
+b[1] = 100;
+x = a[1] || 0;                    // the hint: a's slot of 1
+a[2] = x + 1;                     // another key: 2 gets 11, 1 keeps 10
+>> $(a[1] || 0) + " " + $(a[2] || 0) + "\n";
+y = a[1] || 0;                    // a's hint, b's write
+b[1] = y + 5;
+>> $(a[1] || 0) + " " + $(b[1] || 0) + "\n";
+z = a[1] || 0;                    // then a grows: every key in a new place
+i = 100;
+* i < 400 { a[i] = i; i = i + 1; }
+a[1] = z + 1;
+>> $(a[1] || 0) + " " + $#a + " " + $(a[399] || 0) + " " + $(a[2] || 0) + "\n";
+w = a[300] || 0;                  // then keys before it are deleted: entries move back
+i = 100;
+* i < 300 { a[i] = _; i = i + 1; }
+a[300] = w + 1000;
+>> $(a[300] || 0) + " " + $#a + " " + $(a[299] || -1) + " " + $(a[301] || 0) + "\n";
+v = a[5555] || 7;                 // an absent key, then set: added once
+a[5555] = v;
+a[5555] = (a[5555] || 0) + 1;
+>> $(a[5555] || 0) + " " + $#a + "\n";
+
+// STRING keys: the same text in another string is the same key
+s = {"": 0 ; 4};
+k1 = "ab" + "c";
+k2 = "a" + "bc";
+s[k1] = 1;
+s[k2] = (s[k1] || 0) + 1;         // the hint holds k1's string; k2 is another string, same text
+>> $(s["abc"] || 0) + " " + $#s + "\n";
+t = s["abc"] || 0;
+s["abd"] = t + 1;                 // another text
+>> $(s["abc"] || 0) + " " + $(s["abd"] || 0) + " " + $#s + "\n";
+names = ["" ; 50];
+i = 0;
+* i < 50 { names[i] = "n" + $(i % 10); i = i + 1; }
+counts = {"": 0 ; 2};
+i = 0;
+* i < 50 { nm = names[i]; counts[nm] = (counts[nm] || 0) + 1; i = i + 1; }
+>> $#counts + " " + $(counts["n3"] || 0) + "\n";
+
+// the usual counting, checked against an ARRAY
+seen = {0: 0 ; 2};
+check = [0 ; 1000];
+seed = 11;
+i = 0;
+* i < 20000 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    k = seed / 16 % 1000;
+    seen[k] = (seen[k] || 0) + 1;
+    check[k] = check[k] + 1;
+    k % 7 == 0 { seen[k] = _; check[k] = 0; }
+    i = i + 1;
+}
+bad = 0;
+i = 0;
+* i < 1000 { (seen[i] || 0) != check[i] { bad = bad + 1; } i = i + 1; }
+>> "wrong: " + $bad + "\n";
