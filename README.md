@@ -131,8 +131,8 @@ printf '%s\n' '>> "Hello, Nihil!\n";' > hello.nihil
 ./nihilc1.sh hello.nihil hello && ./hello   # Hello, Nihil!
 ```
 
-On macOS (Apple silicon), `./nihilc1.sh` builds native executables through a
-translator to ARM64 (`macos/nihil`; see [docs/macos-arm64.md](docs/macos-arm64.md)).
+On macOS (Apple silicon), `./nihilc1.sh` builds native executables: the compiler writes
+ARM64 itself (`macos/nihil-native`; see [docs/macos-arm64.md](docs/macos-arm64.md)).
 A Mac builds its first compiler from the Linux one (the release workflow does it in
 `.github/workflows/release.yml`), and rebuilds it by itself after that.
 
@@ -216,7 +216,7 @@ it from another machine through an SSH tunnel.
 | `src1/` | stage 1: the compiler written in Nihil (`nihilc1.nihil` lists its parts) |
 | `src1/bigint.nihil`, `float_text.nihil`, `prelude.nihil` | the prelude, in Nihil: exact FLOAT ⇄ text, records, the key index and the library; a program gets only the methods it reaches |
 | `asm/` | Nihil's own assembler: `src/runtime.asm` into the same bytes as nasm (`make runtime`) |
-| `macos/`, `arm64/` | macOS on Apple silicon: the translator of the x86-64 code to ARM64, in Nihil, and the system calls in C |
+| `macos/`, `arm64/` | macOS on Apple silicon: the drivers and tests of the ARM64 way (`-native`), and, until v4.14, the translator of the x86-64 code to ARM64 and its system calls in C |
 | `tests/` | the test suite (`tests/stage1/` for the newer features) |
 | `examples/`, `ide/workspace/` | example programs, including the PSX Doom fire on a 24-bit color terminal |
 | `ide/` | the web IDE |

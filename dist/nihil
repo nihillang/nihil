@@ -12,10 +12,12 @@
 #   nihil version                    the version installed
 #
 #   NIHIL_O0=1   no optimizations
+#   NIHIL_TRANSLATE=1   macOS: the way before v4.13 (x86-64 code translated to ARM64), kept for
+#                this version in case the direct way fails on a program; tell us if you need it
 #
 # The same script for every platform: on Linux x86_64 the compiler writes the executable itself;
-# on macOS (Apple silicon) its x86-64 code is translated to ARM64 and linked by clang with the
-# runtime (docs/macos-arm64.md), which needs the Xcode Command Line Tools (clang, objdump).
+# on macOS (Apple silicon) it writes ARM64 assembly, with its runtime, which clang assembles and
+# links with the system's library (docs/macos-arm64.md): the Xcode Command Line Tools are needed.
 set -eu
 
 # where this installation is: bin/nihil, resolving the symbolic link that put it on the PATH
@@ -206,15 +208,23 @@ compile() {
     [ "$with_profile" = true ] && option="$option-profile "
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
-    if [ -x "$lib/nihilc1-native" ]; then
-        # macOS: the compiler emits x86-64 code and a map; the translator makes ARM64 assembly of it
+    if [ -x "$lib/nihilc1-native" ] && [ "${NIHIL_TRANSLATE:-0}" != 1 ]; then
+        # macOS: the compiler writes ARM64 assembly, the runtime included (-native)
+        if ! printf '%s\n' "$option-native $src" | "$lib/nihilc1-native" > "$work/p.s" 2> "$work/p.msg"; then
+            cat "$work/p.msg" >&2
+            exit 1
+        fi
+        cat "$work/p.msg" >&2
+        clang -arch arm64 -mmacosx-version-min=11.0 -o "$out" "$work/p.s"
+    elif [ -x "$lib/nihilc1-native" ]; then
+        # macOS, NIHIL_TRANSLATE=1: x86-64 code and a map, which the translator makes ARM64 assembly of
         if ! printf '%s\n' "$option-map $src" | "$lib/nihilc1-native" > "$work/p.x86" 2> "$work/p.map"; then
             grep -v '^nihil-map' "$work/p.map" >&2 || true
             exit 1
         fi
         grep -v '^nihil-map' "$work/p.map" >&2 || true
         printf '%s\n%s\n%s\n' "$work/p.x86" "$work/p.map" "$work/p.s" | "$lib/translate" 2> "$work/t.err" || { cat "$work/t.err" >&2; exit 1; }
-        clang -arch arm64 -o "$out" "$work/p.s" "$lib/rt.o"
+        clang -arch arm64 -mmacosx-version-min=11.0 -o "$out" "$work/p.s" "$lib/rt.o"
     else
         # Linux x86_64: the compiler writes the ELF executable to its standard output
         printf '%s\n' "$option$src" | "$lib/nihilc1" > "$work/p.out" || exit 1
