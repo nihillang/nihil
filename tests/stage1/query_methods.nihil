@@ -41,3 +41,9 @@ ACCOUNT.strict(a = ACCOUNT()) { a._cents < 500 { ?! = a.owner.trim() + " is too 
 strict_n = -1;
 ?{ strict_n = cs.count(strict()); } || { >> "refused: " + ?! + "\n"; }
 >> $strict_n + "\n";
+// nested in the text: the inner query's element, then the outer's again; a query in the
+// arguments of a dispatched call; a variable named as a method (never called, so no collision)
+>> $arr.count(arr.count(balance() > 50000) > 1 && balance() > 0) + " ";
+>> $arr.sum(fee(arr.count(balance() < 1000) * 1000)) + " ";
+label = "kept";
+>> label + " " + cs.sort(label())[0].label() + "\n";
