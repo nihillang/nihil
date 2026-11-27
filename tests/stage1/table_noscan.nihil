@@ -1,0 +1,32 @@
+// records read from a table: one with no STRING field holds no address, so the collector need not
+// look inside it (-native marks it so); one with a STRING keeps being looked at, since a field may
+// get a new text. Both survive collections made in between with their values.
+NUM = @[#id: INT(6); x: FLOAT(8); ok: BOOL];
+TXT = @[#id: INT(6); name: STRING(10)];
+
+nums = [NUM() ; *];
+txts = [TXT() ; *];
+i = 0;
+* i < 2000 { nums[] = NUM(i, .i / 4.0, i % 3 == 0); txts[] = TXT(i, "n" + $i); i = i + 1; }
+@>> "build/noscan_num.dat", nums.array();
+@>> "build/noscan_txt.dat", txts.array();
+
+a = NUM @ "build/noscan_num.dat";
+b = TXT @ "build/noscan_txt.dat";
+i = 0;
+* i < #b { b[i].name = "renamed " + $(i * 7); i = i + 1; }   // new texts, only reachable through b
+
+garbage = [""; *];                                               // collections in between
+k = 0;
+* k < 200000 { garbage[] = "g" + $k; k % 1000 == 0 { garbage = [""; *]; } k = k + 1; }
+
+sum = 0;
+fs = 0.0;
+oks = 0;
+a : r { sum = sum + r.id; fs = fs + r.x; r.ok { oks = oks + 1; } }
+>> $#a + " " + $sum + " " + $fs + " " + $oks + "\n";
+bad = 0;
+i = 0;
+* i < #b { b[i].name != "renamed " + $(i * 7) { bad = bad + 1; } i = i + 1; }
+>> $#b + " records, " + $bad + " changed texts lost\n";
+>> b[1999].name + "\n";
