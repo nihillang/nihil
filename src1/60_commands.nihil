@@ -573,7 +573,7 @@ cmd_method(k = 0) {
     saw_value = false;
     saw_empty = false;
     saw_absent = false;
-    s_abstract[k] { abstract_body(k); } || { block(); }
+    s_abstract[k] != 0 { abstract_body(k); } || { block(); }
     // a ": _;" and a ": value;" of type T: the method returns T?
     r = s_type[k];
     saw_absent && r != 0 && r != TYPE_NONE && !is_opt(r) {

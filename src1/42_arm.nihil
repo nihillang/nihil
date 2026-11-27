@@ -416,15 +416,15 @@ arm_text() {
     i = 0;
     m = 0;                                 // the next method
     * i <= n_ops {
-        lazy && (lab_live(i) || thr_lab[i]) { vs_flush(); pend_flush(live_in[i]); }   // (a way in: before a unit's registers change too)
-        lazy && thr_lab[i] { a_str("Lt"); a_num(i); a_str(":"); a_nl(); }
+        lazy && (lab_live(i) || thr_lab[i] != 0) { vs_flush(); pend_flush(live_in[i]); }   // (a way in: before a unit's registers change too)
+        lazy && thr_lab[i] != 0 { a_str("Lt"); a_num(i); a_str(":"); a_nl(); }
         arm_native && m < n_meths && i == meth_lo[m] { unit_k = meth_k[m]; unit_n = meth_slots(unit_k); unit_leaf = false; }
         promote && m < n_meths && i == meth_lo[m] { unit_slots(meth_lo[m], meth_hi[m], false); }
         (promote || arm_native) && m < n_meths && i == meth_hi[m] {
             promote {
                 slots_clear();
                 q = 0;
-                * q < n_top { u = top_list[q]; uslot[q] = u; slot_in[u] = true; unit_reg[u] = top_slot[u]; q = q + 1; }
+                * q < n_top { u = top_list[q]; uslot[q] = u; slot_in[u] = 1; unit_reg[u] = top_slot[u]; q = q + 1; }
                 n_uslot = n_top;
                 q = 0;
                 * q < n_top_cst { cst_v[q] = top_cst_v[q]; cst_r[q] = top_cst_r[q]; q = q + 1; }
@@ -522,7 +522,7 @@ slot_bad(disp = 0) {
 
 // slot s is one the unit touches
 slot_touch(s = 0) {
-    !slot_in[s] { slot_in[s] = true; uslot[n_uslot] = s; n_uslot = n_uslot + 1; }
+    slot_in[s] == 0 { slot_in[s] = 1; uslot[n_uslot] = s; n_uslot = n_uslot + 1; }
 }
 
 // Registers no call keeps (x1 … x8) hold the slots no call is made while they are live: a slot's
@@ -531,7 +531,7 @@ slot_touch(s = 0) {
 // save. calls_upto: the calls before each operation.
 slot_lo = [-1 ; SLOTS];
 slot_hi = [-1 ; SLOTS];
-slot_in = [false ; SLOTS];
+slot_in = [0 ; SLOTS];          // (INT 0 or 1 here and below: stage 0 has no ARRAY of BOOL in one byte)
 uslot = [0 ; SLOTS];           // the slots the unit touches
 n_uslot = 0;
 top_list = [0 ; SLOTS];        // the program's own, kept while a method's are in use
@@ -613,7 +613,7 @@ calls_count() {
 
 // slot s's range widened to the loops around it: slot_wlo, slot_whi (-1: untouched)
 slot_wlo = [-1 ; SLOTS];
-slot_done = [false ; SLOTS];
+slot_done = [0 ; SLOTS];
 slot_whi = [-1 ; SLOTS];
 slot_widen(s = 0) {
     lo = slot_lo[s];
@@ -641,7 +641,7 @@ slot_widen(s = 0) {
 // no call while slot s is live (after slot_widen, or slot_live)
 slot_call_free(s = 0) {
     slot_wlo[s] < 0 { : false; }
-    slot_exact { : !sl_cross[s] && !sl_entry[s]; }
+    slot_exact { : sl_cross[s] == 0 && sl_entry[s] == 0; }
     : calls_upto[slot_whi[s] + 1] - calls_upto[slot_wlo[s]] == 0;
 }
 
@@ -657,8 +657,8 @@ sl_live = [0 ; 1];
 sl_intf = [0 ; 1];
 sl_out = [0 ; 1];
 sl_idx = [0 ; SLOTS];
-sl_cross = [false ; SLOTS];
-sl_entry = [false ; SLOTS];
+sl_cross = [0 ; SLOTS];
+sl_entry = [0 ; SLOTS];
 os_q = -1;                     // op_slot: the slot operation i touches (its place in uslot, or -1),
 os_use = false;                // and whether it reads or writes it
 os_def = false;
@@ -682,7 +682,7 @@ op_slot(i = 0) {
     }
     base != R_BP { :; }
     sl = slot_of(disp);
-    sl < 0 || !slot_in[sl] { :; }
+    sl < 0 || slot_in[sl] == 0 { :; }
     os_q = sl_idx[sl];
 }
 
@@ -719,7 +719,7 @@ flow_known(lo = 0, hi = 0) {
 slot_live(lo = 0, hi = 0) {
     SL_G = (n_uslot + 63) / 64;
     q = 0;
-    * q < n_uslot { u = uslot[q]; sl_idx[u] = q; sl_cross[u] = false; sl_entry[u] = false; q = q + 1; }
+    * q < n_uslot { u = uslot[q]; sl_idx[u] = q; sl_cross[u] = 0; sl_entry[u] = 0; q = q + 1; }
     size = (hi - lo + 1) * SL_G;
     #sl_live < size { sl_live = [0 ; size * 2]; }
     j = 0;
@@ -770,12 +770,12 @@ slot_live(lo = 0, hi = 0) {
         u = uslot[q];
         g = q / 64;
         bit = 1 << (q % 64);
-        cm[g] & bit != 0 { sl_cross[u] = true; }
+        cm[g] & bit != 0 { sl_cross[u] = 1; }
         sl_live[g] & bit != 0 {
             u >= PBASE {                   // a parameter: written at the start, with the others live there
                 g = 0;
                 * g < SL_G { sl_intf[q * SL_G + g] = sl_intf[q * SL_G + g] | sl_live[g]; g = g + 1; }
-            } || { sl_entry[u] = true; }
+            } || { sl_entry[u] = 1; }
         }
         q = q + 1;
     }
@@ -783,7 +783,7 @@ slot_live(lo = 0, hi = 0) {
 
 // slots a and b are live at once somewhere (after slot_live)
 slot_clash(a = 0, b = 0) {
-    sl_entry[a] || sl_entry[b] { : true; }
+    sl_entry[a] != 0 || sl_entry[b] != 0 { : true; }
     qa = sl_idx[a];
     qb = sl_idx[b];
     (sl_intf[qa * SL_G + qb / 64] >> (qb % 64)) & 1 != 0 { : true; }
@@ -816,7 +816,7 @@ promote_off = false;
 // the slots the last unit touched, back to nothing
 slots_clear() {
     q = 0;
-    * q < n_uslot { u = uslot[q]; slot_w[u] = 0; unit_reg[u] = 0; slot_lo[u] = -1; slot_hi[u] = -1; slot_in[u] = false; q = q + 1; }
+    * q < n_uslot { u = uslot[q]; slot_w[u] = 0; unit_reg[u] = 0; slot_lo[u] = -1; slot_hi[u] = -1; slot_in[u] = 0; q = q + 1; }
     n_uslot = 0;
 }
 
@@ -914,7 +914,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
     // the heaviest slot first, into the first register that is free while it is live (two slots
     // whose ranges do not meet share one)
     q = 0;
-    * q < n_uslot { slot_done[uslot[q]] = false; q = q + 1; }
+    * q < n_uslot { slot_done[uslot[q]] = 0; q = q + 1; }
     more = reg0 <= 8;
     * more {
         best = -1;
@@ -924,13 +924,13 @@ unit_slots(lo = 0, hi = 0, top = false) {
         * q < n_uslot {
             u = uslot[q];
             w = slot_w[u];
-            u >= PBASE && unit_leaf || u == 0 || slot_done[u] { w = -1; }
+            u >= PBASE && unit_leaf || u == 0 || slot_done[u] != 0 { w = -1; }
             w > bw && slot_call_free(u) { best = u; bw = w; }
             q = q + 1;
         }
         more = best >= 0;
         more {
-            slot_done[best] = true;
+            slot_done[best] = 1;
             reg = reg0;
             * reg <= 8 && ((rn_taken >> reg) & 1 != 0 || (unit_csr & (1 << reg)) != 0 && !reg_fits(reg, best)) { reg = reg + 1; }
             reg <= 8 {
@@ -1154,7 +1154,7 @@ live_calc() {
     // the jumps to each operation's labels (a label of another kind, or an address taken, for good)
     refs_at = [0 ; n_ops + 1];
     threaded_at = [0 ; n_ops + 1];
-    thr_lab = [false ; n_ops + 1];
+    thr_lab = [0 ; n_ops + 1];
     i = 0;
     * i < n_ops {
         k = op_k[i];
@@ -1338,7 +1338,7 @@ a_ldst_n(store = false, t = 0, size = 8, b = 0, off = 0) {
 // below, is not: only the way before it gets there)
 refs_at = [0 ; 1];
 threaded_at = [0 ; 1];
-thr_lab = [false ; 1];         // a jump threaded to operation j: its label Lt<j>
+thr_lab = [0 ; 1];             // a jump threaded to operation j: its label Lt<j>
 lab_live(j = 0) { : at_lab[j] != 0 && refs_at[j] > threaded_at[j]; }
 
 // A jump to label l on which rax is known to be 0 or not (the jump of `cmp ; cset ; test ; jcc`, or
@@ -1365,7 +1365,7 @@ thread(l = 0, nonzero = false) {
     } || {
         thread_to = -1;
         thread_op = j + 2;
-        thr_lab[j + 2] = true;
+        thr_lab[j + 2] = 1;
     }
 }
 
@@ -1587,7 +1587,7 @@ arm_lazy(i = 0) {
         pend_k[R_CX] == 2 && pend_v[R_CX] != 0 { a_imm(17, pend_v[R_CX]); c = 17; }
         c == 0 {
             pend_k[R_AX] == 0 && pend_k[R_CX] == 0 {
-                rt_used[v / 5] = true;
+                rt_used[v / 5] = 1;
                 a_ins("cbz x10, Lrt"); a_num(v); a_nl();
                 c = 10;
             } || {
@@ -1772,7 +1772,7 @@ a_stub(rt = 0) {
     stub_rt[n_stubs] = rt;
     q = 0;
     * q < 2 { stub_k[n_stubs * 8 + q] = pend_k[q]; stub_v[n_stubs * 8 + q] = pend_v[q]; q = q + 1; }
-    rt_used[rt / 5] = true;
+    rt_used[rt / 5] = 1;
     a_str("Le"); a_num(n_stubs); a_nl();
     n_stubs = n_stubs + 1;
 }
@@ -1873,7 +1873,7 @@ native_end() {
     // the arguments of their methods (src1/native.nihil)
     rt = 0;
     * rt < 64 {
-        rt_used[rt] && rt_meth[rt] >= 0 {    // reached by a jump (an error): its method, which does not return
+        rt_used[rt] != 0 && rt_meth[rt] >= 0 {    // reached by a jump (an error): its method, which does not return
             n = rt * 5;
             a_str("Lrt"); a_num(n); a_str(":"); a_nl();
             rd = rt_reads(n);
@@ -1887,7 +1887,7 @@ native_end() {
             }
             a_ins("bl Lm"); a_num(rt_meth[rt]); a_nl();
             a_line("brk #1");
-        } || rt_used[rt] {
+        } || rt_used[rt] != 0 {
             error("internal error: -native: a routine of the runtime with no method in src1/native.nihil");
         }
         rt = rt + 1;
@@ -1991,7 +1991,7 @@ arm_op(i = 0) {
     k == OP_CMP_SET { arm_cmp_set(v); :; }
     k == OP_CMP { a_line("cmp x9, x10"); :; }
     k == OP_CALL_RT && arm_native && (v == RT_DIV || v == RT_MOD) {   // sdiv (by 0: the routine's error)
-        rt_used[v / 5] = true;
+        rt_used[v / 5] = 1;
         a_ins("cbz x10, Lrt"); a_num(v); a_nl();
         v == RT_DIV { a_line("sdiv x9, x9, x10"); } || { a_line("sdiv x16, x9, x10"); a_line("msub x9, x16, x10, x9"); }
         :;
@@ -2109,7 +2109,7 @@ arm_op(i = 0) {
     k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
     k == OP_ALIGN { :; }
     k == OP_PREFETCH { a_ins("prfm pldl1keep, ["); a_reg(r); a_str("]"); a_nl(); :; }
-    k == OP_JCC_RT && arm_native { rt_used[o / 5] = true; a_ins("b."); a_str(a_cond(v)); a_str(" Lrt"); a_num(o); a_nl(); :; }
+    k == OP_JCC_RT && arm_native { rt_used[o / 5] = 1; a_ins("b."); a_str(a_cond(v)); a_str(" Lrt"); a_num(o); a_nl(); :; }
     k == OP_JCC_RT { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label_rt(o); a_nl(); :; }
     k == OP_EPILOGUE {
         j = 0;

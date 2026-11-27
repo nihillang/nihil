@@ -123,7 +123,7 @@ try_method(ns = 0, nl = 0) {
         register_method(ns, nl);
         ab {
             k = lookup(ns, nl);
-            s_abstract[k] = true;
+            s_abstract[k] = 1;
             s_type[k] = at;                   // the return type is the example's, not inferred
         }
         back_lexer();
