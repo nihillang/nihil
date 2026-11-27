@@ -7,7 +7,7 @@ LEARN = "examples/learn";
 SLUGS = [""];
 TITLES = [""];
 INTROS = [""];
-SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling", "14_errors", "15_lists"];
+SLUGS = ["01_hello", "02_values", "03_control", "04_methods", "05_arrays", "06_optionals", "07_maps", "08_files", "09_tables", "10_std", "11_globals", "12_auto_keys", "13_modeling", "14_errors", "15_lists", "16_objects"];
 TITLES = [
     "Hello",
     "Values and types",
@@ -23,7 +23,8 @@ TITLES = [
     "Automatic keys",
     "Modeling data",
     "Errors: protected calls and blocks",
-    "Lists: arrays that grow"
+    "Lists: arrays that grow",
+    "Objects: the five pillars"
 ];
 INTROS = [
     "Install Nihil (see the <a href=\"index.html#install\">home page</a>), save this as " +
@@ -117,11 +118,26 @@ INTROS = [
       "<code>v[i]</code>, <code>#v</code> and the each loop work as on an ARRAY. Like a MAP, it is shared: " +
       "every name and every method that receives it sees the same items. <code>[x ; *1000]</code> makes " +
       "room for 1,000 items at first, when the size is roughly known. The methods of ARRAY work on a copy " +
-      "of the items, and <code>v.array()</code> gives that copy, an ARRAY of fixed size."
+      "of the items, and <code>v.array()</code> gives that copy, an ARRAY of fixed size.",
+    "Nihil has no classes, but a model with methods works as one: the model is the class, each record " +
+      "an object, and the five pillars of object orientation are there. <b>Abstraction</b>: a method " +
+      "whose body is <code>...</code> is abstract (<code>{ ... : 0; }</code> gives an example of what it " +
+      "returns), and a model that leaves one unimplemented makes no records. <b>Encapsulation</b>: a " +
+      "field whose name starts with <code>_</code> is read and changed only by its model's own methods. " +
+      "<b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's " +
+      "fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, " +
+      "and a call through the parent runs the method of the record's real model. Below, " +
+      "<code>withdraw</code> is written once, and each account pays its own fee.</p><p><b>On disk</b>, " +
+      "the model is also the table, with no mapping in between: <code>CHECKING @ file</code> gives " +
+      "CHECKINGs with their methods, a record read by its key is changed by its methods and written back " +
+      "by its key, and a change in memory stays there until it is written. Each table holds one model, " +
+      "since its lines have one width; a LIST of the parent gathers several. There is no " +
+      "<code>super</code> and no interfaces; the rules are in <a " +
+      "href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md\">SPEC §20.7 to §20.11</a>."
 ];
 JUNK = ["products.dat", "products.dat.nihil-idx", "notes.txt", "orders.dat", "orders.dat.nihil-idx",
     "orders.dat.nihil-seq", "customers.dat", "customers.dat.nihil-idx", "sales.dat", "sales.dat.nihil-idx",
-    "sales.dat.nihil-seq"];
+    "sales.dat.nihil-seq", "checking.dat", "checking.dat.nihil-idx", "savings.dat", "savings.dat.nihil-idx"];
 
 // what html.escape does: the five characters that would change the page
 escape(raw = "") {
