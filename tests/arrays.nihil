@@ -11,8 +11,9 @@ empty = [0 ; 0];
 sum = 0; i = 0;
 #nums { sum = sum + nums[i]; i = i + 1; }
 >> sum; >> "\n";
-// arrays of BOOL and STRING
-flags = [true, false, true];
+// arrays of INT flags (0 or 1: a block runs that many times) and STRING. ARRAY of BOOL is in
+// tests/stage1/bool_array: stage 1 makes it with 1-byte elements, stage 0 (frozen) with 8-byte ones
+flags = [1, 0, 1];
 names = ["ana", "bia", "caio"];
 i = 0;
 #names { flags[i] { >> names[i]; >> " "; } i = i + 1; }
