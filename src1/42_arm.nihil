@@ -1876,6 +1876,11 @@ arm_lazy(i = 0) {
         || { a_ins("strb "); a_w(t); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str("]"); a_nl(); }
         : 1;
     }
+    // a global read right after r was stored there (no way in between): r still holds it
+    k == OP_GLOBAL && lr != 0 && o == 0 && i > 0 && !lab_live(i) && thr_lab[i] == 0
+            && op_k[i - 1] == OP_ST && op_r[i - 1] == r && op_o[i - 1] == -1 && op_v[i - 1] == v {
+        : 1;
+    }
     lr != 0 && (k == OP_LD || ((k == OP_LOCAL || k == OP_GLOBAL) && o == 0)) {
         b = o >> 1;
         k == OP_LOCAL { b = R_BP; }
