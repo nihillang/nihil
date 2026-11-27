@@ -1913,8 +1913,9 @@ __nihil_map_set(m = 0, k = 0, v = 0, kind = 0) {
     __us = __nihil_arr_at(__mm[4]);
     __ks = __nihil_arr_at(__mm[2]);
     // the slot the last map_get of this map looked at, so m[k] = (m[k] || 0) + v; looks k up once.
-    // Only a hint: taken when that slot holds k itself (the same INT, or the same STRING by
-    // address), so an older look-up or a map that grew since is never taken for a match
+    // Only a hint: taken only when that slot of the map as it is now holds k itself (the same INT,
+    // or the same STRING by address), so a stale one (another key, a map that grew or lost keys
+    // since) is either still right or looked past
     __j = __mm[5] & (__mm[1] - 1);
     __us[__j] == 0 || __ks[__j] != k { __j = __nihil_map_slot(m, k, kind); }
     __us[__j] == 0 {
