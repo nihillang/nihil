@@ -1,0 +1,51 @@
+// m[k] = (m[k] || d) + e; in one call where nothing can tell (docs/map-upsert.md), and the forms that must not be: the same results
+m = {0: 0 ; 2};
+s = {"": 0 ; 2};
+a = [3, 5, 7];
+x = 4; y = 2;
+i = 0;
+* i < 2000 {
+    k = i % 37;
+    m[k] = (m[k] || 0) + 1;                   // fused
+    m[k * 2 + 100] = (m[k * 2 + 100] || -5) + x * y;      // fused: d negative, e a product
+    m[a[i % 3]] = (m[a[i % 3]] || 10) + (x - y);          // fused: an index, e in parentheses
+    nm = "n" + $(i % 5);
+    s[nm] = (s[nm] || 0) + 2;                 // fused, STRING keys
+    i = i + 1;
+}
+>> $#m + " " + $(m[0] || 0) + " " + $(m[100] || 0) + " " + $(m[3] || 0) + " " + $(s["n1"] || 0) + "\n";
+// not fused: an operator of lower precedence after e, another key, another map, d a variable, a call
+n = {0: 0 ; 2};
+n[1] = 10;
+n[1] = (n[1] || 0) + 1 << 1;                  // (10 + 1) << 1 = 22
+n[2] = (n[1] || 0) + 1;                       // another key: 23
+o = {0: 0 ; 2};
+o[2] = (n[2] || 0) + 5;                        // another map: 28
+dd = 7;
+o[3] = (o[3] || dd) + 1;                       // d a variable: 8
+f(v = 0) { : v * 3; }
+o[4] = (o[4] || 0) + f(2);                     // a call in e: 6
+o[5] = (o[5] || 0) + 1 - 4;                    // a - outside parentheses: -3
+o[6] = (o[6] || 0) + -4;                       // a leading -: fused, -4
+o[7] = ((o[7] || 0) + 1);                      // more parentheses: 1
+>> $(n[1] || 0) + " " + $(n[2] || 0) + " " + $(o[2] || 0) + " " + $(o[3] || 0) + " " + $(o[4] || 0) + " " + $(o[5] || 0) + " " + $(o[6] || 0) + " " + $(o[7] || 0) + "\n";
+// inside a method, registers free; the map grows inside the update
+count(xs = [0]) {
+    c = {0: 0 ; 2};
+    xs : v { c[v] = (c[v] || 0) + v; }
+    : c;
+}
+cs = count([1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+>> $#cs + " " + $(cs[4] || 0) + " " + $(cs[15] || 0) + "\n";
+// not fused either: an ARRAY literal indexed, an index after parentheses (both could allocate)
+p = {0: 0 ; 2};
+w1 = "ab"; w2 = "c";
+p[[1, 2][0]] = (p[[1, 2][0]] || 0) + 5;
+p[2] = (p[2] || 0) + (w1 + w2)[0];
+>> $(p[1] || 0) + " " + $(p[2] || 0) + "\n";
+// a comment inside: not fused (a ; or a name in it would fool the scan)
+q = {0: 0 ; 2};
+q[1] = 10;
+q[1] = (q[1] || 0) + 1 /* ; */ << 1;
+q[2] = (q[2] || 0) + 3 /* x */;
+>> $(q[1] || 0) + " " + $(q[2] || 0) + "\n";

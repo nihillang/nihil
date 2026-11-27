@@ -1935,6 +1935,31 @@ __nihil_map_set(m = 0, k = 0, v = 0, kind = 0) {
     __vs[__j] = v;
 }
 
+// m[k] = (m[k] || d) + e; in one look-up: the compiler calls it for that form (docs/map-upsert.md).
+// The hint is taken as map_set takes it; a key not there yet goes through map_set (it may grow)
+__nihil_map_add(m = 0, k = 0, e = 0, d = 0, kind = 0) {
+    __mm = __nihil_arr_at(m);
+    __us = __nihil_str_at(__mm[4]);
+    __ks = __nihil_arr_at(__mm[2]);
+    __mask = __mm[1] - 1;
+    __j = 0;
+    kind == 3 {
+        __j = __mm[5] & __mask;
+        __us[__j] == 0 || __ks[__j] != k { __j = __nihil_map_slot(m, k, kind); }
+    } || {
+        __h = k * -7046029254386353131;    // an INT key: its look-up written out, as in map_get_int
+        __j = (__h ^ (__h >> 29)) & __mask;
+        * __us[__j] != 0 && __ks[__j] != k { __j = (__j + 1) & __mask; }
+    }
+    __us[__j] != 0 {
+        __vs = __nihil_arr_at(__mm[3]);
+        __vs[__j] = __vs[__j] + e;
+        :;
+    }
+    __mm[5] = __j;                          // where k goes: map_set's hint, though it checks it
+    __nihil_map_set(m, k, d + e, kind);
+}
+
 // the same, with the arguments in the order a literal {k: v, …} pushes them
 __nihil_map_put(k = 0, v = 0, m = 0, kind = 0) {
     __nihil_map_set(m, k, v, kind);

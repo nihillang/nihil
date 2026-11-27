@@ -168,14 +168,112 @@ map_get(t = 0) {
     : map_val(t) | TYPE_OPT;
 }
 
+// ---- m[k] = (m[k] || d) + e; in one call (docs/map-upsert.md) ----------------------
+// Only for an INT map, k and e made of names (no call), numbers, fields, indexes (never an ARRAY
+// literal) and arithmetic, so that evaluating k once instead of twice, and e before the look-up
+// instead of after, cannot be seen; and e one term of the sum (no + or - outside parentheses but
+// a leading -), so that it is compiled exactly as in the sum and any error it has is the same one,
+// at the same place. The form is recognised in the source's bytes, not by the lexer: looking ahead
+// with the lexer could stop at a later error before the one compiling reports first.
+
+up_word(c = 0) {
+    : c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_';
+}
+
+up_space(c = 0) {
+    : c == 32 || c == 9 || c == 10 || c == 13;
+}
+
+// the bytes from p up to `stop` (outside brackets): k (stop "]") or e (stop ";", is_e) as the form
+// takes them? → the stop's position, or -1
+up_scan(p = 0, stop = 0, is_e = false) {
+    depth = 0;
+    first = true;
+    prev = 0;                               // the last byte that is not a space ('w': a name or number)
+    * true {
+        c = source[p];
+        c == 0 { : -1; }
+        c == stop && depth == 0 {
+            first { : -1; }                 // nothing
+            : p;
+        }
+        !up_space(c) {
+            ok = false;
+            up_word(c) || c == '.' { ok = true; }
+            c == '(' { ok = prev != 'w'; depth = depth + 1; }                 // after a name: a call
+            c == '[' { ok = prev == 'w' || prev == ']'; depth = depth + 1; }  // an index, not a literal
+            c == ')' || c == ']' { depth = depth - 1; ok = depth >= 0; }
+            c == '*' || c == '%' { ok = true; }
+            c == '/' { ok = source[p + 1] != '/' && source[p + 1] != '*'; }  // not a comment
+            c == '+' { ok = !is_e || depth > 0; }
+            c == '-' { ok = !is_e || depth > 0 || first; }
+            !ok { : -1; }
+            prev = c;
+            up_word(c) { prev = 'w'; }
+            first = false;
+        }
+        p = p + 1;
+    }
+    : -1;
+}
+
+// p past the spaces from p
+up_skip(p = 0) {
+    * up_space(source[p]) { p = p + 1; }
+    : p;
+}
+
+// tok = the first token after "=", k the map's variable, the key's bytes [ks, ke): is the right
+// side ( m [ k ] || d ) + e ; with the same key bytes, d an INT literal and e as above? → yes: the
+// lexer moved to e's first token, up_d and up_plus set; no: nothing moved
+up_match(k = 0, ks = 0, ke = 0) {
+    p = tok_start;
+    source[p] != '(' { : false; }
+    p = up_skip(p + 1);
+    n = s_len[k];
+    !same_source(p, s_ofs[k], n) || up_word(source[p + n]) { : false; }
+    p = up_skip(p + n);
+    source[p] != '[' { : false; }
+    p = p + 1;
+    !same_source(p, ks, ke - ks) { : false; }
+    p = up_skip(p + ke - ks);
+    source[p] != ']' { : false; }
+    p = up_skip(p + 1);
+    source[p] != '|' || source[p + 1] != '|' { : false; }
+    p = up_skip(p + 2);
+    sign = 1;
+    source[p] == '-' { sign = -1; p = up_skip(p + 1); }
+    d = 0;
+    digits = 0;
+    * source[p] >= '0' && source[p] <= '9' && digits < 18 { d = d * 10 + source[p] - '0'; digits = digits + 1; p = p + 1; }
+    digits == 0 || up_word(source[p]) || source[p] == '.' { : false; }
+    p = up_skip(p);
+    source[p] != ')' { : false; }
+    p = up_skip(p + 1);
+    source[p] != '+' || source[p + 1] == '+' || source[p + 1] == '=' { : false; }
+    plus = p;
+    es = up_skip(p + 1);
+    up_scan(es, ';', true) < 0 { : false; }
+    // it is the form: the lexer goes over ( m [ k ] || d ) + (bytes the lexer reads without fault)
+    * tok_start < es {
+        tok_start == plus { up_plus[0] = tok_start; up_plus[1] = tok_len; up_plus[2] = tok_line; up_plus[3] = tok_lstart; }
+        next_token();
+    }
+    up_d = sign * d;
+    : true;
+}
+
 // m[k] = v;  /  m[k] = _;  (tok = "[", variable k of map type t)
 map_assign(k = 0, t = 0) {
     emit_load_var(k);
     op_push(R_AX);                            // push rax (map)
     next_token();
+    ks = tok_start;                           // the key's bytes, from its first token to the "]"
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     u != map_key(t) && u != TYPE_UNKNOWN { map_mismatch("key", t, u, pi, pl, pn, pli); }
+    ke = tok_start;
+    fuse = optimize && map_val(t) == TYPE_INT && tok_type == ']' && up_scan(ks, ']', false) == ke;
     expect(']', "']'");
     op_push(R_AX);
     expect('=', "'='");
@@ -183,6 +281,18 @@ map_assign(k = 0, t = 0) {
         next_token();
         emit_kind(map_kind(t));
         call_prelude("__nihil_map_del", 24);
+        expect(';', "';'");
+        :;
+    }
+    fuse && up_match(k, ks, ke) {
+        // m[k] = (m[k] || d) + e;  →  push e, push d, push kind: __nihil_map_add (one look-up)
+        u = expression();
+        u != TYPE_INT && u != TYPE_UNKNOWN { error_op_types(up_plus[0], up_plus[1], up_plus[2], up_plus[3], TYPE_INT, u); }
+        op_push(R_AX);
+        op_load(OP_IMM, R_AX, up_d);
+        op_push(R_AX);
+        emit_kind(map_kind(t));
+        call_prelude("__nihil_map_add", 40);   // (map, key, e, d, kind)
         expect(';', "';'");
         :;
     }
