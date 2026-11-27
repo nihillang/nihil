@@ -4,6 +4,16 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## Unreleased
+
+- an ARRAY of BOOL takes one byte per element instead of eight (SPEC §3, §6.2), on Linux and on macOS: its block is a
+  STRING's (the length before the bytes, a 0 after them), and `+` of two is STRING's. Nothing a program writes changes:
+  `[b ; n]`, literals, `a[i]`, `a[i] = b;`, `xs : x, i`, `+`, `#`, a MAP's `values()`, a LIST's `array()` and
+  `to_json()` work as before
+  - *Why:* A sieve over 20 million BOOLs wrote 160 MB where C writes 20 MB, and spent its time on memory: with the
+    same 8-byte elements, C took the same 0.50 s. With one byte, the native macOS build takes 0.13 s (C: 0.135 s) and
+    62 MB instead of 482 MB; its collector does not look inside such a block (no address can be in it)
+
 ## v4.12.0
 
 Queries that use a model's methods, a FLOAT sum that was wrong inside methods, a chapter on objects for the Learn

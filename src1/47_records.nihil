@@ -74,7 +74,7 @@ prescan_models() {
     size_const = sc;
     m = 0;
     n_models {
-        m_parent[m] >= 0 { m_tagged[m] = true; m_tagged[m_parent[m]] = true; }
+        m_parent[m] >= 0 { m_tagged[m] = 1; m_tagged[m_parent[m]] = 1; }
         m = m + 1;
     }
     m = 0;
@@ -86,7 +86,7 @@ prescan_models() {
 missing_method(m = 0) {
     k = 0;
     * k < n_sym {
-        s_abstract[k] {
+        s_abstract[k] != 0 {
             d = 0;
             * d < s_len[k] && source[s_ofs[k] + d] != '.' { d = d + 1; }
             ka = lookup(s_ofs[k], d);
@@ -96,7 +96,7 @@ missing_method(m = 0) {
                 e = m;
                 ke = -1;
                 * ke < 0 && e >= 0 { ke = lookup_model_method(m_sym[e], s_ofs[k] + d + 1, s_len[k] - d - 1); e = m_parent[e]; }
-                ke >= 0 && s_abstract[ke] { : ke; }
+                ke >= 0 && s_abstract[ke] != 0 { : ke; }
             }
         }
         k = k + 1;
@@ -124,14 +124,14 @@ refuse_abstract(m = 0, what = "") {
 // the model's tag: (m + 1) in the top 16 bits of a record's block header, for a model in a
 // hierarchy; 0 for the others, whose records carry no model (nothing dispatches on them)
 model_tag(m = 0) {
-    !m_tagged[m] { : 0; }
+    m_tagged[m] == 0 { : 0; }
     : (m + 1) << 48;
 }
 
 // rax = a record just allocated: its model into the header (mov r64, imm64 and or between
 // registers: a 64-bit or takes no 64-bit immediate, and the macOS translator takes no or into memory)
 emit_model_tag(m = 0) {
-    !m_tagged[m] { :; }
+    m_tagged[m] == 0 { :; }
     op_ld(R_CX, R_AX, -16, 0);              // mov rcx, [rax - 16]
     op_imm64(R_DX, model_tag(m));           // mov rdx, tag
     op_alu(ALU_OR, R_CX, R_DX);             // or rcx, rdx
@@ -168,7 +168,7 @@ parse_model() {
     m_first[m] = n_fields;
     m_n[m] = 0;
     m_key[m] = -1;
-    m_auto[m] = false;
+    m_auto[m] = 0;
     n_models = n_models + 1;
     next_token();                        // name → "="
     next_token();                        // → "@"
@@ -276,7 +276,7 @@ parse_model() {
             restore_pos(fs, fl, fn, fli);
             error("an automatic key (#+) must be INT: it is numbered 1, 2, 3, …");
         }
-        is_key { m_key[m] = m_n[m]; m_auto[m] = is_auto; }
+        is_key { m_key[m] = m_n[m]; m_auto[m] = 0; is_auto { m_auto[m] = 1; } }
         n_fields >= MAX_FIELD { error("too many fields in the data models"); }
         f_start[n_fields] = fs;
         f_len[n_fields] = fl;
@@ -904,7 +904,7 @@ cmd_put_key() {
         op_load(OP_IMM, R_AX, kf);                        // mov eax, key field ; push rax
         
         op_push(R_AX);
-        m_auto[m] { call_prelude("__nihil_key_put_auto", 48); } || { call_prelude("__nihil_key_put", 48); }
+        m_auto[m] != 0 { call_prelude("__nihil_key_put_auto", 48); } || { call_prelude("__nihil_key_put", 48); }
     } || {
         t != TYPE_UNKNOWN {
             restore_pos(pi, pl, pn, pli);

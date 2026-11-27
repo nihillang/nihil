@@ -293,7 +293,7 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     }
     op_ld(R_AX, R_BP, a, 1);         // mov rax, [rbp + a]
     lst { op_ld(R_AX, R_AX, 16, 1); }   // mov rax, [rax + 16]: a list's items, read again each turn (it may grow)
-    t == TYPE_STR { op_ldbx(R_AX, R_AX, R_CX); } || { op_ldx(R_AX, R_AX, R_CX); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
+    t == TYPE_STR || t == TYPE_ARR | TYPE_BOOL { op_ldbx(R_AX, R_AX, R_CX); } || { op_ldx(R_AX, R_AX, R_CX); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
     emit_store_var(kx);
     has_i { op_ld(R_AX, R_BP, ix, 1); emit_store_var(ki); }   // mov rax, [rbp + i]
     loop_depth = loop_depth + 1;
@@ -573,7 +573,7 @@ cmd_method(k = 0) {
     saw_value = false;
     saw_empty = false;
     saw_absent = false;
-    s_abstract[k] { abstract_body(k); } || { block(); }
+    s_abstract[k] != 0 { abstract_body(k); } || { block(); }
     // a ": _;" and a ": value;" of type T: the method returns T?
     r = s_type[k];
     saw_absent && r != 0 && r != TYPE_NONE && !is_opt(r) {
@@ -1315,6 +1315,6 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
     op_mov(R_DX, R_AX); op_pop(R_CX);             // mov rdx, rax ; pop rcx
     emit_load_var(k);
     emit_check_limit();
-    op_stx(R_AX, R_CX, R_DX);             // mov [rax + rcx*8], rdx
+    tt == TYPE_ARR | TYPE_BOOL { op_stbx(R_AX, R_CX, R_DX); } || { op_stx(R_AX, R_CX, R_DX); }   // mov [rax + rcx], dl / mov [rax + rcx*8], rdx
     expect(';', "';'");
 }

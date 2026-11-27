@@ -1956,6 +1956,19 @@ __nihil_map_values(m = 0) {
     : __nihil_map_list(m, 3);
 }
 
+// ---- ARRAY of BOOL: one byte per element, 0 or 1 (SPEC §2) ---------------------
+// Its block is a text's (__nihil_bytes): the length before it, a 0 after; + of two is STRING's.
+
+// an ARRAY of BOOL from one of words, 0 or 1 each (m.values(), a LIST's .array())
+__nihil_ab_of(w = 0) {
+    __ws = __nihil_arr_at(w);
+    __n = #__ws;
+    __s = __nihil_bytes(__n);
+    __i = 0;
+    * __i < __n { __ws[__i] != 0 { __nihil_poke(__s, __i, 1); } __i = __i + 1; }
+    : __nihil_addr(__s);
+}
+
 // ---- LIST (SPEC §28): an ARRAY that grows ---------------------------------------
 // A list is an ARRAY of INT [count, capacity, items], items being the address of an
 // ARRAY of `capacity` elements, of which the first `count` are the list's. Every name
@@ -2064,6 +2077,13 @@ __nihil_json_value(v = 0, desc = [0], at = 0, schema = [0], names = "") {
     __k == 3 { : __nihil_s_json_quote(__nihil_str_at(v)); }
     __k == 7 { : __nihil_json_float(v); }
     __k == 64 { : __nihil_json_record(v, schema, names); }
+    __k == 16 && desc[at + 1] == 2 {      // an ARRAY of BOOL: its bytes
+        __b = __nihil_str_at(v);
+        __bs = ["" ; #__b];
+        __i = 0;
+        #__b { __b[__i] != 0 { __bs[__i] = "true"; } || { __bs[__i] = "false"; } __i = __i + 1; }
+        : "[" + __nihil_as_join(__bs, ", ") + "]";
+    }
     __k == 16 || __k == 32 {
         __a = [0];
         __k == 32 { __a = __nihil_arr_at(__nihil_list_array(v)); } || { __a = __nihil_arr_at(v); }

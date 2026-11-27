@@ -180,7 +180,7 @@ size_const = 0;
 const_head = 0;
 fix_pos = [0 ; MAX_FIX];
 fix_val = [0 ; MAX_FIX];
-fix_method = [false ; MAX_FIX];
+fix_method = [0 ; MAX_FIX];       // (INT 0 or 1: stage 0 has no ARRAY of BOOL in one byte)
 n_fix = 0;
 
 // ---- the operations last emitted (40_emit.nihil): what the optimizations read, instead of the x86
@@ -282,7 +282,7 @@ ops_cap = OPS_RING;     // the ring's size: -arm keeps all of a pass's operation
 OPS_ARM = 1 << 19;      // -arm: the first room (it doubles)
 want_arm = false;       // -arm: the ARM64 text of the operations, written after each pass (42_arm.nihil)
 arm_native = false;     // -native: a whole ARM64 program (.s) on stdout, for the C runtime (macos/native/)
-rt_used = [false ; 64]; // (-native) the runtime's routines called, by RT_* / 5
+rt_used = [0 ; 64]; // (-native) the runtime's routines called, by RT_* / 5
 arm = [0 ; 1];          // the text (-arm: it grows, 42_arm.nihil)
 arm_len = 0;
 op_at = [0 ; OPS_RING];     // where its code starts
@@ -336,8 +336,8 @@ loop_depth = 0;           // loops around the code being compiled
 // globals of the top level that no method uses become the top level's own (a frame slot, or one of
 // the registers for the 5 most used in loops), learned from the previous pass
 g_addr = [0 ; MAX_SYM];   // a global's address in the data segment
-g_meth = [false ; MAX_SYM];      // a method used it in the previous pass
-g_meth_cur = [false ; MAX_SYM];  // … in this pass
+g_meth = [0 ; MAX_SYM];      // a method used it in the previous pass
+g_meth_cur = [0 ; MAX_SYM];  // … in this pass
 g_w = [0 ; MAX_SYM];      // its uses at the top level, weighted by loop depth
 g_reg = [0 ; MAX_SYM];    // the register it gets (0: none)
 g_redo = false;           // a method met a global kept at the top level: another pass
@@ -354,9 +354,9 @@ m_schema = [0 ; MAX_MODEL];   // constant: ARRAY of INT [n, type1, width1, type2
 m_names = [0 ; MAX_MODEL];    // constant: STRING with the field names separated by spaces
 m_title = [0 ; MAX_MODEL];    // constant: STRING with the model's name
 m_key = [0 ; MAX_MODEL];      // the key field (#name), or -1
-m_auto = [false ; MAX_MODEL]; // the key is automatic (#+name): @{}>> numbers a record whose key is 0
+m_auto = [0 ; MAX_MODEL]; // the key is automatic (#+name): @{}>> numbers a record whose key is 0
 m_parent = [0 ; MAX_MODEL];   // CHILD = @[PARENT; …] (SPEC §20.8): the parent's model, or -1
-m_tagged = [false ; MAX_MODEL]; // in a hierarchy (a parent or a child): its records carry the model (SPEC §20.12)
+m_tagged = [0 ; MAX_MODEL]; // in a hierarchy (a parent or a child): its records carry the model (SPEC §20.12)
 n_models = 0;
 f_start = [0 ; MAX_FIELD];
 f_len = [0 ; MAX_FIELD];
@@ -451,7 +451,7 @@ n_regs = 0;                     // registers in use in the current method
 limit_regs = 0;                // how many the current method saved in its prologue
 candidates = 0;                 // live locals that would fit in a register
 demand = 0;                    // largest number of candidates at the same time (up to 5)
-s_abstract = [false ; MAX_SYM]; // a model's method written { ... } or { ... : example; } (SPEC §20.11)
+s_abstract = [0 ; MAX_SYM]; // a model's method written { ... } or { ... : example; } (SPEC §20.11)
 pend_abstract = false;          // the prescan saw such a body; pend_type: its return type
 pend_type = 0;
 disp_n = 0;                    // the next call_method dispatches (SPEC §20.10): how many models to test,

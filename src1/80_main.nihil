@@ -96,7 +96,7 @@ globals_place() {
             g_addr[i] == 0 { g_addr[i] = s_end[i]; }
             s_end[i] = g_addr[i];
             s_flags[i] = s_flags[i] & ~(FLAG_TOP | FLAG_REG);
-            optimize && n_passes > 1 && !g_meth[i] {
+            optimize && n_passes > 1 && g_meth[i] == 0 {
                 g_reg[i] != 0 {
                     s_flags[i] = s_flags[i] | FLAG_TOP | FLAG_REG;
                     s_end[i] = g_reg[i];
@@ -105,7 +105,7 @@ globals_place() {
                     s_end[i] = new_slot();
                 }
             }
-            g_meth_cur[i] = false;
+            g_meth_cur[i] = 0;
             g_w[i] = 0;
         }
         i = i + 1;
@@ -137,7 +137,7 @@ globals_learn() {
         bw = 0;
         i = 0;
         n_sym_base {
-            top_candidate(i) && !g_meth[i] && g_w[i] > 0 {
+            top_candidate(i) && g_meth[i] == 0 && g_w[i] > 0 {
                 w = g_w[i];
                 free = true;
                 q = 0;

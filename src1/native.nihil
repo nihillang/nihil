@@ -195,8 +195,17 @@ __nihil_rt_alloc(n = 0) {
 // alloc(n) when the usual case does not hold: a collection due, a new page, a large block
 __nihil_rt_alloc_slow(n = 0) { : __nihil_gc_alloc(n, true); }
 
+// [fill ; n]. A large one is filled by the system's memset_pattern8 (fill's 8 bytes, from
+// __nihil_rt_pat: made at the start, so not for the runtime's own first arrays)
+__nihil_rt_pat = [0 ; 1];
 __nihil_rt_array_rep(n = 0, fill = 0) {
-    __a = __nihil_gc_alloc(n, fill == 0);
+    __a = __nihil_rt_alloc(n);              // the usual case first (a small block: lazy does not matter)
+    __a == 0 { __a = __nihil_gc_alloc(n, fill == 0); }
+    fill != 0 && n >= 512 && #__nihil_rt_pat == 1 {
+        __nihil_rt_pat[0] = fill;
+        __nihil_c("memset_pattern8", __a, __nihil_addr(__nihil_rt_pat), 8 * n);
+        : __a;
+    }
     fill != 0 {
         __p = __a;
         __end = __a + 8 * n;

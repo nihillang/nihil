@@ -877,7 +877,8 @@ register_fixup(pos = 0, v = 0, m = false) {
     n_fix * 16 >= SIZE_FIX - 16 { error_code_large(); }
     fix_pos[n_fix] = pos;
     fix_val[n_fix] = v;
-    fix_method[n_fix] = m;
+    fix_method[n_fix] = 0;
+    m { fix_method[n_fix] = 1; }
     n_fix = n_fix + 1;
 }
 
@@ -927,7 +928,7 @@ emit_constantes() {
     n_fix {
         pos = fix_pos[i];
         target = base + fix_val[i];
-        fix_method[i] { target = s_end[fix_val[i]]; }
+        fix_method[i] != 0 { target = s_end[fix_val[i]]; }
         put_d(pos, target - (pos + 4));
         i = i + 1;
     }

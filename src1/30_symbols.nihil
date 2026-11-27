@@ -187,7 +187,7 @@ note_use(k = 0) {
     f = s_flags[k];
     f & FLAG_GLOBAL != 0 {
         method_current >= 0 {
-            g_meth_cur[k] = true;
+            g_meth_cur[k] = 1;
             f & FLAG_TOP != 0 { g_redo = true; }    // kept at the top level, but a method uses it
         } || {
             d = loop_depth;

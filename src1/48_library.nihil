@@ -512,6 +512,7 @@ library_call(t = 0) {
         // a LIST: v.array() copies its items to an ARRAY; every other method is the ARRAY's, on that copy
         op_push(R_AX);
         call_prelude("__nihil_list_array", 8);
+        list_elem(t) == TYPE_BOOL { bool_array_of(); }
         name_is(ns, nl, "array") {
             next_token();                // name → "("
             next_token();

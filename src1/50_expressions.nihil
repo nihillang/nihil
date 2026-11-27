@@ -11,6 +11,25 @@ is_element(t = 0) {
     : t == TYPE_INT || t == TYPE_BOOL || t == TYPE_STR || t == TYPE_FLOAT || t == TYPE_UNKNOWN || is_rec(t);
 }
 
+// An ARRAY of BOOL holds one byte per element (SPEC §2): its block is a text's. bool_array_of: rax,
+// an ARRAY of words 0 or 1 → the same as bytes; bool_array_made: -native marks it (header bit 4,
+// as a text's) so the collector does not look inside it
+bool_array_of() {
+    op_push(R_AX);
+    call_prelude("__nihil_ab_of", 8);
+    bool_array_made();
+}
+
+bool_array_made() {
+    arm_native { op_sti(R_AX, -16, 4, 0); }
+}
+
+// cmp rax, 0 ; jl → the jump, to patch
+op_jcc_after_cmp0() {
+    op_cmpi(R_AX, 0);
+    : op_jcc(CC_L);
+}
+
 expression() {
     : expr_or();
 }
@@ -259,6 +278,9 @@ binary(nv = 0) {
         } || t == TYPE_STR && u == TYPE_STR && op == '+' {
             fused { emit_call_rt(RT_CONCAT_INT); } || { emit_call_rt(RT_CONCAT); }   // STRING + STRING
             r = TYPE_STR;
+        } || op == '+' && t == u && t == TYPE_ARR | TYPE_BOOL {
+            emit_call_rt(RT_CONCAT);       // ARRAY of BOOL: bytes, as a STRING's
+            r = t;
         } || op == '+' && t == u && t & TYPE_ARR != 0 && !is_opt(t) {
             emit_call_rt(RT_ARRAY_CONCAT); // ARRAY + ARRAY of the same type: a new one
             r = t;
@@ -523,6 +545,9 @@ index_step(t = 0) {
     t == TYPE_STR {
         op_ldbx(R_AX, R_AX, R_CX);     // movzx eax, byte [rax + rcx]
         t = TYPE_INT;
+    } || t == TYPE_ARR | TYPE_BOOL {
+        op_ldbx(R_AX, R_AX, R_CX);     // movzx eax, byte [rax + rcx]: one byte each
+        t = TYPE_BOOL;
     } || {
         op_ldx(R_AX, R_AX, R_CX);     // mov rax, [rax + rcx*8]
         t = t & ~TYPE_ARR;
@@ -730,9 +755,31 @@ primary_array() {
             op_push(R_AX);
             push_const(m_schema[t >> 8]);
             call_prelude("__nihil_rec_rep", 24);
+        } || t == TYPE_BOOL {
+            // [b ; n] of BOOL: one byte each (SPEC §2), in (n + 8) / 8 words filled with b in each
+            // byte (the runtime's [x ; n]), then its length n and the 0 after the last; a negative
+            // n goes to the runtime as it is (its error)
+            op_mov(R_CX, R_AX);                       // mov rcx, rax
+            p_neg = op_jcc_after_cmp0();              // cmp rax, 0 ; jl …
+            op_lea(R_CX, R_AX, 8, 0);                 // lea rcx, [rax + 8]
+            op_shri(R_CX, 3);                         // shr rcx, 3
+            patch_here(p_neg);
+            op_pop(R_DX);                             // pop rdx (b: 0 or 1)
+            op_push(R_AX);                            // push rax (n)
+            op_load(OP_IMM, R_AX, 0x0101010101010101); // mov rax, imm64
+            op_mul(R_DX, R_AX);                       // imul rdx, rax
+            emit_call_rt(RT_ARRAY_REP);
+            op_pop(R_CX); op_st(R_AX, -8, R_CX, 0);   // pop rcx ; mov [rax - 8], rcx
+            op_load(OP_IMM, R_DX, 0);
+            op_stbx(R_AX, R_CX, R_DX);                // mov [rax + rcx], dl
+            bool_array_made();
         } || {
             op_mov(R_CX, R_AX); op_pop(R_DX);     // mov rcx, rax ; pop rdx
             emit_call_rt(RT_ARRAY_REP);
+            // -native: an array of FLOAT holds no address, so the collector does not look inside
+            // it (its header's bit 4, as a text's; a new block's header is 0). Not INT: the
+            // prelude keeps addresses in INT arrays (__nihil_addr: rows, maps)
+            arm_native && t == TYPE_FLOAT { op_sti(R_AX, -16, 4, 0); }
         }
         expect(']', "']' (in [value ; size])");
     } || {
@@ -756,6 +803,19 @@ primary_array() {
             n = n + 1;
         }
         expect(']', "']'");
+        t == TYPE_BOOL {
+            // [a, b] of BOOL: one byte each, in zeroed words (a text's block: its length, a 0 after)
+            op_load(OP_IMM, R_CX, (n + 8) / 8);       // mov ecx, words
+            emit_call_rt(RT_ALLOC);
+            op_sti(R_AX, -8, n, 0);                   // mov qword [rax - 8], n
+            r = n;
+            * r > 0 {
+                r = r - 1;
+                op_pop(R_CX); op_load(OP_IMM, R_DX, r); op_stbx(R_AX, R_DX, R_CX);   // pop rcx ; mov edx, r ; mov [rax + rdx], cl
+            }
+            bool_array_made();
+            : t | TYPE_ARR;
+        }
         op_load(OP_IMM, R_CX, n);                        // mov ecx, n
         
         emit_call_rt(RT_ALLOC);

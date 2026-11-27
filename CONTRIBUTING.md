@@ -10,7 +10,9 @@ each decision was made) is the reference for the language.
   discussed before the code.
 - **Stage 0 is frozen.** New features go only into stage 1 (`src1/`), and the
   source of stage 1 itself stays free of them, so stage 0 can still compile it
-  (SPEC §17).
+  (SPEC §17). That includes ARRAY of BOOL: stage 0 still makes it with 8-byte
+  elements, so `src1/` keeps such flags in ARRAYs of INT (0 or 1), and stage 1
+  built by stage 0 stays byte for byte the one built by itself.
 - **The checks must pass** (GitHub Actions runs them on every push):
 
   ```sh

@@ -1,0 +1,68 @@
+// ARRAY of BOOL (SPEC §2): one byte per element. Sizes around the 8 bytes of a word, writes and
+// reads, ':' with its index, +, #, a MAP's values, a LIST's array(), JSON, arguments and globals
+bits(a = [false]) {
+    s = "";
+    a : b { b { s = s + "1"; } || { s = s + "0"; } }
+    : s;
+}
+
+count(a = [false]) {
+    n = 0;
+    i = 0;
+    * i < #a { a[i] { n = n + 1; } i = i + 1; }
+    : n;
+}
+
+sizes = [0, 1, 7, 8, 9, 17];
+sizes : n {
+    t = [true ; n];
+    f = [false ; n];
+    >> $n + ": " + $#t + " " + $count(t) + " " + $count(f) + " [" + bits(t) + "]\n";
+}
+
+// each element written, read back, next to its neighbours
+a = [false ; 20];
+i = 0;
+* i < 20 { i % 3 == 0 { a[i] = true; } i = i + 1; }
+>> bits(a) + "\n";
+a[1] = true;
+a[0] = false;
+a[19] = true;
+>> bits(a) + " " + $count(a) + "\n";
+
+// a literal, its elements' values computed
+x = 5;
+lit = [x > 3, x < 3, x == 5, true, false, false, true, true, false];
+>> bits(lit) + " " + $#lit + "\n";
+lit : b, k { b { >> $k + " "; } }
+>> "\n";
+
+// + (a new one; the two stay as they were)
+c = lit + [true, true] + [false ; 3];
+>> bits(c) + " " + $#c + " " + bits(lit) + "\n";
+empty = [true ; 0];
+>> $#(empty + empty) + " " + bits(empty + [true]) + "\n";
+
+// a MAP's values, a LIST's array()
+m = {"a": true, "b": false, "c": true};
+vs = m.values();
+>> $#vs + " " + $count(vs) + "\n";
+l = [false ; *];
+l[] = true; l[] = false; l[] = true; l[] = true;
+la = l.array();
+>> bits(la) + " " + $#la + "\n";
+
+// JSON
+>> lit.to_json() + "\n";
+>> [true ; 0].to_json() + " " + l.to_json() + "\n";
+
+// a global, a large one (the sieve's)
+G = [false ; 0];
+G = [true ; 100000];
+G[0] = false; G[1] = false;
+p = 2;
+* p * p < 100000 {
+    G[p] { q = p * p; * q < 100000 { G[q] = false; q = q + p; } }
+    p = p + 1;
+}
+>> $count(G) + " primes below 100000\n";
