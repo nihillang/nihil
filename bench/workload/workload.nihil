@@ -1,0 +1,170 @@
+// bench/workload/workload.nihil — a program of the kind a report generator is: N sales made up, written
+// to a table and read back, added up in maps (each sale priced by one of four rules, by dispatch), the
+// best products of each store ranked, and the result written as JSON. workload.c and workload.go do the
+// same work; run.sh checks that the three write the same bytes.
+//
+//   N=100000 DIR=/tmp/nihil-workload nihil run bench/workload/workload.nihil
+//
+// Each phase's time goes to stderr ("phase ms"); stdout gets a summary, the same in the three.
+@ "std:env.nihil";
+@ "std:time.nihil";
+
+N = env_int("N", 100000);
+DIR = env("DIR", "/tmp/nihil-workload");
+STORES = 20;
+PRODUCTS = 2000;
+TOP = 20;
+
+SALE = @[store: INT(3); product: INT(5); month: INT(2); qty: INT(2); price: INT(8)];
+ITEM = @[product: INT(5); revenue: INT(12)];
+
+// the price rules: one model each, the total of a sale by dispatch on the rule's real model
+RULE = @[kind: INT(1)];
+RULE.total(r = RULE(), qty = 0, price = 0) { ... : 0; }
+REGULAR = @[RULE];
+REGULAR.total(r = REGULAR(), qty = 0, price = 0) { : qty * price; }
+BULK = @[RULE];
+BULK.total(r = BULK(), qty = 0, price = 0) { qty >= 5 { : qty * price * 90 / 100; } : qty * price; }
+PROMO = @[RULE];
+PROMO.total(r = PROMO(), qty = 0, price = 0) { : (qty - qty / 3) * price; }   // three for the price of two
+FEE = @[RULE];
+FEE.total(r = FEE(), qty = 0, price = 0) { : qty * price + qty * 15; }
+
+seed = 12345;
+rnd(n = 1) {                            // the same sequence in the three languages
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    : seed / 16 % n;
+}
+
+// "P00042": a product's name, 5 digits
+name_of(p = 0) {
+    t = $p;
+    * #t < 5 { t = "0" + t; }
+    : "P" + t;
+}
+
+T = 0;
+phase(name = "") {
+    now = now_us();
+    !>> name + " " + $((now - T) / 1000) + "\n";
+    T = now;
+}
+
+// the loops' variables, made at the top level before the blocks that use them
+i = 0; j = 0; p = 0; st = 0; pr = 0; mo = 0; q = 0; m = 0;
+
+T = now_us();
+// 1. generate: a price and a name per product, then the sales
+price = [0 ; PRODUCTS + 1];
+names = ["" ; PRODUCTS + 1];
+p = 1;
+* p <= PRODUCTS { price[p] = 100 + rnd(9900); names[p] = name_of(p); p = p + 1; }
+sales = [SALE() ; *N];
+i = 0;
+* i < N {
+    pr = 1 + rnd(PRODUCTS);
+    st = 1 + rnd(STORES);
+    mo = 1 + rnd(12);
+    q = 1 + rnd(10);
+    sales[] = SALE(st, pr, mo, q, price[pr]);
+    i = i + 1;
+}
+phase("generate");
+
+// 2. table: written (atomically, synced) and read back
+FILE = DIR + "/sales.dat";
+@>> FILE, sales.array();
+rows = SALE @ FILE;
+phase("table");
+
+// 3. aggregate: revenue by store and product (INT keys) and by month, units by product name (STRING keys)
+rules = [RULE() ; *];
+rules[] = REGULAR(0);
+rules[] = BULK(1);
+rules[] = PROMO(2);
+rules[] = FEE(3);
+by_pair = {0: 0 ; 65536};
+by_month = [0 ; 13];
+units = {"": 0 ; 4096};
+grand = 0;
+rows : s {
+    total = rules[s.product % 4].total(s.qty, s.price);
+    key = s.store * 100000 + s.product;
+    by_pair[key] = (by_pair[key] || 0) + total;
+    by_month[s.month] = by_month[s.month] + total;
+    nm = names[s.product];
+    units[nm] = (units[nm] || 0) + s.qty;
+    grand = grand + total;
+}
+phase("aggregate");
+
+// 4. rank: each store's products by revenue (ties: the lower product first), the best TOP
+tops = [ITEM() ; *];
+firsts = [0 ; STORES + 2];
+st = 1;
+* st <= STORES {
+    items = [ITEM() ; *];
+    p = 1;
+    * p <= PRODUCTS {
+        v? = by_pair[st * 100000 + p];
+        v != _ { items[] = ITEM(p, v || 0); }
+        p = p + 1;
+    }
+    ranked = items.array().sort(-revenue);       // stable: products in order within a revenue
+    firsts[st] = #tops;
+    j = 0;
+    * j < TOP && j < #ranked { tops[] = ranked[j]; j = j + 1; }
+    st = st + 1;
+}
+firsts[STORES + 1] = #tops;
+phase("rank");
+
+// 5. JSON: the ranking, every (store, product) total, the months and the units, built and written
+parts = ["" ; *];
+parts[] = "{\"stores\": [";
+st = 1;
+* st <= STORES {
+    st > 1 { parts[] = ", "; }
+    parts[] = "{\"store\": " + $st + ", \"top\": [";
+    j = firsts[st];
+    * j < firsts[st + 1] {
+        j > firsts[st] { parts[] = ", "; }
+        it = tops[j];
+        parts[] = "{\"product\": " + $it.product + ", \"name\": \"" + names[it.product] + "\", \"revenue\": " + $it.revenue + "}";
+        j = j + 1;
+    }
+    parts[] = "]}";
+    st = st + 1;
+}
+parts[] = "], \"pairs\": [";
+n_pairs = 0;
+st = 1;
+* st <= STORES {
+    p = 1;
+    * p <= PRODUCTS {
+        v? = by_pair[st * 100000 + p];
+        v != _ {
+            n_pairs > 0 { parts[] = ", "; }
+            parts[] = "{\"s\": " + $st + ", \"p\": " + $p + ", \"r\": " + $(v || 0) + "}";
+            n_pairs = n_pairs + 1;
+        }
+        p = p + 1;
+    }
+    st = st + 1;
+}
+parts[] = "], \"months\": [";
+m = 1;
+* m <= 12 { m > 1 { parts[] = ", "; } parts[] = $by_month[m]; m = m + 1; }
+parts[] = "], \"units\": {";
+p = 1;
+* p <= PRODUCTS {
+    p > 1 { parts[] = ", "; }
+    parts[] = "\"" + names[p] + "\": " + $(units[names[p]] || 0);
+    p = p + 1;
+}
+parts[] = "}}\n";
+json = parts.array().join("");
+@>> DIR + "/out.json", json;
+phase("json");
+
+>> "sales " + $N + ", revenue " + $grand + ", pairs " + $n_pairs + ", json " + $#json + " bytes\n";

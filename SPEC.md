@@ -1410,6 +1410,26 @@ the program and costs no call per element. Only `sort` calls the prelude, with
 the keys already computed. The records are the same ones (a record is a
 reference, §20.2): `where` and `sort` make new ARRAYs, not new records.
 
+**The model's methods.** Inside the expression, a name followed by `(` that is a
+method of the element's model (its own or the nearest inherited, §20.8) is that
+method called on the element: `balance()` is the element's `balance()`, and
+`fee(qty)` passes a field as the next argument. The call dispatches on the
+record's real model as `r.name(…)` does (§20.10), so an ARRAY of ACCOUNT holding
+CHECKINGs and SAVINGs calls each one's own `fee`. The rules a model keeps in its
+methods, and the private fields behind them (§20.7), can filter, sort and add up:
+
+```text
+cs = CHECKING @ "checking.dat";
+rich = cs.where(balance() > 1000);              // ACCOUNT.balance reads the private _cents
+total = accounts.sum(fee(100));                  // each record's own fee
+```
+
+A name that is also a method of the program, a data model or a name of the
+language (`tools`, `call_tool`, the intrinsics) is a compile error inside a query
+over that model, so no program changes meaning: rename one of them. A variable of
+the same name does not count, since it is never called. Each call costs what
+`r.name(…)` costs, the dispatch included, once per element.
+
 ### 21.2 JSON
 
 A JSON value stays **text**: each call finds a part of it and gives that part's
@@ -1871,6 +1891,7 @@ every turn, so the list can grow inside the loop.
 | **v2.1:** `... ms;` waits | Animations need a fixed speed; a busy loop depends on the machine. The ellipsis reads as a pause and cannot start any valid expression |
 | **v2.2:** renamed from Ket to Nihil | Latin for *nothing*: no keywords, and `_` for the missing value |
 | **v4.11:** private fields `_x` (§20.7); `CHILD = @[PARENT; …]` (§20.8); a child where its parent is expected, as an argument or a stored element (§20.9); replacing an inherited method, dispatched by the model in the record's header (§20.10); abstract methods `{ ... : example; }` (§20.11) | Programs organised around models needed the pillars of object orientation. Each part takes no keyword (`_`, a model's name, `...` were free) and none changes a program that compiled before. A child stands for its parent only where the expected type is fixed (an argument, an element), since anywhere else the inference would need to tell a provisional type from a fixed one; the model sits in the block header, so no field moves |
+| **v4.12:** a model's methods inside a query (§21.1) | The rules a model keeps in its methods could not be used to filter, sort or add up. A query already lets the element's field names stand for its fields; its method names now stand for its methods, dispatched. A name that also means something callable in the program is refused, so no program changes meaning silently |
 | **v4.10:** `?{ … } \|\| { … }`, a protected block (§25.1); `nihil profile` and the compiler's `-profile` | Protecting a few commands took a method written only for `?`; `?` already meant protected and `\|\|` otherwise, so no program changes meaning. Measuring a real program took gdb and a hand-made sampler; the runtime now samples itself, for under 1% |
 | **v4.9:** LIST, an ARRAY that grows: `[x ; *]` and `v[] = x;` (§28) | Collecting items meant copying the whole array for each one, or doubling it by hand with a counter beside it |
 | **v4.8:** `xs : x, i { … }`, each element and its index (§7.6); `?! = text;` raises a runtime error that `?f()` catches (§25) | The big programs repeated a loop with a counter by hand, and made an error on purpose to give up on a step |

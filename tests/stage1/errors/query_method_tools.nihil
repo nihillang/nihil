@@ -1,0 +1,5 @@
+// a method of the element's model named as a name of the language: refused inside a query
+ACCOUNT = @[id: INT(4); _cents: INT(10)];
+ACCOUNT.tools(a = ACCOUNT()) { : "x"; }
+xs = [ACCOUNT(1, 100)];
+>> $xs.count(tools() == "x");

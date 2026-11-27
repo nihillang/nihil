@@ -1,0 +1,49 @@
+// a model's methods inside a query (docs/query-methods.md): name(…) is the element's method,
+// dispatched on its real model; inside methods (registers free), nested, under the collector
+ACCOUNT = @[#id: INT(4); owner: STRING(10); _cents: INT(10)];
+ACCOUNT.balance(a = ACCOUNT()) { : a._cents; }
+ACCOUNT.fee(a = ACCOUNT(), cents = 0) { ... : 0; }
+ACCOUNT.label(a = ACCOUNT()) { : a.owner.trim() + "/" + $a.id; }
+ACCOUNT.rate(a = ACCOUNT()) { : .a._cents / 100.0; }
+ACCOUNT.big(a = ACCOUNT()) { : a._cents > 50000; }
+CHECKING = @[ACCOUNT; overdraft: INT(10)];
+CHECKING.fee(c = CHECKING(), cents = 0) { : 150; }
+SAVINGS = @[ACCOUNT; pct: INT(4)];
+SAVINGS.fee(s = SAVINGS(), cents = 0) { : cents / 100; }
+cs = [CHECKING(1, "Ana", 10000, 5000), CHECKING(3, "Caio", 300, 0), CHECKING(4, "Duda", 90000, 0)];
+all = [ACCOUNT() ; *];
+cs : c { all[] = c; }
+all[] = SAVINGS(2, "Bia", 200000, 5);
+>> $cs.count(balance() > 1000) + " " + $cs.where(big()).count(id > 0) + "\n";
+>> cs.sort(balance())[0].owner + " " + cs.sort(label())[2].owner + "\n";
+>> $cs.sum(balance()) + " " + $cs.sum(rate()) + "\n";
+>> $all.count(fee(10000) > 150) + " " + $all.sum(fee(10000)) + " " + $all.sum(fee(overdraft_or(id))) + "\n";
+overdraft_or(x = 0) { : x * 1000; }
+first_fee(xs = [ACCOUNT()]) { f? = xs.first(fee(100) == 1); : (f || xs[0]).label(); }
+>> first_fee(all.array()) + "\n";
+// inside a method, registers free, FLOAT sum with a model method
+avg(xs = [ACCOUNT()]) { : xs.sum(rate()) / .(#xs); }
+>> $avg(all.array()) + "\n";
+// a method that runs a query of its own, called in a query
+ACCOUNT.richer(a = ACCOUNT(), xs = [ACCOUNT()]) { : xs.count(balance() > a.balance()); }
+arr = all.array();
+>> $arr.where(richer(arr) == 0).count(id > 0) + " " + $arr.sum(richer(arr)) + "\n";
+// a method that allocates for every element, while where's and sort's results are being built
+many = [CHECKING() ; *];
+i = 0;
+* i < 3000 { many[] = CHECKING(i, "n" + $i, i * 7 % 1000, 0); i = i + 1; }
+m = many.array();
+w = m.where(label().ends_with("7"));
+s = m.sort(label() + "!");
+>> $#w + " " + w[1].label() + " " + s[0].label() + " " + s[2999].label() + "\n";
+// an error raised inside the method, in a protected block
+ACCOUNT.strict(a = ACCOUNT()) { a._cents < 500 { ?! = a.owner.trim() + " is too low"; } : true; }
+strict_n = -1;
+?{ strict_n = cs.count(strict()); } || { >> "refused: " + ?! + "\n"; }
+>> $strict_n + "\n";
+// nested in the text: the inner query's element, then the outer's again; a query in the
+// arguments of a dispatched call; a variable named as a method (never called, so no collision)
+>> $arr.count(arr.count(balance() > 50000) > 1 && balance() > 0) + " ";
+>> $arr.sum(fee(arr.count(balance() < 1000) * 1000)) + " ";
+label = "kept";
+>> label + " " + cs.sort(label())[0].label() + "\n";

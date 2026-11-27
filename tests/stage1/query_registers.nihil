@@ -22,3 +22,7 @@ i = 0;
 t = 0.0;
 * i < 3 { t = t + rows.sum(price); i = i + 1; }
 >> "loop: " + $(t) + "\n";
+// a FLOAT sum that calls a method, the registers free: its sum in a register, the value kept apart
+// before the sum is loaded (it used to add the sum to itself, and gave 0.0)
+free_registers(r = [P()]) { : r.sum(twice(price)); }
+>> "free registers: " + $(free_registers(rows)) + "\n";

@@ -1,0 +1,6 @@
+// a method of the program and of the element's model, with one name: refused inside a query
+ACCOUNT = @[id: INT(4); _cents: INT(10)];
+ACCOUNT.balance(a = ACCOUNT()) { : a._cents; }
+balance(x = 0) { : x; }
+xs = [ACCOUNT(1, 100)];
+>> $xs.count(balance() > 1);
