@@ -36,6 +36,7 @@ The full reference is <a href="https://github.com/nihillang/nihil/blob/main/SPEC
 <li><a href="#modeling">Modeling data</a></li>
 <li><a href="#errors">Errors: protected calls and blocks</a></li>
 <li><a href="#lists">Lists: arrays that grow</a></li>
+<li><a href="#objects">Objects: the five pillars</a></li>
 </ol>
 <h2 id="hello">1. Hello</h2>
 <p>Install Nihil (see the <a href="index.html#install">home page</a>), save this as <code>hello.nihil</code> and run <code>nihil run hello.nihil</code>. <code>&gt;&gt;</code> writes to the standard output and adds no line break of its own. <code>nihil hello.nihil</code> compiles it into a native executable, <code>./hello</code>, instead.</p>
@@ -484,6 +485,82 @@ plain = names.array();                  // an ARRAY of STRING, with a fixed size
 Carla &lt; DORA! &lt; ana &lt; bob
 true
 4</pre>
+<h2 id="objects">16. Objects: the five pillars</h2>
+<p>Nihil has no classes, but a model with methods works as one: the model is the class, each record an object, and the five pillars of object orientation are there. <b>Abstraction</b>: a method whose body is <code>...</code> is abstract (<code>{ ... : 0; }</code> gives an example of what it returns), and a model that leaves one unimplemented makes no records. <b>Encapsulation</b>: a field whose name starts with <code>_</code> is read and changed only by its model's own methods. <b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, and a call through the parent runs the method of the record's real model. Below, <code>withdraw</code> is written once, and each account pays its own fee. There is no <code>super</code> and no interfaces; the rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC §20.7 to §20.11</a>.</p>
+<pre class="nihil">// Objects with the five pillars: a model is a class, a record is an object, and its methods are
+// the model&#x27;s (SPEC §20.7 to §20.11). One example, bank accounts, goes through each pillar.
+
+// money(1234) is &quot;12.34&quot;: amounts are kept in cents, as INTs
+money(c = 0) {
+    sign = &quot;&quot;;
+    c &lt; 0 { sign = &quot;-&quot;; c = 0 - c; }
+    pad = &quot;&quot;;
+    c % 100 &lt; 10 { pad = &quot;0&quot;; }
+    : sign + $(c / 100) + &quot;.&quot; + pad + $(c % 100);
+}
+
+// 1. Abstraction: ACCOUNT says what every account does, not how. A method whose body is ... is
+//    abstract; the value after : is only an example of what it returns. ACCOUNT itself is abstract:
+//    ACCOUNT(&quot;x&quot;, 0) would not compile, since nothing tells it its fee or its kind.
+ACCOUNT = @[owner: STRING(10); _cents: INT(10)];
+ACCOUNT.fee(a = ACCOUNT(), cents = 0) { ... : 0; }       // what a withdrawal of cents costs
+ACCOUNT.kind(a = ACCOUNT()) { ... : &quot;&quot;; }
+
+// 2. Encapsulation: a field whose name starts with _ is private. Only ACCOUNT&#x27;s own methods read or
+//    change _cents, so the balance moves only through deposit and withdraw, and their checks.
+ACCOUNT.balance(a = ACCOUNT()) { : a._cents; }
+ACCOUNT.limit(a = ACCOUNT()) { : 0; }                    // how far below zero it may go
+ACCOUNT.deposit(a = ACCOUNT(), cents = 0) {
+    cents &lt;= 0 { ?! = &quot;a deposit must be positive&quot;; }
+    a._cents = a._cents + cents;
+}
+ACCOUNT.withdraw(a = ACCOUNT(), cents = 0) {
+    cost = cents + a.fee(cents);                         // the real model&#x27;s fee
+    cost &gt; a._cents + a.limit() { ?! = a.owner.trim() + &quot; cannot take &quot; + money(cost); }
+    a._cents = a._cents - cost;
+}
+ACCOUNT.describe(a = ACCOUNT()) { : a.kind() + &quot; &quot; + a.owner.trim() + &quot;: &quot; + money(a._cents); }
+
+// 3. Inheritance: a model can start from another. CHECKING and SAVINGS have ACCOUNT&#x27;s fields
+//    first, then their own, and every method of ACCOUNT. (Their own methods still cannot read
+//    _cents: it is ACCOUNT&#x27;s. They go through balance and deposit, like everyone else.)
+CHECKING = @[ACCOUNT; overdraft: INT(10)];
+SAVINGS = @[ACCOUNT; rate: INT(4)];                      // interest per thousand, per month
+
+// 4. Polymorphism: each model gives its own fee and kind, and CHECKING replaces limit. A call
+//    through an ACCOUNT runs the method of the record&#x27;s real model: withdraw, written once in
+//    ACCOUNT, charges each account its own fee and lets each go as far as its own limit.
+CHECKING.kind(c = CHECKING()) { : &quot;checking&quot;; }
+CHECKING.fee(c = CHECKING(), cents = 0) { : 150; }      // 1.50 for each withdrawal
+CHECKING.limit(c = CHECKING()) { : c.overdraft; }
+SAVINGS.kind(s = SAVINGS()) { : &quot;savings &quot;; }
+SAVINGS.fee(s = SAVINGS(), cents = 0) { : cents / 100; }  // 1% of what is taken
+SAVINGS.add_interest(s = SAVINGS()) { s.deposit(s.balance() * s.rate / 1000); }
+
+// 5. Objects: each record is an object of its model, made by the model&#x27;s name with every field in
+//    order (the parent&#x27;s first). A LIST of ACCOUNT holds any account; [ACCOUNT() ; *] only gives
+//    its type, so no ACCOUNT is made.
+ana = CHECKING(&quot;Ana&quot;, 10000, 5000);                      // owner, _cents, then overdraft
+bia = SAVINGS(&quot;Bia&quot;, 200000, 5);
+accounts = [ACCOUNT() ; *];
+accounts[] = ana;
+accounts[] = bia;
+
+ana.withdraw(12000);                                     // into the overdraft, plus the fee
+?ana.withdraw(5000);                                     // past the limit: refused, nothing taken
+&gt;&gt; &quot;refused: &quot; + ?! + &quot;\n&quot;;
+bia.withdraw(50000);                                     // the fee is 1%: 500.00 and 5.00
+bia.add_interest();
+// ana._cents = 0;  would not compile: _cents is private to ACCOUNT
+accounts : a { &gt;&gt; a.describe() + &quot;\n&quot;; }
+in_all = 0;
+accounts : a { in_all = in_all + a.balance(); }
+&gt;&gt; &quot;in all: &quot; + money(in_all) + &quot;\n&quot;;</pre>
+<p class="out">Output:</p>
+<pre class="output">refused: Ana cannot take 51.50
+checking Ana: -21.50
+savings  Bia: 1502.47
+in all: 1480.97</pre>
 <h2 id="next">Next</h2>
 <p>The <a href="library.html">library reference</a> lists every call on texts, arrays, tables, JSON and maps.
 Questions: <a href="mailto:contact@nihil-lang.dev">contact@nihil-lang.dev</a>.</p>

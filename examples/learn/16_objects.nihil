@@ -1,0 +1,69 @@
+// Objects with the five pillars: a model is a class, a record is an object, and its methods are
+// the model's (SPEC §20.7 to §20.11). One example, bank accounts, goes through each pillar.
+
+// money(1234) is "12.34": amounts are kept in cents, as INTs
+money(c = 0) {
+    sign = "";
+    c < 0 { sign = "-"; c = 0 - c; }
+    pad = "";
+    c % 100 < 10 { pad = "0"; }
+    : sign + $(c / 100) + "." + pad + $(c % 100);
+}
+
+// 1. Abstraction: ACCOUNT says what every account does, not how. A method whose body is ... is
+//    abstract; the value after : is only an example of what it returns. ACCOUNT itself is abstract:
+//    ACCOUNT("x", 0) would not compile, since nothing tells it its fee or its kind.
+ACCOUNT = @[owner: STRING(10); _cents: INT(10)];
+ACCOUNT.fee(a = ACCOUNT(), cents = 0) { ... : 0; }       // what a withdrawal of cents costs
+ACCOUNT.kind(a = ACCOUNT()) { ... : ""; }
+
+// 2. Encapsulation: a field whose name starts with _ is private. Only ACCOUNT's own methods read or
+//    change _cents, so the balance moves only through deposit and withdraw, and their checks.
+ACCOUNT.balance(a = ACCOUNT()) { : a._cents; }
+ACCOUNT.limit(a = ACCOUNT()) { : 0; }                    // how far below zero it may go
+ACCOUNT.deposit(a = ACCOUNT(), cents = 0) {
+    cents <= 0 { ?! = "a deposit must be positive"; }
+    a._cents = a._cents + cents;
+}
+ACCOUNT.withdraw(a = ACCOUNT(), cents = 0) {
+    cost = cents + a.fee(cents);                         // the real model's fee
+    cost > a._cents + a.limit() { ?! = a.owner.trim() + " cannot take " + money(cost); }
+    a._cents = a._cents - cost;
+}
+ACCOUNT.describe(a = ACCOUNT()) { : a.kind() + " " + a.owner.trim() + ": " + money(a._cents); }
+
+// 3. Inheritance: a model can start from another. CHECKING and SAVINGS have ACCOUNT's fields
+//    first, then their own, and every method of ACCOUNT. (Their own methods still cannot read
+//    _cents: it is ACCOUNT's. They go through balance and deposit, like everyone else.)
+CHECKING = @[ACCOUNT; overdraft: INT(10)];
+SAVINGS = @[ACCOUNT; rate: INT(4)];                      // interest per thousand, per month
+
+// 4. Polymorphism: each model gives its own fee and kind, and CHECKING replaces limit. A call
+//    through an ACCOUNT runs the method of the record's real model: withdraw, written once in
+//    ACCOUNT, charges each account its own fee and lets each go as far as its own limit.
+CHECKING.kind(c = CHECKING()) { : "checking"; }
+CHECKING.fee(c = CHECKING(), cents = 0) { : 150; }      // 1.50 for each withdrawal
+CHECKING.limit(c = CHECKING()) { : c.overdraft; }
+SAVINGS.kind(s = SAVINGS()) { : "savings "; }
+SAVINGS.fee(s = SAVINGS(), cents = 0) { : cents / 100; }  // 1% of what is taken
+SAVINGS.add_interest(s = SAVINGS()) { s.deposit(s.balance() * s.rate / 1000); }
+
+// 5. Objects: each record is an object of its model, made by the model's name with every field in
+//    order (the parent's first). A LIST of ACCOUNT holds any account; [ACCOUNT() ; *] only gives
+//    its type, so no ACCOUNT is made.
+ana = CHECKING("Ana", 10000, 5000);                      // owner, _cents, then overdraft
+bia = SAVINGS("Bia", 200000, 5);
+accounts = [ACCOUNT() ; *];
+accounts[] = ana;
+accounts[] = bia;
+
+ana.withdraw(12000);                                     // into the overdraft, plus the fee
+?ana.withdraw(5000);                                     // past the limit: refused, nothing taken
+>> "refused: " + ?! + "\n";
+bia.withdraw(50000);                                     // the fee is 1%: 500.00 and 5.00
+bia.add_interest();
+// ana._cents = 0;  would not compile: _cents is private to ACCOUNT
+accounts : a { >> a.describe() + "\n"; }
+in_all = 0;
+accounts : a { in_all = in_all + a.balance(); }
+>> "in all: " + money(in_all) + "\n";
