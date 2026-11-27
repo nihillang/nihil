@@ -90,6 +90,7 @@ jobs:
             build/translate.x86
             build/translate.map
             build/prelude_text.nihil
+            build/native_text.nihil
             build/std_text.nihil
 
   macos:
@@ -117,7 +118,7 @@ jobs:
       - name: The translator, from a seed
         run: |
           mkdir -p build/macos
-          cp linux/prelude_text.nihil linux/std_text.nihil build/
+          cp linux/prelude_text.nihil linux/native_text.nihil linux/std_text.nihil build/
           clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
           NIHIL_SEED_URL=https://github.com/nihillang/nihil/releases/latest/download/nihil-macos-arm64.tar.gz macos/seed.sh build/macos/translate-seed
           printf '%s\n%s\n%s\n' linux/translate.x86 linux/translate.map build/macos/translate.s | build/macos/translate-seed
