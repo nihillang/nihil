@@ -765,12 +765,13 @@ query_call(t = 0) {
         } || u == TYPE_FLOAT {
             xs = 0;                         // (the expression calls a method: in memory)
             d_n > 0 {
+                op_xmov(1, R_AX);   // movq xmm1, rax: the value, before rax takes the sum
                 q_load(0, d_n);
                 op_xmov(0, R_AX);   // movq xmm0, rax
             } || {
                 op_xld(0, d_n);     // movq xmm0, [rbp + d_n]
+                op_xmov(1, R_AX);   // movq xmm1, rax
             }
-            op_xmov(1, R_AX);   // movq xmm1, rax
             op_xop(XOP_ADD, 0, 1);     // addsd xmm0, xmm1
             op_rmovx(R_AX, 0);   // movq rax, xmm0
             q_store(d_n);
