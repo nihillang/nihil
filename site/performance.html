@@ -24,7 +24,8 @@ and how that compares with the same work written in C and in Go. The records are
 so every run has the same data, and each one has six fields in 50 bytes:</p>
 <pre class="nihil">ITEM = @[#code: INT(8); name: STRING(20); category: INT(4); price: FLOAT(10); qty: INT(6); active: BOOL];</pre>
 <p>The machines: <b>Linux</b>, a GitHub Actions runner (Intel Xeon 6975P-C, 4 CPUs, Ubuntu 24.04), where Nihil, C and Go all run
-natively; and <b>macOS</b>, an Apple M4, where Nihil's x86-64 code is translated to ARM64. To measure your own machine, run
+natively; and <b>macOS</b>, an Apple M4, measured before v4.13, when Nihil's x86-64 code was translated to ARM64 (since
+v4.13 the compiler writes ARM64 itself, faster). To measure your own machine, run
 <code>bench/run.sh</code> or, for the comparison, <code>bench/compare/run.sh</code> in the repository.</p>
 
 <ol class="toc">
@@ -108,8 +109,9 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   <li><b>Writers wait for each other.</b> A table is a file, not a server, but every write by key takes the table's lock (a
   <code>.nihil-lock</code> file next to it), from the lookup to the last write: two programs adding records to the same table at
   the same moment both get theirs in. Reads take no lock.</li>
-  <li><b>On the Mac</b>, Nihil's code and its runtime (the same as Linux's) are translated from x86-64 to ARM64, which costs most
-  on small, frequent operations.</li>
+  <li><b>On the Mac</b>, these numbers are from before v4.13, when Nihil's code and its runtime (the same as Linux's) were
+  translated from x86-64 to ARM64, which cost most on small, frequent operations. Since v4.13 the compiler writes ARM64 itself,
+  with a runtime of its own.</li>
   <li><b>GitHub's runners are not all the same machine</b>, and a shared server under load gives noisier numbers still. Compare
   numbers from the same run.</li>
   <li><b>The clock</b> is <code>std:time</code>'s <code>now_us()</code>, in microseconds. The operations on one record are timed

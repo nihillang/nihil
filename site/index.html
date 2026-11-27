@@ -153,7 +153,7 @@ PRODUCT @{3} FILE = _;                      // delete by key</pre>
       <p class="sub">The compiler writes the executable by itself, one pass at a time, until the types settle.</p>
       <div class="platforms">
         <div class="card"><h3>Linux x86_64</h3><p>Native ELF executables, no libc and no linker. The reference platform, with the full test suite and a fixed-point check on every change.</p></div>
-        <div class="card"><h3>macOS on Apple silicon</h3><p>Native executables: each program and the same runtime as on Linux are translated, instruction by instruction, to ARM64 by a translator written in Nihil. The compiler itself runs natively on the Mac, with no Python.</p></div>
+        <div class="card"><h3>macOS on Apple silicon</h3><p>Native executables: the compiler writes each program as ARM64 assembly, with a runtime written in Nihil, and clang links it with the system's library alone. The compiler itself runs natively on the Mac and compiles itself the same way. macOS 11 or later.</p></div>
         <div class="card"><h3>A web IDE, in Nihil</h3><p>An editor with a color terminal, go to definition, the generated machine code one click away, a table view for record files of any size, and an agent at your side: Claude or Codex, which read the language's specification and run your programs.</p></div>
       </div>
     </div>
