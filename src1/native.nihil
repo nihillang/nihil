@@ -164,33 +164,36 @@ __nihil_gc_pages(n = 0) {
     : __p;
 }
 
-// alloc(n): a block of n words. The usual case here, without a call: a small block, no collection
-// due, its class's page with room (its next slot clear in `used`), zeroed 8 bytes at a time
+// alloc(n): a block of n words. The usual case, as a leaf (it calls nothing, so its 8 slots stay in
+// x1 … x8 and it saves no register): a small block, no collection due, its class's page with room
+// (its next slot clear in `used`), zeroed 8 bytes at a time. 0: anything else, and the call
+// (42_arm.nihil, arm_call_nihil) then takes __nihil_rt_alloc_slow.
 __nihil_rt_alloc(n = 0) {
-    __nihil_gc_arena == 0 || n < 0 || n > 62 { : __nihil_gc_alloc(n, true); }   // (n itself: n · 8 could overflow)
-    __bytes = n * 8 + 16;
-    __al = __nihil_gc_allocated + __bytes;
-    __al > __nihil_gc_threshold || __nihil_gc_child != 0 { : __nihil_gc_alloc(n, true); }
-    __c = __nihil_peekb(__nihil_gc_cls + (__bytes + 15) / 16);
-    __cp = __nihil_peek(__nihil_gc_cur + 8 * __c);
-    __cp == 0 { : __nihil_gc_alloc(n, true); }
+    __nihil_gc_arena == 0 || n < 0 || n > 62 { : 0; }   // (n itself: n · 8 could overflow)
+    __b = n * 8 + 16;                                     // its bytes
+    __a = __nihil_gc_allocated + __b;
+    __a > __nihil_gc_threshold || __nihil_gc_child != 0 { : 0; }
+    __c = __nihil_peekb(__nihil_gc_cls + (__b + 15) / 16);
+    __p = __nihil_peek(__nihil_gc_cur + 8 * __c);
+    __p == 0 { : 0; }
     __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
-    __i = __nihil_peek(__nihil_gc_slot + 8 * __c);
-    __pg = __nihil_gc_arena + ((__cp - 1) << 16);
-    __m = __nihil_gc_used + 4096 + ((__cp - 1) << 11);
-    __off = __i * __s;
-    * __off + __s <= 65536 && __nihil_peekb(__m + (__off >> 5)) != 0 { __off = __off + __s; }
-    __off + __s > 65536 { : __nihil_gc_alloc(n, true); }
-    __nihil_poke8(__nihil_gc_slot + 8 * __c, __off / __s + 1);
-    __nihil_gc_allocated = __al;
-    __b = __pg + __off;
-    __e = __b + __s;
-    __z = __b;
-    * __z < __e { __nihil_poke8(__z, 0); __z = __z + 8; }
-    __nihil_poke8(__b + 8, n);
-    __nihil_rt_pokeb(__m, __off >> 5, 1);
-    : __b + 16;
+    __m = __nihil_gc_used + 4096 + ((__p - 1) << 11);
+    __o = __nihil_peek(__nihil_gc_slot + 8 * __c) * __s;
+    * __o + __s <= 65536 && __nihil_peekb(__m + (__o >> 5)) != 0 { __o = __o + __s; }
+    __o + __s > 65536 { : 0; }
+    __nihil_poke8(__nihil_gc_slot + 8 * __c, __o / __s + 1);
+    __nihil_gc_allocated = __a;
+    __nihil_poke(__nihil_str_at(__m), __o >> 5, 1);       // used
+    __p = __nihil_gc_arena + ((__p - 1) << 16) + __o;     // the block
+    __o = __p + __s;
+    __b = __p;
+    * __b < __o { __nihil_poke8(__b, 0); __b = __b + 8; }
+    __nihil_poke8(__p + 8, n);
+    : __p + 16;
 }
+
+// alloc(n) when the usual case does not hold: a collection due, a new page, a large block
+__nihil_rt_alloc_slow(n = 0) { : __nihil_gc_alloc(n, true); }
 
 __nihil_rt_array_rep(n = 0, fill = 0) {
     __a = __nihil_gc_alloc(n, fill == 0);
