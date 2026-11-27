@@ -264,8 +264,35 @@ a_ldst_x(store = false, t = 0, off = 0) {
     a_ldst(store, t, 8, R_BP, off);
 }
 
-a_push(n = 0) { a_ins("str "); a_x(n); a_str(", [x28, #-8]!"); a_nl(); }
-a_pop(n = 0) { a_ins("ldr "); a_x(n); a_str(", [x28], #8"); a_nl(); }
+// A push right after a push (nothing written between) joins it: str xa, [x28, #-8]! ; str xb, … is
+// stp xb, xa, [x28, #-16]!; a pop right after a pop, of another register: ldp xa, xb, [x28], #16.
+// The same memory and registers, half the instructions, x28 changed once (optimized -native only)
+pp_kind = 0;                   // the last line: 1 a push, 2 a pop, of pp_reg, from pp_at to pp_end
+pp_reg = 0;
+pp_at = 0;
+pp_end = -1;
+a_push(n = 0) {
+    promote && pp_kind == 1 && pp_end == arm_len {
+        arm_len = pp_at;
+        a_ins("stp "); a_x(n); a_str(", "); a_x(pp_reg); a_str(", [x28, #-16]!"); a_nl();
+        pp_kind = 0;
+        :;
+    }
+    pp_at = arm_len;
+    a_ins("str "); a_x(n); a_str(", [x28, #-8]!"); a_nl();
+    pp_kind = 1; pp_reg = n; pp_end = arm_len;
+}
+a_pop(n = 0) {
+    promote && pp_kind == 2 && pp_end == arm_len && n != pp_reg && n != 31 && pp_reg != 31 {
+        arm_len = pp_at;
+        a_ins("ldp "); a_x(pp_reg); a_str(", "); a_x(n); a_str(", [x28], #16"); a_nl();
+        pp_kind = 0;
+        :;
+    }
+    pp_at = arm_len;
+    a_ins("ldr "); a_x(n); a_str(", [x28], #8"); a_nl();
+    pp_kind = 2; pp_reg = n; pp_end = arm_len;
+}
 
 // "op xD, xS" / "op xD, xA, xB" with x86 registers
 a_rr(op = "", d = 0, s = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(s); a_nl(); }
@@ -396,6 +423,7 @@ meth_entry = false;
 arm_text() {
     arm_len = 0;
     n_rot = 0;
+    pp_kind = 0;
     op_txt = [-1 ; n_ops + 1];
     arm_native { native_start(); } || { a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl(); }
     promote = arm_native && optimize;
@@ -1757,6 +1785,23 @@ arm_lazy(i = 0) {
         dest_clear(r, d);
         imm { a_ins(m); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(pend_v[o]); a_nl(); }
         || { a_ins(m); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl(); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    // -x, ~x, x >>> v: a constant waiting stays one (its value folded); a value from its register
+    // (the pushes kept, not made as they are by the way for the others below)
+    (k == OP_NEG || k == OP_NOT) && lr != 0 && pend_k[r] == 2 {
+        k == OP_NEG { pend_v[r] = -pend_v[r]; } || { pend_v[r] = ~pend_v[r]; }
+        : 1;
+    }
+    (k == OP_NEG || k == OP_NOT || k == OP_SHRI) && lr != 0 {
+        a = srcr(r);
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        k == OP_NEG { a_ins("neg "); a_x(d); a_str(", "); a_x(a); a_nl(); }
+        || k == OP_NOT { a_ins("mvn "); a_x(d); a_str(", "); a_x(a); a_nl(); }
+        || { a_ins("lsr "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(v); a_nl(); }
         dest_done(r, d);
         : 1 + sk;
     }
