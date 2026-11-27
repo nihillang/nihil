@@ -537,8 +537,15 @@ slot_seen(s = 0) {
 op_is_call(i = 0) {
     k = op_k[i];
     k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { : true; }
-    : k == OP_CALL_RT && op_v[i] != RT_DIV && op_v[i] != RT_MOD;
+    : k == OP_CALL_RT && op_v[i] != RT_DIV && op_v[i] != RT_MOD && !rt_no_return(op_v[i]);
 }
+
+// a runtime routine that never comes back (a runtime error, ?! = text): no register needs to survive
+// it, so it does not stop a method from being a leaf. Every method that returns a value ends with
+// one (RT_ERROR: "ended without returning a value"), so counting it kept every such method from
+// being a leaf. A unit with a protected block, where an error resumes inside the method, keeps its
+// slots in memory anyway (promote_off).
+rt_no_return(rt = 0) { : rt == RT_ERROR || rt == RT_FAIL; }
 
 calls_count() {
     calls_upto = [0 ; n_ops + 1];
@@ -613,7 +620,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
             }
             k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { calls = true; }
             k == OP_CALL_RT && v == RT_PROTECT && is_prot_block(i) { promote_off = true; }
-            k == OP_CALL_RT && v != RT_DIV && v != RT_MOD { calls = true; }
+            k == OP_CALL_RT && v != RT_DIV && v != RT_MOD && !rt_no_return(v) { calls = true; }
             k == OP_LOCAL && o != 0 && v >= 0 { leaf_bad = true; }   // an optional parameter: two slots, in memory
             k == OP_LOCAL && o == 0 { slot_use(R_BP, v, w); }
             k == OP_LOCAL && o != 0 { slot_bad(v); slot_bad(v + 8); }
@@ -1873,6 +1880,7 @@ arm_call_nihil(rt = 0, k = 0, i = 0) {
         n = 11;
         rd = 0;
     }
+    rt == RT_ALLOC { a_push(10); }         // n, for the slow way (arm_alloc_slow)
     regs = in_regs(k) && rt != RT_PROTECT;
     regs { arm_args_regs(rd); }
     || {
@@ -1884,6 +1892,7 @@ arm_call_nihil(rt = 0, k = 0, i = 0) {
     }
     a_ins("bl Lm"); a_num(k); a_nl();
     !regs { arm_stack(8 * n); }
+    rt == RT_ALLOC { arm_alloc_slow(i); }
     keep & L_DI != 0 { a_pop(13); }
     keep & L_SI != 0 { a_pop(12); }
     keep & L_CX != 0 { a_pop(10); }
@@ -1891,6 +1900,27 @@ arm_call_nihil(rt = 0, k = 0, i = 0) {
         a_ldst(false, 11, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_dx")]);
     }
     rt == RT_READ_AT { a_ldst(false, 10, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_cx")]); }
+}
+
+// after the usual case of an allocation (__nihil_rt_alloc, a leaf): 0 in x9 → __nihil_rt_alloc_slow,
+// with n from the stack, where arm_call_nihil left it; then n leaves the stack on both ways
+arm_alloc_slow(i = 0) {
+    a_ins("cbnz x9, Lalloc"); a_num(i); a_nl();
+    ks = alloc_slow_method();
+    a_line("ldr x10, [x28]");
+    in_regs(ks) { arm_args_regs(L_CX); a_ins("bl Lm"); a_num(ks); a_nl(); }
+    || { a_push(10); a_ins("bl Lm"); a_num(ks); a_nl(); arm_stack(8); }
+    a_ins("Lalloc"); a_num(i); a_str(":"); a_nl();
+    arm_stack(8);
+}
+
+// __nihil_rt_alloc_slow's method (looked up once a pass), kept in the program with every allocation
+alloc_slow_pass = -1;
+alloc_slow_k = -1;
+alloc_slow_method() {
+    alloc_slow_pass != n_passes { alloc_slow_pass = n_passes; alloc_slow_k = lookup_text("__nihil_rt_alloc_slow"); }
+    alloc_slow_k >= 0 { note_call(alloc_slow_k); }
+    : alloc_slow_k;
 }
 
 arm_call_rt(rt = 0) {

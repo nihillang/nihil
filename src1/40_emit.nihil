@@ -721,6 +721,7 @@ emit_call_rt(rt = 0) {
     emit_d(rt + SIZE_HEADER - size_code - 4);
     o = 0;
     arm_native { o = rt_method(rt) + 1; }  // -native: the routine written in Nihil, if there is one
+    arm_native && rt == RT_ALLOC { alloc_slow_method(); }   // and its slow way (arm_alloc_slow)
     op_note(OP_CALL_RT, 0, rt, at, o);
 }
 
