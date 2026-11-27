@@ -1,6 +1,6 @@
 # A model's methods inside a query — design note (draft)
 
-Status: **draft, reviewed by Codex**; the decisions taken after the review are at the end. Builds on queries (SPEC §21.1), methods of a model (§20.6), private
+Status: **implemented** (SPEC §21.1), after a review by Codex; the decisions taken after it are at the end. Builds on queries (SPEC §21.1), methods of a model (§20.6), private
 fields (§20.7) and dispatch (§20.10).
 
 ## The goal
@@ -115,7 +115,7 @@ the rest is tests.
 
 | Point | Decision |
 | --- | --- |
-| Other meanings of `name(…)` | Not only program methods: `primary_name()` also gives a name followed by `(` to a model's constructor, the intrinsics, `tools()` and `call_tool()`. The model's method applies only when the name means **nothing else** in the program: any of these, a program method, or any symbol `lookup()` finds (a local too) with the same name is the compile error of section 2. |
+| Other meanings of `name(…)` | Not only program methods: `primary_name()` also gives a name followed by `(` to a model's constructor, the intrinsics, `tools()` and `call_tool()`. Any of these with the method's name is the compile error of section 2. A variable (global or local) with the name is not: it cannot be called, so `balance()` never meant it, and a program with a global `total` and a method `RULE.total` keeps working. |
 | Compatibility | Not every program that compiles today keeps compiling: one with a program method and a model method of the same name, calling the program's inside a query over that model, is refused (never silently changed). Every other program compiles to the same bytes; the corpus is checked for both. |
 | GC | Safe as it is: allocations are zeroed and their header counts every slot, so `where`'s result and `sort`'s keys are traced while the loop runs (the note's premise of uninitialised slots was wrong). |
 | FLOAT `sum` | Codex found that a FLOAT sum calling a method gave 0.0 inside a method with a free register (the sum loaded over the value). Fixed on its own, before this: PR #46. |

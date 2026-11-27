@@ -1408,6 +1408,26 @@ the program and costs no call per element. Only `sort` calls the prelude, with
 the keys already computed. The records are the same ones (a record is a
 reference, §20.2): `where` and `sort` make new ARRAYs, not new records.
 
+**The model's methods.** Inside the expression, a name followed by `(` that is a
+method of the element's model (its own or the nearest inherited, §20.8) is that
+method called on the element: `balance()` is the element's `balance()`, and
+`fee(qty)` passes a field as the next argument. The call dispatches on the
+record's real model as `r.name(…)` does (§20.10), so an ARRAY of ACCOUNT holding
+CHECKINGs and SAVINGs calls each one's own `fee`. The rules a model keeps in its
+methods, and the private fields behind them (§20.7), can filter, sort and add up:
+
+```text
+cs = CHECKING @ "checking.dat";
+rich = cs.where(balance() > 1000);              // ACCOUNT.balance reads the private _cents
+total = accounts.sum(fee(100));                  // each record's own fee
+```
+
+A name that is also a method of the program, a data model or a name of the
+language (`tools`, `call_tool`, the intrinsics) is a compile error inside a query
+over that model, so no program changes meaning: rename one of them. A variable of
+the same name does not count, since it is never called. Each call costs what
+`r.name(…)` costs, the dispatch included, once per element.
+
 ### 21.2 JSON
 
 A JSON value stays **text**: each call finds a part of it and gives that part's
