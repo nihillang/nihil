@@ -4,6 +4,19 @@ What each version of the language added, and why. Appendix A of
 [SPEC.md](SPEC.md) keeps the same history together with the design decisions made
 before v2.0.
 
+## v4.12.0
+
+Queries that use a model's methods, a FLOAT sum that was wrong inside methods, a chapter on objects for the Learn
+page, and a benchmark of a whole program against C and Go.
+
+- a model's methods inside a query (SPEC §21.1): in `rows.where(…)`, `count`, `first`, `sort` and `sum`, a name followed by `(` that is a method of the element's model (its own or inherited) is called on the element, dispatched on its real model: `cs.where(balance() > 1000)`, `accounts.sum(fee(100))`. A name that is also a method of the program, a data model or a name of the language is a compile error there; a variable of that name is not, since it is never called. A program that called a method of its own inside a query over a model with a method of the same name no longer compiles (rename one): no program changes meaning silently
+  - *Why:* A query saw only the element's fields, so the rules a model keeps in its methods, and the private fields behind them, could not filter, sort or add up without a loop by hand. It is the rule the fields already follow: inside a query, the element's names stand for the element. Reviewed by Codex in its design and in its code
+- fix: `rows.sum(f(x))` of a FLOAT that calls a method gave 0.0 inside an optimized method with a free register: the sum, kept in that register, was loaded over the expression's value before it was added. At the top level, with `-O0` or with the registers taken, the sum was right and its code is the same
+  - *Why:* Found by Codex while reviewing the design above, which makes such sums common
+- Learn, chapter 16 (`examples/learn/16_objects.nihil`): bank accounts through the five pillars (abstraction, encapsulation, inheritance, polymorphism, objects), then on disk: the model is the table, read as objects with their methods, queried with them, changed and written back by key
+- `bench/workload/`: a program of several phases (made-up sales written to a table and read back, added up in maps with a price rule chosen by dispatch, ranked, written as JSON) in Nihil, C and Go, checked to write the same bytes; `run.sh` gives the median of each phase and the peak memory. At 1,000,000 sales on Linux, Nihil takes 1.7 times C and 0.9 times Go
+  - *Why:* The micro-benchmarks measured one thing each; a whole program shows where the time goes (making records and maps, then JSON), which is what to work on next
+
 ## v4.11.0
 
 The five pillars of object orientation, without a keyword: private fields, a model built from another, a child where

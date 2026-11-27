@@ -89,3 +89,5 @@ caio.withdraw(2500);
 @{}>> CHECKING_FILE, caio;
 >> "on disk: " + (CHECKING @{3} CHECKING_FILE).describe() + "\n";
 >> "savings at 0.5% or more: " + $(SAVINGS @ SAVINGS_FILE).count(rate >= 5) + "\n";
+// a query can call the model's methods: balance() and fee(…) are each record's, by its real model
+>> "over 100.00: " + $from_disk.count(balance() > 10000) + ", fee of 100.00 in all: " + money(from_disk.sum(fee(10000))) + "\n";

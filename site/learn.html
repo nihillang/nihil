@@ -486,7 +486,7 @@ Carla &lt; DORA! &lt; ana &lt; bob
 true
 4</pre>
 <h2 id="objects">16. Objects: the five pillars</h2>
-<p>Nihil has no classes, but a model with methods works as one: the model is the class, each record an object, and the five pillars of object orientation are there. <b>Abstraction</b>: a method whose body is <code>...</code> is abstract (<code>{ ... : 0; }</code> gives an example of what it returns), and a model that leaves one unimplemented makes no records. <b>Encapsulation</b>: a field whose name starts with <code>_</code> is read and changed only by its model's own methods. <b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, and a call through the parent runs the method of the record's real model. Below, <code>withdraw</code> is written once, and each account pays its own fee.</p><p><b>On disk</b>, the model is also the table, with no mapping in between: <code>CHECKING @ file</code> gives CHECKINGs with their methods, a record read by its key is changed by its methods and written back by its key, and a change in memory stays there until it is written. Each table holds one model, since its lines have one width; a LIST of the parent gathers several. There is no <code>super</code> and no interfaces; the rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC §20.7 to §20.11</a>.</p>
+<p>Nihil has no classes, but a model with methods works as one: the model is the class, each record an object, and the five pillars of object orientation are there. <b>Abstraction</b>: a method whose body is <code>...</code> is abstract (<code>{ ... : 0; }</code> gives an example of what it returns), and a model that leaves one unimplemented makes no records. <b>Encapsulation</b>: a field whose name starts with <code>_</code> is read and changed only by its model's own methods. <b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, and a call through the parent runs the method of the record's real model. Below, <code>withdraw</code> is written once, and each account pays its own fee.</p><p><b>On disk</b>, the model is also the table, with no mapping in between: <code>CHECKING @ file</code> gives CHECKINGs with their methods, a record read by its key is changed by its methods and written back by its key, and a change in memory stays there until it is written. A query calls the model's methods by name, on each record: <code>count(balance() &gt; 10000)</code>. Each table holds one model, since its lines have one width; a LIST of the parent gathers several. There is no <code>super</code> and no interfaces; the rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC §20.7 to §20.11</a>.</p>
 <pre class="nihil">// Objects with the five pillars: a model is a class, a record is an object, and its methods are
 // the model&#x27;s (SPEC §20.7 to §20.11). One example, bank accounts, goes through each pillar.
 
@@ -577,7 +577,9 @@ caio.deposit(10000);
 caio.withdraw(2500);
 @{}&gt;&gt; CHECKING_FILE, caio;
 &gt;&gt; &quot;on disk: &quot; + (CHECKING @{3} CHECKING_FILE).describe() + &quot;\n&quot;;
-&gt;&gt; &quot;savings at 0.5% or more: &quot; + $(SAVINGS @ SAVINGS_FILE).count(rate &gt;= 5) + &quot;\n&quot;;</pre>
+&gt;&gt; &quot;savings at 0.5% or more: &quot; + $(SAVINGS @ SAVINGS_FILE).count(rate &gt;= 5) + &quot;\n&quot;;
+// a query can call the model&#x27;s methods: balance() and fee(…) are each record&#x27;s, by its real model
+&gt;&gt; &quot;over 100.00: &quot; + $from_disk.count(balance() &gt; 10000) + &quot;, fee of 100.00 in all: &quot; + money(from_disk.sum(fee(10000))) + &quot;\n&quot;;</pre>
 <p class="out">Output:</p>
 <pre class="output">refused: Ana cannot take 51.50
 checking Ana: -21.50
@@ -587,7 +589,8 @@ read: checking Ana: -21.50
 read: checking Caio: 3.00
 read: savings  Bia: 1502.47
 on disk: checking Caio: 76.50
-savings at 0.5% or more: 1</pre>
+savings at 0.5% or more: 1
+over 100.00: 1, fee of 100.00 in all: 4.00</pre>
 <h2 id="next">Next</h2>
 <p>The <a href="library.html">library reference</a> lists every call on texts, arrays, tables, JSON and maps.
 Questions: <a href="mailto:contact@nihil-lang.dev">contact@nihil-lang.dev</a>.</p>

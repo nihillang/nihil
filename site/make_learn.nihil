@@ -130,7 +130,8 @@ INTROS = [
       "<code>withdraw</code> is written once, and each account pays its own fee.</p><p><b>On disk</b>, " +
       "the model is also the table, with no mapping in between: <code>CHECKING @ file</code> gives " +
       "CHECKINGs with their methods, a record read by its key is changed by its methods and written back " +
-      "by its key, and a change in memory stays there until it is written. Each table holds one model, " +
+      "by its key, and a change in memory stays there until it is written. A query calls the model's " +
+      "methods by name, on each record: <code>count(balance() &gt; 10000)</code>. Each table holds one model, " +
       "since its lines have one width; a LIST of the parent gathers several. There is no " +
       "<code>super</code> and no interfaces; the rules are in <a " +
       "href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md\">SPEC §20.7 to §20.11</a>."
