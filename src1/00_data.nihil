@@ -52,6 +52,13 @@ TYPE_OPT = 32;      // T? = TYPE_OPT | T
 TYPE_REC = 64;      // a record of model m: TYPE_REC | (m << 8)
 TYPE_MAP = 128;     // a MAP of map type n: TYPE_MAP | (n << 8) (§22)
 MAX_MAPT = 4096;
+UP_MAX = 64;               // m[k] = (m[k] || d) + e; (49_maps.nihil): the key's tokens, at most
+up_n = 0;
+up_type = [0 ; UP_MAX];
+up_start = [0 ; UP_MAX];
+up_len = [0 ; UP_MAX];
+up_d = 0;                   // d
+up_plus = [0 ; 4];          // where the + is (start, length, line, line start), for its errors
 mt_key = [0 ; MAX_MAPT];       // key type of each map type
 mt_val = [0 ; MAX_MAPT];       // value type
 n_mapt = 0;

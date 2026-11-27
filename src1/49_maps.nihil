@@ -168,11 +168,100 @@ map_get(t = 0) {
     : map_val(t) | TYPE_OPT;
 }
 
+// ---- m[k] = (m[k] || d) + e; in one call (docs/map-upsert.md) ----------------------
+// Only for an INT map, k and e made of names (no call), numbers, fields, indexes and arithmetic,
+// so that evaluating k once instead of twice, and e before the look-up instead of after, cannot
+// be seen; and e one term of the sum (no + or - outside parentheses but a leading -), so that it
+// is compiled exactly as in the sum and any error it has is the same one, at the same place.
+
+// tok: a token k or e may hold
+up_token_ok(t = 0) {
+    : t == T_IDENT || t == T_INT || t == '.' || t == '[' || t == ']' || t == '(' || t == ')'
+        || t == '+' || t == '-' || t == '*' || t == '/' || t == '%';
+}
+
+// tok = the key's first token: its tokens up to the "]" noted (up_*), the lexer where it was.
+// → false: not a key the form takes
+up_key_scan() {
+    save_lexer();
+    up_n = 0;
+    depth = 0;
+    ok = true;
+    * ok && !(tok_type == ']' && depth == 0) {
+        !up_token_ok(tok_type) || up_n >= UP_MAX { ok = false; }
+        ok && tok_type == T_IDENT && peek_type() == '(' { ok = false; }   // a call
+        ok {
+            tok_type == '[' || tok_type == '(' { depth = depth + 1; }
+            tok_type == ']' || tok_type == ')' { depth = depth - 1; }
+            up_type[up_n] = tok_type;
+            up_start[up_n] = tok_start;
+            up_len[up_n] = tok_len;
+            up_n = up_n + 1;
+            next_token();
+        }
+    }
+    back_lexer();
+    drop_lexer();
+    : ok && up_n > 0;
+}
+
+// the token is t with the text at s (n bytes)
+up_same(t = 0, s = 0, n = 0) {
+    : tok_type == t && tok_len == n && same_source(tok_start, s, n);
+}
+
+// tok = the first token after "=": is it ( m [ k ] || d ) + e ; with m the map k, the same key
+// tokens, d an INT literal and e as above? → yes: tok = e's first token (the "+" noted), else the
+// lexer where it was
+up_match(k = 0) {
+    save_lexer();
+    ok = tok_type == '(';
+    ok { next_token(); ok = tok_type == T_IDENT && tok_len == s_len[k] && same_source(tok_start, s_ofs[k], s_len[k]); }
+    ok { next_token(); ok = tok_type == '['; }
+    i = 0;
+    * ok && i < up_n { next_token(); ok = up_same(up_type[i], up_start[i], up_len[i]); i = i + 1; }
+    ok { next_token(); ok = tok_type == ']'; }
+    ok { next_token(); ok = tok_type == T_OR; }
+    sign = 1;
+    ok { next_token(); tok_type == '-' { sign = -1; next_token(); } ok = tok_type == T_INT; up_d = sign * tok_value; }
+    ok { next_token(); ok = tok_type == ')'; }
+    ok { next_token(); ok = tok_type == '+'; }
+    ok {
+        up_plus[0] = tok_start; up_plus[1] = tok_len; up_plus[2] = tok_line; up_plus[3] = tok_lstart;
+        next_token();
+    }
+    save_lexer();                         // e's first token
+    depth = 0;
+    first = true;
+    * ok && !(tok_type == ';' && depth == 0) {
+        ok = up_token_ok(tok_type);
+        ok && tok_type == T_IDENT && peek_type() == '(' { ok = false; }   // a call
+        ok && depth == 0 && (tok_type == '+' || tok_type == '-') && !(first && tok_type == '-') { ok = false; }
+        tok_type == '[' || tok_type == '(' { depth = depth + 1; }
+        tok_type == ']' || tok_type == ')' { depth = depth - 1; }
+        ok && depth < 0 { ok = false; }
+        first = false;
+        ok { next_token(); }
+    }
+    ok = ok && !first;                    // e is not empty
+    ok {
+        back_lexer();                     // at e
+        drop_lexer();
+        drop_lexer();
+        : true;
+    }
+    drop_lexer();
+    back_lexer();                         // where it was
+    drop_lexer();
+    : false;
+}
+
 // m[k] = v;  /  m[k] = _;  (tok = "[", variable k of map type t)
 map_assign(k = 0, t = 0) {
     emit_load_var(k);
     op_push(R_AX);                            // push rax (map)
     next_token();
+    fuse = optimize && map_val(t) == TYPE_INT && up_key_scan();
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     u = expression();
     u != map_key(t) && u != TYPE_UNKNOWN { map_mismatch("key", t, u, pi, pl, pn, pli); }
@@ -183,6 +272,18 @@ map_assign(k = 0, t = 0) {
         next_token();
         emit_kind(map_kind(t));
         call_prelude("__nihil_map_del", 24);
+        expect(';', "';'");
+        :;
+    }
+    fuse && up_match(k) {
+        // m[k] = (m[k] || d) + e;  →  push e, push d, push kind: __nihil_map_add (one look-up)
+        u = expression();
+        u != TYPE_INT && u != TYPE_UNKNOWN { error_op_types(up_plus[0], up_plus[1], up_plus[2], up_plus[3], TYPE_INT, u); }
+        op_push(R_AX);
+        op_load(OP_IMM, R_AX, up_d);
+        op_push(R_AX);
+        emit_kind(map_kind(t));
+        call_prelude("__nihil_map_add", 40);   // (map, key, e, d, kind)
         expect(';', "';'");
         :;
     }
