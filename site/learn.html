@@ -486,7 +486,7 @@ Carla &lt; DORA! &lt; ana &lt; bob
 true
 4</pre>
 <h2 id="objects">16. Objects: the five pillars</h2>
-<p>Nihil has no classes, but a model with methods works as one: the model is the class, each record an object, and the five pillars of object orientation are there. <b>Abstraction</b>: a method whose body is <code>...</code> is abstract (<code>{ ... : 0; }</code> gives an example of what it returns), and a model that leaves one unimplemented makes no records. <b>Encapsulation</b>: a field whose name starts with <code>_</code> is read and changed only by its model's own methods. <b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, and a call through the parent runs the method of the record's real model. Below, <code>withdraw</code> is written once, and each account pays its own fee. There is no <code>super</code> and no interfaces; the rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC §20.7 to §20.11</a>.</p>
+<p>Nihil has no classes, but a model with methods works as one: the model is the class, each record an object, and the five pillars of object orientation are there. <b>Abstraction</b>: a method whose body is <code>...</code> is abstract (<code>{ ... : 0; }</code> gives an example of what it returns), and a model that leaves one unimplemented makes no records. <b>Encapsulation</b>: a field whose name starts with <code>_</code> is read and changed only by its model's own methods. <b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, and a call through the parent runs the method of the record's real model. Below, <code>withdraw</code> is written once, and each account pays its own fee.</p><p><b>On disk</b>, the model is also the table, with no mapping in between: <code>CHECKING @ file</code> gives CHECKINGs with their methods, a record read by its key is changed by its methods and written back by its key, and a change in memory stays there until it is written. Each table holds one model, since its lines have one width; a LIST of the parent gathers several. There is no <code>super</code> and no interfaces; the rules are in <a href="https://github.com/nihillang/nihil/blob/main/SPEC.md">SPEC §20.7 to §20.11</a>.</p>
 <pre class="nihil">// Objects with the five pillars: a model is a class, a record is an object, and its methods are
 // the model&#x27;s (SPEC §20.7 to §20.11). One example, bank accounts, goes through each pillar.
 
@@ -501,8 +501,8 @@ money(c = 0) {
 
 // 1. Abstraction: ACCOUNT says what every account does, not how. A method whose body is ... is
 //    abstract; the value after : is only an example of what it returns. ACCOUNT itself is abstract:
-//    ACCOUNT(&quot;x&quot;, 0) would not compile, since nothing tells it its fee or its kind.
-ACCOUNT = @[owner: STRING(10); _cents: INT(10)];
+//    ACCOUNT(9, &quot;x&quot;, 0) would not compile, since nothing tells it its fee or its kind.
+ACCOUNT = @[#id: INT(4); owner: STRING(10); _cents: INT(10)];
 ACCOUNT.fee(a = ACCOUNT(), cents = 0) { ... : 0; }       // what a withdrawal of cents costs
 ACCOUNT.kind(a = ACCOUNT()) { ... : &quot;&quot;; }
 
@@ -540,8 +540,8 @@ SAVINGS.add_interest(s = SAVINGS()) { s.deposit(s.balance() * s.rate / 1000); }
 // 5. Objects: each record is an object of its model, made by the model&#x27;s name with every field in
 //    order (the parent&#x27;s first). A LIST of ACCOUNT holds any account; [ACCOUNT() ; *] only gives
 //    its type, so no ACCOUNT is made.
-ana = CHECKING(&quot;Ana&quot;, 10000, 5000);                      // owner, _cents, then overdraft
-bia = SAVINGS(&quot;Bia&quot;, 200000, 5);
+ana = CHECKING(1, &quot;Ana&quot;, 10000, 5000);                   // id, owner, _cents, then overdraft
+bia = SAVINGS(2, &quot;Bia&quot;, 200000, 5);
 accounts = [ACCOUNT() ; *];
 accounts[] = ana;
 accounts[] = bia;
@@ -555,12 +555,39 @@ bia.add_interest();
 accounts : a { &gt;&gt; a.describe() + &quot;\n&quot;; }
 in_all = 0;
 accounts : a { in_all = in_all + a.balance(); }
-&gt;&gt; &quot;in all: &quot; + money(in_all) + &quot;\n&quot;;</pre>
+&gt;&gt; &quot;in all: &quot; + money(in_all) + &quot;\n&quot;;
+
+// 6. Objects on disk: the model is also the table, with no mapping in between. Its fields are the
+//    columns, the key #id is CHECKING&#x27;s and SAVINGS&#x27;s too, and a read gives records of the model
+//    named, with its methods and private fields. One model per table: the lines have one width.
+CHECKING_FILE = &quot;checking.dat&quot;;
+SAVINGS_FILE = &quot;savings.dat&quot;;
+@&gt;&gt; CHECKING_FILE, [ana, CHECKING(3, &quot;Caio&quot;, 300, 0)];
+@&gt;&gt; SAVINGS_FILE, [bia];
+
+from_disk = [ACCOUNT() ; *];                             // ACCOUNT @ a file would not compile
+(CHECKING @ CHECKING_FILE) : c { from_disk[] = c; }
+(SAVINGS @ SAVINGS_FILE) : s { from_disk[] = s; }
+from_disk : a { &gt;&gt; &quot;read: &quot; + a.describe() + &quot;\n&quot;; }
+
+// one record by its key, changed by its methods (their checks too), written back by its key:
+// a change in memory stays there until it is written
+caio = CHECKING @{3} CHECKING_FILE;
+caio.deposit(10000);
+caio.withdraw(2500);
+@{}&gt;&gt; CHECKING_FILE, caio;
+&gt;&gt; &quot;on disk: &quot; + (CHECKING @{3} CHECKING_FILE).describe() + &quot;\n&quot;;
+&gt;&gt; &quot;savings at 0.5% or more: &quot; + $(SAVINGS @ SAVINGS_FILE).count(rate &gt;= 5) + &quot;\n&quot;;</pre>
 <p class="out">Output:</p>
 <pre class="output">refused: Ana cannot take 51.50
 checking Ana: -21.50
 savings  Bia: 1502.47
-in all: 1480.97</pre>
+in all: 1480.97
+read: checking Ana: -21.50
+read: checking Caio: 3.00
+read: savings  Bia: 1502.47
+on disk: checking Caio: 76.50
+savings at 0.5% or more: 1</pre>
 <h2 id="next">Next</h2>
 <p>The <a href="library.html">library reference</a> lists every call on texts, arrays, tables, JSON and maps.
 Questions: <a href="mailto:contact@nihil-lang.dev">contact@nihil-lang.dev</a>.</p>

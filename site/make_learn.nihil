@@ -127,13 +127,17 @@ INTROS = [
       "<b>Inheritance</b>: <code>CHECKING = @[ACCOUNT; overdraft: INT(10)];</code> starts from ACCOUNT's " +
       "fields and has all its methods. <b>Polymorphism</b>: a child goes where its parent is expected, " +
       "and a call through the parent runs the method of the record's real model. Below, " +
-      "<code>withdraw</code> is written once, and each account pays its own fee. There is no " +
+      "<code>withdraw</code> is written once, and each account pays its own fee.</p><p><b>On disk</b>, " +
+      "the model is also the table, with no mapping in between: <code>CHECKING @ file</code> gives " +
+      "CHECKINGs with their methods, a record read by its key is changed by its methods and written back " +
+      "by its key, and a change in memory stays there until it is written. Each table holds one model, " +
+      "since its lines have one width; a LIST of the parent gathers several. There is no " +
       "<code>super</code> and no interfaces; the rules are in <a " +
       "href=\"https://github.com/nihillang/nihil/blob/main/SPEC.md\">SPEC §20.7 to §20.11</a>."
 ];
 JUNK = ["products.dat", "products.dat.nihil-idx", "notes.txt", "orders.dat", "orders.dat.nihil-idx",
     "orders.dat.nihil-seq", "customers.dat", "customers.dat.nihil-idx", "sales.dat", "sales.dat.nihil-idx",
-    "sales.dat.nihil-seq"];
+    "sales.dat.nihil-seq", "checking.dat", "checking.dat.nihil-idx", "savings.dat", "savings.dat.nihil-idx"];
 
 // what html.escape does: the five characters that would change the page
 escape(raw = "") {

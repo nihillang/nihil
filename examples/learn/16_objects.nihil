@@ -12,8 +12,8 @@ money(c = 0) {
 
 // 1. Abstraction: ACCOUNT says what every account does, not how. A method whose body is ... is
 //    abstract; the value after : is only an example of what it returns. ACCOUNT itself is abstract:
-//    ACCOUNT("x", 0) would not compile, since nothing tells it its fee or its kind.
-ACCOUNT = @[owner: STRING(10); _cents: INT(10)];
+//    ACCOUNT(9, "x", 0) would not compile, since nothing tells it its fee or its kind.
+ACCOUNT = @[#id: INT(4); owner: STRING(10); _cents: INT(10)];
 ACCOUNT.fee(a = ACCOUNT(), cents = 0) { ... : 0; }       // what a withdrawal of cents costs
 ACCOUNT.kind(a = ACCOUNT()) { ... : ""; }
 
@@ -51,8 +51,8 @@ SAVINGS.add_interest(s = SAVINGS()) { s.deposit(s.balance() * s.rate / 1000); }
 // 5. Objects: each record is an object of its model, made by the model's name with every field in
 //    order (the parent's first). A LIST of ACCOUNT holds any account; [ACCOUNT() ; *] only gives
 //    its type, so no ACCOUNT is made.
-ana = CHECKING("Ana", 10000, 5000);                      // owner, _cents, then overdraft
-bia = SAVINGS("Bia", 200000, 5);
+ana = CHECKING(1, "Ana", 10000, 5000);                   // id, owner, _cents, then overdraft
+bia = SAVINGS(2, "Bia", 200000, 5);
 accounts = [ACCOUNT() ; *];
 accounts[] = ana;
 accounts[] = bia;
@@ -67,3 +67,25 @@ accounts : a { >> a.describe() + "\n"; }
 in_all = 0;
 accounts : a { in_all = in_all + a.balance(); }
 >> "in all: " + money(in_all) + "\n";
+
+// 6. Objects on disk: the model is also the table, with no mapping in between. Its fields are the
+//    columns, the key #id is CHECKING's and SAVINGS's too, and a read gives records of the model
+//    named, with its methods and private fields. One model per table: the lines have one width.
+CHECKING_FILE = "checking.dat";
+SAVINGS_FILE = "savings.dat";
+@>> CHECKING_FILE, [ana, CHECKING(3, "Caio", 300, 0)];
+@>> SAVINGS_FILE, [bia];
+
+from_disk = [ACCOUNT() ; *];                             // ACCOUNT @ a file would not compile
+(CHECKING @ CHECKING_FILE) : c { from_disk[] = c; }
+(SAVINGS @ SAVINGS_FILE) : s { from_disk[] = s; }
+from_disk : a { >> "read: " + a.describe() + "\n"; }
+
+// one record by its key, changed by its methods (their checks too), written back by its key:
+// a change in memory stays there until it is written
+caio = CHECKING @{3} CHECKING_FILE;
+caio.deposit(10000);
+caio.withdraw(2500);
+@{}>> CHECKING_FILE, caio;
+>> "on disk: " + (CHECKING @{3} CHECKING_FILE).describe() + "\n";
+>> "savings at 0.5% or more: " + $(SAVINGS @ SAVINGS_FILE).count(rate >= 5) + "\n";
