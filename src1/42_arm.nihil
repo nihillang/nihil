@@ -2184,10 +2184,24 @@ arm_op(i = 0) {
         saved_at = -8 * unit_limit - v;    // below the frame: x29 + saved_at - 8 (j + 1)
         j = 0;
         * j < n_saved { a_ldst_x(true, saved_reg[j], saved_at - 8 * (j + 1)); j = j + 1; }
-        q = 0;                             // the parameters in registers: loaded once
+        // the parameters in registers: loaded once. A method called with its arguments in x1 … x8
+        // still has them there (parameter j in x<n - j>): one kept in x19 … takes it from there,
+        // not back from the copy just pushed (first: the ones kept in x1 … x8 load theirs after)
+        args = arm_native && !unit_leaf && unit_k >= 0 && in_regs(unit_k);
+        q = 0;
+        * promote && !unit_top && args && q < n_uslot {
+            u = uslot[q];
+            u >= PBASE && u - PBASE < unit_n && unit_reg[u] >= 19 {
+                a_ins("mov "); a_x(unit_reg[u]); a_str(", "); a_x(unit_n - (u - PBASE)); a_nl();
+            }
+            q = q + 1;
+        }
+        q = 0;
         * promote && !unit_top && q < n_uslot {
             u = uslot[q];
-            u >= PBASE && unit_reg[u] != 0 { a_ldst_x(false, unit_reg[u], 16 + 8 * (u - PBASE)); }
+            u >= PBASE && unit_reg[u] != 0 && !(args && u - PBASE < unit_n && unit_reg[u] >= 19) {
+                a_ldst_x(false, unit_reg[u], 16 + 8 * (u - PBASE));
+            }
             q = q + 1;
         }
         q = 0;                             // the constants in registers
