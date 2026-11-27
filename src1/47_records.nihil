@@ -503,7 +503,8 @@ emit_alloc_record(m = 0) {
     op_load(OP_IMM, R_CX, m_n[m]);                            // mov ecx, n
     
     emit_call_rt(RT_ALLOC);
-    emit_model_tag(m);
+    arm_native && rec_flat(m) { op_sti(R_AX, -16, 4, 0); }   // -native: no address in it (the collector skips it)
+    emit_model_tag(m);                                        // (ORed in: the 4 stays)
     j = 0;
     m_n[m] {
         f_type[m_first[m] + j] == TYPE_STR {
@@ -512,6 +513,18 @@ emit_alloc_record(m = 0) {
         }
         j = j + 1;
     }
+}
+
+// every field of model m (its parent's too: they come first in its list) is an INT, a FLOAT or a
+// BOOL: its record never holds an address, whatever is assigned to it
+rec_flat(m = 0) {
+    j = 0;
+    * j < m_n[m] {
+        t = f_type[m_first[m] + j];
+        t != TYPE_INT && t != TYPE_FLOAT && t != TYPE_BOOL { : false; }
+        j = j + 1;
+    }
+    : true;
 }
 
 // tok = model name, followed by "(" → NAME(a, b, …)

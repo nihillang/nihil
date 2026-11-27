@@ -1667,7 +1667,9 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
     __r = [0 ; __nihil_rt_sch_words];
     __rec = __nihil_addr(__r);
     __nihil_poke8(__rec - 8, __nf);
-    __nihil_poke8(__rec - 16, __nihil_peek(__rec - 16) | __nihil_peek(schema + 8 + 16 * __nf));   // its model's tag (SPEC §20.12)
+    __flags = __nihil_peek(schema + 8 + 16 * __nf);   // its model's tag (SPEC §20.12)
+    __nihil_rt_sch_words == __nf { __flags = __flags | 4; }   // no STRING: no address in it, ever (the collector skips its words)
+    __nihil_poke8(__rec - 16, __nihil_peek(__rec - 16) | __flags);
     __next = __rec + 8 * __nf;
     __slot = __rec;
     __fs = schema + 8;
