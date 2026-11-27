@@ -4,7 +4,8 @@
 # turns), with the median of each phase (timed inside each program, the same way), of their sum and of
 # the peak memory. Every run's JSON and
 # table must be the same bytes as the first one's, or it stops. COMPILER is called as
-# COMPILER PROGRAM.nihil OUT: `nihil` (the default) or ./nihilc1.sh from a build. Needs cc and go.
+# COMPILER PROGRAM.nihil OUT: `nihil` (the default), ./nihilc1.sh from a build, or macos/nihil-native
+# on a Mac. Needs cc and go. The JSON written is about 1.3 to 1.4 MB at any size.
 set -eu
 export LC_ALL=C
 cd "$(dirname "$0")/../.."
@@ -16,7 +17,7 @@ trap 'rm -rf "$work"' EXIT
 cc -O2 -o "$work/c" bench/workload/workload.c
 (cd bench/workload && go build -o "$work/go" workload.go)
 if [ "$(uname -s)" = Darwin ]; then
-    machine="$(sysctl -n machdep.cpu.brand_string), macOS $(sw_vers -productVersion); Nihil's x86-64 code translated to ARM64, C and Go native"
+    machine="$(sysctl -n machdep.cpu.brand_string), macOS $(sw_vers -productVersion); Nihil by $compiler (macos/nihil-native: ARM64 direct), C and Go native"
     timer="/usr/bin/time -l"
 else
     machine="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ //'), $(nproc) CPUs, Linux $(uname -r); all three native"
