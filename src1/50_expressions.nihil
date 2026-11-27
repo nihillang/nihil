@@ -147,8 +147,42 @@ emit_op(t = 0) {
     || t == '+' { op_alu(ALU_ADD, R_AX, R_CX); }
     || t == '-' { op_alu(ALU_SUB, R_AX, R_CX); }
     || t == '*' { op_mul(R_AX, R_CX); }
+    || (t == '/' || t == '%') && div_by_power(t) { }
     || t == '/' { emit_call_rt(RT_DIV); }
     || t == '%' { emit_call_rt(RT_MOD); }
+}
+
+// a / 2^k and a % 2^k, the constant 2^k (up to 2^31) just loaded into rcx: shifts instead of
+// rt_div's idiv (tens of cycles), rounding towards 0 as idiv does: a negative a gets 2^k - 1
+// added first. x86 only: -arm and -native keep the call, which the ARM64 writer turns into its
+// own shifts (42_arm.nihil). rdx is free here: after idiv it held the rest, nothing read it.
+// → false: the constant is not there, the call stays.
+div_by_power(t = 0) {
+    !optimize || want_arm || arm_native { : false; }
+    a = op_last_start();
+    a < 0 || last_target > a || n_fix > 0 && fix_pos[n_fix - 1] >= a { : false; }
+    i = op_last_at(a);
+    i < 0 || op_k[i] != OP_IMM || op_r[i] != R_CX { : false; }
+    c = op_v[i];
+    c < 2 || c > 2147483648 || c & (c - 1) != 0 { : false; }
+    k = 0;
+    * (1 << k) < c { k = k + 1; }
+    code_cut(a);
+    op_mov(R_DX, R_AX);                 // mov rdx, rax
+    op_shri(R_DX, 63);                  // shr rdx, 63: 1 if a < 0
+    op_neg(R_DX);                       // neg rdx: all ones if a < 0
+    op_shri(R_DX, 64 - k);              // shr rdx, 64 - k: 2^k - 1 if a < 0, else 0
+    op_alu(ALU_ADD, R_DX, R_AX);        // add rdx, rax
+    t == '/' {
+        op_load(OP_IMM, R_CX, k);       // mov ecx, k
+        op_sar(R_DX);                   // sar rdx, cl
+        op_mov(R_AX, R_DX);             // mov rax, rdx
+    } || {
+        op_load(OP_IMM, R_CX, 0 - c);   // mov rcx, -2^k
+        op_alu(ALU_AND, R_DX, R_CX);    // and rdx, rcx: a's multiple of 2^k towards 0
+        op_alu(ALU_SUB, R_AX, R_DX);    // sub rax, rdx
+    }
+    : true;
 }
 
 // FLOAT × FLOAT (rax, rcx = bits): SSE2 in xmm0, xmm1 → type of the result
