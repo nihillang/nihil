@@ -32,14 +32,17 @@ read_raw(k = 0) {
     i = 0;
     name_len[k] { path[i] = names[name_start[k] + i]; i = i + 1; }
     contents = "";
-    k == index_prelude && arm_native && wants_prelude { contents = NATIVE_TEXT + PRELUDE_TEXT; }   // -native: its
-    || k == index_prelude && arm_native { contents = NATIVE_TEXT; }                             // runtime too
-    || k == index_prelude { contents = PRELUDE_TEXT; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
-    n = #contents;
+    first = "";                            // -native: its runtime before the prelude (no + of two
+    k == index_prelude && arm_native { first = NATIVE_TEXT; }   // STRINGs: stage 0 has none)
+    k == index_prelude && (!arm_native || wants_prelude) { contents = PRELUDE_TEXT; }
+    || k == index_prelude { contents = ""; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
+    n = #first + #contents;
     size_raw + n >= SIZE_RAW - 1 { error_large(k); }
     start = size_raw;
     i = 0;
-    n { raw[start + i] = contents[i]; i = i + 1; }
+    #first { raw[start + i] = first[i]; i = i + 1; }
+    j = 0;
+    #contents { raw[start + i] = contents[j]; i = i + 1; j = j + 1; }
     raw[start + n] = 0;
     size_raw = start + n + 1;
     raw_got = n;

@@ -1597,63 +1597,63 @@ native_end() {
     a_ins(".zerofill __DATA,__bss,_nh_globals,"); a_num(n_globals * 8 + 16); a_str(",4"); a_nl();
 }
 
-// a routine's name in the C runtime
+// a routine's method in the runtime written in Nihil (src1/native.nihil)
 rt_name(rt = 0) {
-    rt == RT_DIV { : "div"; }
-    rt == RT_MOD { : "mod"; }
-    rt == RT_PRINT_INT { : "print_int"; }
-    rt == RT_PRINT_BOOL { : "print_bool"; }
-    rt == RT_PRINT_STR { : "print_str"; }
-    rt == RT_EXIT { : "exit"; }
-    rt == RT_ERROR { : "error"; }
-    rt == RT_ALLOC { : "alloc"; }
-    rt == RT_ARRAY_REP { : "array_rep"; }
-    rt == RT_ERROR_INDEX { : "error_index"; }
-    rt == RT_WRITE_BYTE { : "write_byte"; }
-    rt == RT_READ_BYTE { : "read_byte"; }
-    rt == RT_STR_EQUAL { : "str_equal"; }
-    rt == RT_ERROR_INT { : "error_int"; }
-    rt == RT_ERROR_BOOL { : "error_bool"; }
-    rt == RT_ERROR_STR { : "error_str"; }
-    rt == RT_READ_FILE { : "read_file"; }
-    rt == RT_TEXT { : "text"; }
-    rt == RT_PRINT_INT_OPT { : "print_int_opt"; }
-    rt == RT_PRINT_BOOL_OPT { : "print_bool_opt"; }
-    rt == RT_PRINT_STR_OPT { : "print_str_opt"; }
-    rt == RT_ERROR_INT_OPT { : "error_int_opt"; }
-    rt == RT_ERROR_BOOL_OPT { : "error_bool_opt"; }
-    rt == RT_ERROR_STR_OPT { : "error_str_opt"; }
-    rt == RT_READ_FILE_OPT { : "read_file_opt"; }
-    rt == RT_CONCAT { : "concat"; }
-    rt == RT_SLEEP { : "sleep"; }
-    rt == RT_WRITE_FILE { : "write_file"; }
-    rt == RT_APPEND_FILE { : "append_file"; }
-    rt == RT_READ_AT { : "read_at"; }
-    rt == RT_WRITE_AT { : "write_at"; }
-    rt == RT_WRITE_AT_NS { : "write_at_ns"; }
-    rt == RT_TRUNCATE { : "truncate"; }
-    rt == RT_TRUNCATE_NS { : "truncate_ns"; }
-    rt == RT_INT_TEXT { : "int_text"; }
-    rt == RT_ARRAY_CONCAT { : "array_concat"; }
-    rt == RT_NET_LISTEN { : "net_listen"; }
-    rt == RT_NET_ACCEPT { : "net_accept"; }
-    rt == RT_FD_READ { : "fd_read"; }
-    rt == RT_FD_SEND { : "fd_send"; }
-    rt == RT_FD_CLOSE { : "fd_close"; }
-    rt == RT_SYSCALL { : "syscall"; }
-    rt == RT_JSON_END { : "json_end"; }
-    rt == RT_SUB { : "sub"; }
-    rt == RT_PUT { : "put"; }
-    rt == RT_REC_PARSE { : "rec_parse"; }
-    rt == RT_LINES { : "lines"; }
-    rt == RT_NET_CONNECT { : "net_connect"; }
-    rt == RT_PROTECT { : "protect"; }
-    rt == RT_UNPROTECT { : "unprotect"; }
-    rt == RT_ERR_TEXT { : "err_text"; }
-    rt == RT_FAIL { : "fail"; }
-    rt == RT_CONCAT_INT { : "concat_int"; }
-    rt == RT_PROF_START { : "prof_start"; }
-    : "unknown";
+    rt == RT_DIV { : "__nihil_rt_div"; }
+    rt == RT_MOD { : "__nihil_rt_mod"; }
+    rt == RT_PRINT_INT { : "__nihil_rt_print_int"; }
+    rt == RT_PRINT_BOOL { : "__nihil_rt_print_bool"; }
+    rt == RT_PRINT_STR { : "__nihil_rt_print_str"; }
+    rt == RT_EXIT { : "__nihil_rt_exit"; }
+    rt == RT_ERROR { : "__nihil_rt_error"; }
+    rt == RT_ALLOC { : "__nihil_rt_alloc"; }
+    rt == RT_ARRAY_REP { : "__nihil_rt_array_rep"; }
+    rt == RT_ERROR_INDEX { : "__nihil_rt_error_index"; }
+    rt == RT_WRITE_BYTE { : "__nihil_rt_write_byte"; }
+    rt == RT_READ_BYTE { : "__nihil_rt_read_byte"; }
+    rt == RT_STR_EQUAL { : "__nihil_rt_str_equal"; }
+    rt == RT_ERROR_INT { : "__nihil_rt_error_int"; }
+    rt == RT_ERROR_BOOL { : "__nihil_rt_error_bool"; }
+    rt == RT_ERROR_STR { : "__nihil_rt_error_str"; }
+    rt == RT_READ_FILE { : "__nihil_rt_read_file"; }
+    rt == RT_TEXT { : "__nihil_rt_text"; }
+    rt == RT_PRINT_INT_OPT { : "__nihil_rt_print_int_opt"; }
+    rt == RT_PRINT_BOOL_OPT { : "__nihil_rt_print_bool_opt"; }
+    rt == RT_PRINT_STR_OPT { : "__nihil_rt_print_str_opt"; }
+    rt == RT_ERROR_INT_OPT { : "__nihil_rt_error_int_opt"; }
+    rt == RT_ERROR_BOOL_OPT { : "__nihil_rt_error_bool_opt"; }
+    rt == RT_ERROR_STR_OPT { : "__nihil_rt_error_str_opt"; }
+    rt == RT_READ_FILE_OPT { : "__nihil_rt_read_file_opt"; }
+    rt == RT_CONCAT { : "__nihil_rt_concat"; }
+    rt == RT_SLEEP { : "__nihil_rt_sleep"; }
+    rt == RT_WRITE_FILE { : "__nihil_rt_write_file"; }
+    rt == RT_APPEND_FILE { : "__nihil_rt_append_file"; }
+    rt == RT_READ_AT { : "__nihil_rt_read_at"; }
+    rt == RT_WRITE_AT { : "__nihil_rt_write_at"; }
+    rt == RT_WRITE_AT_NS { : "__nihil_rt_write_at_ns"; }
+    rt == RT_TRUNCATE { : "__nihil_rt_truncate"; }
+    rt == RT_TRUNCATE_NS { : "__nihil_rt_truncate_ns"; }
+    rt == RT_INT_TEXT { : "__nihil_rt_int_text"; }
+    rt == RT_ARRAY_CONCAT { : "__nihil_rt_array_concat"; }
+    rt == RT_NET_LISTEN { : "__nihil_rt_net_listen"; }
+    rt == RT_NET_ACCEPT { : "__nihil_rt_net_accept"; }
+    rt == RT_FD_READ { : "__nihil_rt_fd_read"; }
+    rt == RT_FD_SEND { : "__nihil_rt_fd_send"; }
+    rt == RT_FD_CLOSE { : "__nihil_rt_fd_close"; }
+    rt == RT_SYSCALL { : "__nihil_rt_syscall"; }
+    rt == RT_JSON_END { : "__nihil_rt_json_end"; }
+    rt == RT_SUB { : "__nihil_rt_sub"; }
+    rt == RT_PUT { : "__nihil_rt_put"; }
+    rt == RT_REC_PARSE { : "__nihil_rt_rec_parse"; }
+    rt == RT_LINES { : "__nihil_rt_lines"; }
+    rt == RT_NET_CONNECT { : "__nihil_rt_net_connect"; }
+    rt == RT_PROTECT { : "__nihil_rt_protect"; }
+    rt == RT_UNPROTECT { : "__nihil_rt_unprotect"; }
+    rt == RT_ERR_TEXT { : "__nihil_rt_err_text"; }
+    rt == RT_FAIL { : "__nihil_rt_fail"; }
+    rt == RT_CONCAT_INT { : "__nihil_rt_concat_int"; }
+    rt == RT_PROF_START { : "__nihil_rt_prof_start"; }
+    : "__nihil_rt_unknown";
 }
 
 // the operation i
@@ -1837,7 +1837,7 @@ rt_method(rt = 0) {
     }
     j = rt / 5;
     rt_meth[j] == -2 {
-        k = lookup_text("__nihil_rt_" + rt_name(rt));
+        k = lookup_text(rt_name(rt));
         k >= 0 && s_flags[k] & FLAG_METHOD == 0 { k = -1; }
         rt_meth[j] = k;
     }
