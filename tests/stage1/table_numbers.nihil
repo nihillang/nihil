@@ -1,0 +1,22 @@
+// reading INT and FLOAT fields of a table: the fast way (up to 18 characters, a mantissa up to 2^53)
+// and the general one (longer fields, larger mantissas) give the same values
+R = @[a: INT(20); f: FLOAT(20)];
+
+pad(s = "", w = 0) {
+    * #s < w { s = " " + s; }
+    : s;
+}
+
+ints = ["0", "-5", "+7", "  42  ", "123456789012345678", "-123456789012345678", "1234567890123456789",
+        "9223372036854775807", "", "", "", "", "", "", ""];
+floats = ["0.0", "-0.0", ".5", "5.", "-12.75", "0.1", "  2.5  ", "123456789012.345678", "9007199254740992",
+          "9007199254740993", "12345678901234567", "0.000000000000001", "3.14159265358979", "", "1234567890.12345678"];
+text = "";
+i = 0;
+* i < #ints { text = text + pad(ints[i], 20) + pad(floats[i], 20) + "\n"; i = i + 1; }
+@>> "build/numbers.dat", text;
+rows = R @ "build/numbers.dat";
+rows : r { >> $r.a + " " + $r.f + "\n"; }
+// 2^53 + 1 is not a double: it rounds to 2^53 (ties to even)
+>> $(rows[9].f == 9007199254740992.0) + "\n";
+>> $(rows[1].f == 0.0) + "\n";

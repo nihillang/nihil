@@ -172,7 +172,7 @@ __nihil_rt_alloc(n = 0) {
     __nihil_gc_arena == 0 || n < 0 || n > 62 { : 0; }   // (n itself: n · 8 could overflow)
     __b = n * 8 + 16;                                     // its bytes
     __a = __nihil_gc_allocated + __b;
-    __a > __nihil_gc_threshold || __nihil_gc_child != 0 { : 0; }
+    __a > __nihil_gc_threshold { : 0; }
     __c = __nihil_peekb(__nihil_gc_cls + (__b + 15) / 16);
     __p = __nihil_peek(__nihil_gc_cur + 8 * __c);
     __p == 0 { : 0; }
@@ -184,6 +184,9 @@ __nihil_rt_alloc(n = 0) {
     __nihil_poke8(__nihil_gc_slot + 8 * __c, __o / __s + 1);
     __nihil_gc_allocated = __a;
     __nihil_poke(__nihil_str_at(__m), __o >> 5, 1);       // used
+    __nihil_gc_child != 0 {                               // a child marks: this block lives (as in gc_alloc)
+        __nihil_poke(__nihil_str_at(__m + (__nihil_gc_marked - __nihil_gc_used)), __o >> 5, 1);
+    }
     __p = __nihil_gc_arena + ((__p - 1) << 16) + __o;     // the block
     __o = __p + __s;
     __b = __p;
@@ -1686,11 +1689,10 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
             __neg = false;
             __c = __nihil_peekb(__a);
             __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
-            __a == __b { : -1; }
+            __a == __b || __b - __a > 18 { : -1; }          // (more digits could overflow: the general path)
             * __a < __b {
                 __d = __nihil_peekb(__a) - '0';
                 __d < 0 || __d > 9 { : -1; }
-                __v >= 922337203685477580 && (__v > 922337203685477580 || __d > 7) { : -1; }   // (INT's largest, / 10)
                 __v = __v * 10 + __d;
                 __a = __a + 1;
             }
@@ -1714,29 +1716,30 @@ __nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
             __neg = false;
             __c = __nihil_peekb(__a);
             __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
+            __b - __a > 18 { : -1; }                        // (18 characters: no overflow, 10^-17 at most)
             __mant = 0;
-            __digits = 0;
             __pw = 0;
-            __seen = false;
-            __dot = false;
-            * __a < __b {
-                __c = __nihil_peekb(__a);
-                __c == '.' && !__dot {
-                    __dot = true;
-                } || {
-                    __d = __c - '0';
-                    __d < 0 || __d > 9 { : -1; }
-                    __seen = true;
-                    __mant != 0 || __d != 0 {
-                        __digits >= 15 { : -1; }
-                        __digits = __digits + 1;
+            __nd = __b - __a;                               // its digits
+            * __a < __b {                                   // the whole part
+                __d = __nihil_peekb(__a) - '0';
+                __d < 0 || __d > 9 {
+                    __d != '.' - '0' { : -1; }
+                    __nd = __nd - 1;
+                    __a = __a + 1;
+                    __pw = __a - __b;
+                    * __a < __b {                           // after the point
+                        __d = __nihil_peekb(__a) - '0';
+                        __d < 0 || __d > 9 { : -1; }
                         __mant = __mant * 10 + __d;
+                        __a = __a + 1;
                     }
-                    __dot { __pw = __pw - 1; }
+                    __a = __b;
+                } || {
+                    __mant = __mant * 10 + __d;
+                    __a = __a + 1;
                 }
-                __a = __a + 1;
             }
-            !__seen || __pw < -22 { : -1; }
+            __nd == 0 || __mant > 9007199254740992 { : -1; }   // exact as a double: up to 2^53
             !__nihil_rt_pow10_made {
                 __p = 1.0;
                 __k = 0;

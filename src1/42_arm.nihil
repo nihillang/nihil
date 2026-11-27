@@ -395,6 +395,8 @@ meth_entry = false;
 // the whole text: the program's start, then each operation, each label before the one it was bound before
 arm_text() {
     arm_len = 0;
+    n_rot = 0;
+    op_txt = [-1 ; n_ops + 1];
     arm_native { native_start(); } || { a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl(); }
     promote = arm_native && optimize;
     lazy = promote;
@@ -441,7 +443,7 @@ arm_text() {
         * j < n_binds && lab_op[binds[j]] <= i { arm_bind(binds[j]); j = j + 1; }
         step = 1;
         ARM_DEBUG && i < n_ops { a_str("// "); a_num(op_k[i]); a_str(" r"); a_num(op_r[i]); a_str(" v"); a_num(op_v[i]); a_str(" o"); a_num(op_o[i]); a_str(" live "); a_num(live_in[i]); a_nl(); }
-        lazy && i < n_ops { step = arm_lazy(i); }
+        lazy && i < n_ops { op_txt[i] = arm_len; step = arm_lazy(i); }
         || i < n_ops && arm_native && op_k[i] == OP_CALL { step = arm_call_method(i); }
         || i < n_ops { arm_op(i); }
         i = i + step;
@@ -1395,6 +1397,92 @@ fused_jump(i = 0) {
     : (live_in[i + 3] & (L_AX | L_CX | L_FL)) == 0 && thread_ok(op_o[i + 2], i);
 }
 
+// ---- a loop's test at its bottom ----
+// A jump back to a loop's head whose first instructions compare and leave the loop (to the label right
+// after that jump) becomes those instructions again, the test turned around to go on with the body
+// (Lr<n>, put after the head's own test): one taken jump less a turn. It copies the head's own text,
+// what runs after the jump anyway, so where the values are does not matter. Not a head that tests a
+// flag (cbz/cbnz: `* found && …`): measured, such a loop got slower.
+op_txt = [0 ; 1];              // where each operation's text starts (after its labels; -1: not yet)
+n_rot = 0;
+ROT_MAX = 8;                   // the head's instructions before its test, at most
+rot_tmp = [0 ; 32];
+
+a_eol(p = 0) { * arm[p] != 10 { p = p + 1; } : p; }
+
+// the text at p starts with s
+a_is(p = 0, s = "") {
+    i = 0;
+    * i < #s { arm[p + i] != s[i] { : false; } i = i + 1; }
+    : true;
+}
+
+// ARM's condition c1 c2 turned around ("": not one)
+a_inv(c1 = 0, c2 = 0) {
+    c1 == 'e' && c2 == 'q' { : "ne"; } c1 == 'n' && c2 == 'e' { : "eq"; }
+    c1 == 'l' && c2 == 't' { : "ge"; } c1 == 'g' && c2 == 'e' { : "lt"; }
+    c1 == 'l' && c2 == 'e' { : "gt"; } c1 == 'g' && c2 == 't' { : "le"; }
+    c1 == 'l' && c2 == 'o' { : "hs"; } c1 == 'h' && c2 == 's' { : "lo"; }
+    c1 == 'l' && c2 == 's' { : "hi"; } c1 == 'h' && c2 == 'i' { : "ls"; }
+    c1 == 'm' && c2 == 'i' { : "pl"; } c1 == 'p' && c2 == 'l' { : "mi"; }
+    c1 == 'c' && c2 == 'c' { : "cs"; } c1 == 'c' && c2 == 's' { : "cc"; }
+    c1 == 'v' && c2 == 's' { : "vc"; } c1 == 'v' && c2 == 'c' { : "vs"; }
+    : "";
+}
+
+// the jump back at operation i to the head at operation j, as its test → whether it could
+a_rotate(j = 0, i = 0) {
+    s = op_txt[j];
+    s < 0 { : false; }
+    p = s;
+    n = 0;
+    * p < arm_len {
+        e = a_eol(p);
+        arm[p] == '/' { p = e + 1; }       // (ARM_DEBUG's)
+        || arm[p] != ' ' { : false; }      // a label: the head is not one block
+        || {
+            q = p + 4;
+            !a_is(q, "b.") {
+                a_is(q, "b ") || a_is(q, "bl") || a_is(q, "br") || a_is(q, "ret") || a_is(q, "tb") || a_is(q, "cb") { : false; }
+                n = n + 1;
+                n > ROT_MAX { : false; }
+                p = e + 1;
+            } || {
+                t = e;                     // its label, Lj<l>: the one right after this jump?
+                * arm[t - 1] != ' ' { t = t - 1; }
+                !a_is(t, "Lj") || t + 2 >= e { : false; }
+                l = 0;
+                u = t + 2;
+                * u < e {
+                    d = arm[u] - '0';
+                    d < 0 || d > 9 { : false; }
+                    l = l * 10 + d;
+                    u = u + 1;
+                }
+                l >= n_labs || lab_op[l] != i + 1 { : false; }
+                cc = a_inv(arm[q + 2], arm[q + 3]);
+                cc == "" || arm[q + 4] != ' ' { : false; }
+                u = s;                     // the head again
+                * u < p { a_byte(arm[u]); u = u + 1; }
+                a_ins("b."); a_str(cc); a_str(" ");
+                a_str("Lr"); a_num(n_rot); a_nl();
+                old = arm_len;             // its label after the head's test: moved in
+                a_str("Lr"); a_num(n_rot); a_str(":"); a_nl();
+                len = arm_len - old;
+                u = 0;
+                * u < len { rot_tmp[u] = arm[old + u]; u = u + 1; }
+                u = old - 1;
+                * u > e { arm[u + len] = arm[u]; u = u - 1; }
+                u = 0;
+                * u < len { arm[e + 1 + u] = rot_tmp[u]; u = u + 1; }
+                n_rot = n_rot + 1;
+                : true;
+            }
+        }
+    }
+    : false;
+}
+
 // b.<cc> to label l (the values live there into their registers first)
 a_jump(cc = "", l = 0) {
     pend_to(lab_op[l]);
@@ -1534,7 +1622,7 @@ arm_lazy(i = 0) {
     k == OP_JCC || k == OP_JCC8 { a_jump(a_cond(v), o); : 1; }
     k == OP_JMP {
         pend_to(lab_op[o]);
-        a_ins("b "); a_label(o); a_nl();
+        !(lab_op[o] <= i && lab_kind[o] == LAB_JUMP && a_rotate(lab_op[o], i)) { a_ins("b "); a_label(o); a_nl(); }
         pend_flush(0);
         : 1;
     }
