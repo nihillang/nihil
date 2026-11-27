@@ -15,6 +15,8 @@ a = NUM @ "build/noscan_num.dat";
 b = TXT @ "build/noscan_txt.dat";
 i = 0;
 * i < #b { b[i].name = "renamed " + $(i * 7); i = i + 1; }   // new texts, only reachable through b
+i = 0;
+* i < #txts { txts[i].name = "made " + $(i * 3); i = i + 1; }  // and through records made by NAME(…)
 
 garbage = [""; *];                                               // collections in between
 k = 0;
@@ -30,3 +32,11 @@ i = 0;
 * i < #b { b[i].name != "renamed " + $(i * 7) { bad = bad + 1; } i = i + 1; }
 >> $#b + " records, " + $bad + " changed texts lost\n";
 >> b[1999].name + "\n";
+// the records made by NAME(…): the ones with numbers only, and the texts given to the others
+sum = 0;
+oks = 0;
+nums : r { sum = sum + r.id; r.ok { oks = oks + 1; } }
+bad = 0;
+i = 0;
+* i < #txts { txts[i].name != "made " + $(i * 3) { bad = bad + 1; } i = i + 1; }
+>> $sum + " " + $oks + " " + $bad + " " + txts[1999].name + "\n";
