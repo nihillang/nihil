@@ -1,0 +1,6 @@
+// a method of the element's model named as a data model: refused inside a query
+ACCOUNT = @[id: INT(4); _cents: INT(10)];
+ACCOUNT.LIMIT(a = ACCOUNT()) { : 1; }
+LIMIT = @[v: INT(4)];
+xs = [ACCOUNT(1, 100)];
+>> $xs.count(LIMIT() > 0);

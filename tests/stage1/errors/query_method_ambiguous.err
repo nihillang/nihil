@@ -1,0 +1,1 @@
+'balance' is a method of ACCOUNT and a method of the program: inside a query over ACCOUNT it would be ambiguous, rename one of them
