@@ -1241,7 +1241,7 @@ vs_safe(i = 0) {
     k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO || k == OP_LOCAL || k == OP_GLOBAL { : true; }
     k == OP_LEA_CONST || k == OP_ALU || k == OP_ADDI || k == OP_MUL || k == OP_MULI || k == OP_CMP || k == OP_CMPI { : true; }
     k == OP_TEST || k == OP_SETCC || k == OP_XMOV || k == OP_I2F || k == OP_XLD || k == OP_XOP || k == OP_RMOVX || k == OP_PREFETCH { : true; }
-    k == OP_SHRI || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG || k == OP_ZXB || k == OP_F2I || k == OP_FCMP_SET { : true; }
+    k == OP_SHRI || k == OP_SHL || k == OP_SAR || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG || k == OP_ZXB || k == OP_F2I || k == OP_FCMP_SET { : true; }
     k == OP_JCC_RT && op_o[i] == RT_ERROR_INDEX { : true; }
     k == OP_CALL_RT && (op_v[i] == RT_DIV || op_v[i] == RT_MOD) { : true; }
     k == OP_CMP_SET && !fused_jump(i) { : true; }
@@ -1546,13 +1546,27 @@ arm_lazy(i = 0) {
     }
     // division: sdiv (x86's idiv, but INT_MIN / -1 gives INT_MIN and the rest 0, as the runtime does);
     // by zero: the runtime's routine, for its error
-    // by a power of 2: shifts, rounding towards 0 as idiv does (a negative a gets 2^k - 1 first)
-    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) && (live_out_of(i) & L_DX) == 0
+    // by a power of 2: shifts, rounding towards 0 as idiv does (a negative a gets 2^k - 1 first).
+    // rdx is not idiv's rest here (nor in arm_op's sdiv): a method's end reads it (an optional's
+    // presence), so asking it dead kept every division before a `:` from these ways.
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD)
             && pend_k[R_CX] == 2 && pend_v[R_CX] > 1 && (pend_v[R_CX] & (pend_v[R_CX] - 1)) == 0 {
         cv = pend_v[R_CX];
         kk = 0;
         * (1 << kk) < cv { kk = kk + 1; }
         a = srcr(R_AX);
+        // x % 2^k == 0 (or !=), the rest used only so: the low bits, tested
+        v == RT_MOD && i + 3 < n_ops && op_k[i + 1] == OP_IMM && op_r[i + 1] == R_CX && op_v[i + 1] == 0
+                && op_k[i + 2] == OP_CMP && (op_k[i + 3] == OP_JCC || op_k[i + 3] == OP_JCC8)
+                && (op_v[i + 3] == CC_E || op_v[i + 3] == CC_NE)
+                && !lab_live(i + 1) && !lab_live(i + 2) && !lab_live(i + 3) && (live_in[i + 3] & L_AX) == 0 {
+            a_ins("tst "); a_x(a); a_str(", #0x"); a_hex(cv - 1); a_nl();
+            pend_k[R_AX] = 0;
+            pend_k[R_DX] = 0;
+            pend_k[R_CX] = 2;                  // (rcx ← 0, as operation i + 1 leaves it)
+            pend_v[R_CX] = 0;
+            : 3;
+        }
         d = dest_of(i, R_AX);
         sk = skip;
         a_ins("asr x16, "); a_x(a); a_str(", #63"); a_nl();
@@ -1567,7 +1581,7 @@ arm_lazy(i = 0) {
         pend_k[R_DX] = 0;
         : 1 + sk;
     }
-    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) && (live_out_of(i) & L_DX) == 0 {
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) {
         a = srcr(R_AX);
         c = 0;
         pend_k[R_CX] == 2 && pend_v[R_CX] != 0 { a_imm(17, pend_v[R_CX]); c = 17; }
@@ -1594,6 +1608,17 @@ arm_lazy(i = 0) {
         }
         dest_done(R_AX, d);
         pend_k[R_DX] = 0;
+        : 1 + sk;
+    }
+    // a shift by a constant (in rcx, waiting): its immediate form (x86 takes the count mod 64, as ARM)
+    (k == OP_SHL || k == OP_SAR) && pend_k[R_CX] == 2 {
+        a = srcr(r);
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        k == OP_SHL { a_ins("lsl "); } || { a_ins("asr "); }
+        a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(pend_v[R_CX] & 63); a_nl();
+        dest_done(r, d);
         : 1 + sk;
     }
     // arithmetic: from where the values are, into r (or straight into the local it is stored in)
@@ -1639,8 +1664,15 @@ arm_lazy(i = 0) {
         d = dest_of(i, r);
         sk = skip;
         dest_clear(r, d);
+        k1 = -1;                           // 2^k1 + 1 (3, 5, 9 …): an add of a shifted; 10: that of 5, shifted
+        known && kk < 0 && cv > 2 && ((cv - 1) & (cv - 2)) == 0 { k1 = 0; * (1 << k1) < cv - 1 { k1 = k1 + 1; } }
         kk >= 0 {
             a_ins("lsl "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(kk); a_nl();
+        } || k1 >= 0 {
+            a_ins("add "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(a); a_str(", lsl #"); a_num(k1); a_nl();
+        } || known && cv == 10 {
+            a_ins("add "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(a); a_str(", lsl #2"); a_nl();
+            a_ins("lsl "); a_x(d); a_str(", "); a_x(d); a_str(", #1"); a_nl();
         } || {
             known && cst_reg(cv) > 0 { c = cst_reg(cv); known = false; }
             known { a_imm(17, cv); }
