@@ -24,18 +24,25 @@ store_name(start = 0, n = 0) {
     : n_names - 1;
 }
 
+wants_prelude = false;                     // the program needs the prelude (not only -native's runtime)
+
 // reads file k to the end of the raw arena → start; raw_got = size
 read_raw(k = 0) {
     path = [0 ; name_len[k]];
     i = 0;
     name_len[k] { path[i] = names[name_start[k] + i]; i = i + 1; }
     contents = "";
-    k == index_prelude { contents = PRELUDE_TEXT; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
-    n = #contents;
+    first = "";                            // -native: its runtime before the prelude (no + of two
+    k == index_prelude && arm_native { first = NATIVE_TEXT; }   // STRINGs: stage 0 has none)
+    k == index_prelude && (!arm_native || wants_prelude) { contents = PRELUDE_TEXT; }
+    || k == index_prelude { contents = ""; } || is_std_name(k) { contents = std_text(std_part(k)); } || { contents = @$path; }
+    n = #first + #contents;
     size_raw + n >= SIZE_RAW - 1 { error_large(k); }
     start = size_raw;
     i = 0;
-    n { raw[start + i] = contents[i]; i = i + 1; }
+    #first { raw[start + i] = first[i]; i = i + 1; }
+    j = 0;
+    #contents { raw[start + i] = contents[j]; i = i + 1; j = j + 1; }
     raw[start + n] = 0;
     size_raw = start + n + 1;
     raw_got = n;
@@ -322,6 +329,22 @@ load_program() {
             size_names = size_names - 4;
             going = true;
         }
+        size_names >= 5 && names[0] == '-' && names[1] == 'a' && names[2] == 'r' && names[3] == 'm' && names[4] == ' ' {
+            arm_setup();                    // -arm: the ARM64 text too, on stderr after the map (42_arm.nihil)
+            i = 0;
+            size_names - 5 { names[i] = names[i + 5]; i = i + 1; }
+            size_names = size_names - 5;
+            going = true;
+        }
+        size_names >= 8 && names[0] == '-' && names[1] == 'n' && names[2] == 'a' && names[3] == 't'
+            && names[4] == 'i' && names[5] == 'v' && names[6] == 'e' && names[7] == ' ' {
+            arm_setup();                    // -native: the whole program in ARM64 on stdout (42_arm.nihil)
+            arm_native = true;
+            i = 0;
+            size_names - 8 { names[i] = names[i + 8]; i = i + 1; }
+            size_names = size_names - 8;
+            going = true;
+        }
         size_names >= 5 && names[0] == '-' && names[1] == 'm' && names[2] == 'a' && names[3] == 'p' && names[4] == ' ' {
             want_map = true;
             i = 0;
@@ -342,6 +365,8 @@ load_program() {
     expanding = true;
     lx_buf = raw;
     expand(main, 0);
+    wants_prelude = uses_prelude;
+    arm_native { uses_prelude = true; }    // its runtime is prelude code (alone, if the program needs no prelude)
     uses_prelude {
         // again, now with the prelude before the program
         n_source = 0;

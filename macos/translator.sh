@@ -14,7 +14,7 @@ trap 'rm -rf "$w"' EXIT
 if [ -x $t ]; then cp $t $w/old; else macos/seed.sh $w/old; fi
 if [ ! -x build/macos/nihilc1-native ]; then cp $w/old $t; rm -f $t.nihil; exit 0; fi
 [ -f build/macos/rt.o ] && [ build/macos/rt.o -nt arm64/rt.c ] || clang -O2 -arch arm64 -Wno-unused-result -c arm64/rt.c -o build/macos/rt.o
-make -s build/prelude_text.nihil build/std_text.nihil
+make -s build/prelude_text.nihil build/native_text.nihil build/std_text.nihil
 printf '%s\n' "-map $PWD/macos/translate.nihil" | build/macos/nihilc1-native > $w/t.x86 2> $w/t.map ||
     { grep -v '^nihil-map' $w/t.map >&2; exit 1; }
 printf '%s\n%s\n%s\n' $w/t.x86 $w/t.map $w/t.s | $w/old 2> /dev/null

@@ -1,0 +1,1984 @@
+// =============================================================================
+// ARM64 text for the operations (-arm): after the last pass, the operations kept (40_emit.nihil,
+// all of them with -arm) are written as ARM64 assembly, with the conventions of
+// macos/translate.nihil, so that the runtime it translates serves the program unchanged:
+//   rax rcx rdx rsi rdi → x9 x10 x11 x12 x13; rbx r12 … r15 → x19 … x23; rbp → x29; rsp → x28, the
+//   x86 stack emulated exactly (8-byte slots); globals through x27 (_nh_globals_start); the
+//   constants at Lconst; a runtime routine rt at L_<its jump table address>_c (call) or L_<…> (jump).
+// A label l (00_data.nihil) is Lj<l>, written before the operation it was bound before; a method k
+// starts at Lm<k>; the program starts at L_<its x86 address>, where the translated runtime jumps.
+// The text goes to stderr after the map line and "nihil-arm" (macos/nihil, macos/translate.nihil).
+// =============================================================================
+
+// -arm, -native: all of a pass's operations and labels are kept (00_data.nihil)
+// (they start small and double when full: a collection reads only what is there)
+arm_setup() {
+    want_arm = true;
+    arm_cap = 1 << 22;
+    arm = [0 ; arm_cap];
+    ops_cap = OPS_ARM;
+    op_at = [0 ; OPS_ARM];
+    op_end = [0 ; OPS_ARM];
+    op_k = [0 ; OPS_ARM];
+    op_r = [0 ; OPS_ARM];
+    op_v = [0 ; OPS_ARM];
+    op_o = [0 ; OPS_ARM];
+    lab_cap = LABELS_ARM;
+    lab_at = [0 ; LABELS_ARM];
+    lab_fix = [0 ; LABELS_ARM];
+    lab_kind = [0 ; LABELS_ARM];
+    lab_v = [0 ; LABELS_ARM];
+    lab_op = [0 ; LABELS_ARM];
+    lab_next = [0 ; LABELS_ARM];
+    binds_cap = LABELS_ARM;
+    binds = [0 ; LABELS_ARM];
+    meth_lo = [0 ; METHS];
+    meth_hi = [0 ; METHS];
+    meth_k = [0 ; METHS];
+}
+arm_cap = 0;
+binds_cap = 1;
+
+// a new array of cap elements, with a's first n
+grown(a = [0], n = 0, cap = 0) {
+    b = [0 ; cap];
+    i = 0;
+    * i < n { b[i] = a[i]; i = i + 1; }
+    : b;
+}
+
+// the operations' arrays, twice as large (-arm: none is dropped, ops_low is 0)
+ops_grow() {
+    c = 2 * ops_cap;
+    op_at = grown(op_at, n_ops, c);
+    op_end = grown(op_end, n_ops, c);
+    op_k = grown(op_k, n_ops, c);
+    op_r = grown(op_r, n_ops, c);
+    op_v = grown(op_v, n_ops, c);
+    op_o = grown(op_o, n_ops, c);
+    ops_cap = c;
+}
+
+labels_grow() {
+    c = 2 * lab_cap;
+    lab_at = grown(lab_at, n_labs, c);
+    lab_fix = grown(lab_fix, n_labs, c);
+    lab_kind = grown(lab_kind, n_labs, c);
+    lab_v = grown(lab_v, n_labs, c);
+    lab_op = grown(lab_op, n_labs, c);
+    lab_next = grown(lab_next, n_labs, c);
+    lab_cap = c;
+}
+
+a_byte(b = 0) {
+    arm_len >= arm_cap { arm = grown(arm, arm_len, 2 * arm_cap); arm_cap = 2 * arm_cap; }
+    arm[arm_len] = b;
+    arm_len = arm_len + 1;
+}
+
+a_str(s = "") {
+    i = 0;
+    #s { a_byte(s[i]); i = i + 1; }
+}
+
+a_digits = [0 ; 20];            // a_num's and a_hex's digits (no array made for each number)
+a_num(n = 0) {
+    n < 0 { a_byte('-'); n = -n; }
+    n == 0 { a_byte('0'); :; }
+    d = a_digits;
+    k = 0;
+    * n > 0 { d[k] = '0' + n % 10; n = n / 10; k = k + 1; }
+    * k > 0 { k = k - 1; a_byte(d[k]); }
+}
+
+a_hex(n = 0) {
+    n == 0 { a_byte('0'); :; }
+    d = a_digits;
+    k = 0;
+    * n != 0 && k < 16 {
+        h = n & 15;
+        h < 10 { d[k] = '0' + h; } || { d[k] = 'a' + h - 10; }
+        n = (n >> 4) & 0x0FFFFFFFFFFFFFFF;
+        k = k + 1;
+    }
+    * k > 0 { k = k - 1; a_byte(d[k]); }
+}
+
+a_nl() { a_byte(10); }
+a_ins(s = "") { a_str("    "); a_str(s); }
+a_line(s = "") { a_ins(s); a_nl(); }
+
+// the ARM register of an x86 one
+a_rn(r = 0) {
+    r == 0 { : 9; }
+    r == 1 { : 10; }
+    r == 2 { : 11; }
+    r == 3 { : 19; }
+    r == 4 { : 28; }
+    r == 5 { : 29; }
+    r == 6 { : 12; }
+    r == 7 { : 13; }
+    r >= 12 && r <= 15 { : r + 8; }
+    error("internal error: no ARM64 register for an x86 one");
+    : 0;
+}
+
+a_x(n = 0) { n == 31 { a_str("xzr"); :; } a_str("x"); a_num(n); }           // 31: the zero register
+a_w(n = 0) { n == 31 { a_str("wzr"); :; } a_str("w"); a_num(n); }
+a_reg(r = 0) { a_x(a_rn(r)); }
+
+// an x86 condition (its number) → ARM's, after cmp or tst
+a_cond(cc = 0) {
+    cc == 4 { : "eq"; }
+    cc == 5 { : "ne"; }
+    cc == 12 { : "lt"; }
+    cc == 13 { : "ge"; }
+    cc == 14 { : "le"; }
+    cc == 15 { : "gt"; }
+    cc == 2 { : "lo"; }
+    cc == 3 { : "hs"; }
+    cc == 6 { : "ls"; }
+    cc == 7 { : "hi"; }
+    cc == 8 { : "mi"; }
+    cc == 9 { : "pl"; }
+    error("internal error: no ARM64 condition for an x86 one");
+    : "";
+}
+
+// x<n> ← v (movz / movk, as the translator's imm)
+a_imm(n = 0, v = 0) {
+    v == 0 { a_ins("mov "); a_x(n); a_str(", #0"); a_nl(); :; }
+    first = true;
+    k = 0;
+    * k < 4 {
+        part = (v >> (16 * k)) & 0xFFFF;
+        part != 0 || first && k == 3 {
+            first { a_ins("movz "); } || { a_ins("movk "); }
+            a_x(n); a_str(", #"); a_num(part); a_str(", lsl #"); a_num(16 * k); a_nl();
+            first = false;
+        }
+        k = k + 1;
+    }
+    first { a_ins("mov "); a_x(n); a_str(", #0"); a_nl(); }
+}
+
+// x<d> ← x<s> + v
+a_add_imm(d = 0, s = 0, v = 0) {
+    v >= 0 && v <= 4095 { a_ins("add "); a_x(d); a_str(", "); a_x(s); a_str(", #"); a_num(v); a_nl(); :; }
+    v >= -4095 && v < 0 { a_ins("sub "); a_x(d); a_str(", "); a_x(s); a_str(", #"); a_num(-v); a_nl(); :; }
+    a_imm(17, v);
+    a_ins("add "); a_x(d); a_str(", "); a_x(s); a_str(", x17"); a_nl();
+}
+
+// a load or store of x<t> (w<t> for a byte) at [base + disp] (base: an x86 register, or R_ABS: a global)
+a_ldst(store = false, t = 0, size = 8, base = 0, disp = 0) {
+    b = 0;
+    off = disp;
+    base < 0 {
+        b = 27;
+        off = disp - (BASE_DATA + OFS_GLOBALS);
+        arm_native && off < 0 { error("internal error: -native: an address below the globals"); }
+    } || {
+        b = a_rn(base);
+    }
+    m = "ldr";
+    store { m = "str"; }
+    off >= 0 && off <= 4095 * size && off % size == 0 {
+        a_ins(m);
+    } || off >= -256 && off <= 255 {
+        store { a_ins("stur"); } || { a_ins("ldur"); }
+    } || {
+        off >= -4095 && off <= 4095 { a_add_imm(15, b, off); } || {
+            a_imm(15, off);
+            a_ins("add x15, "); a_x(b); a_str(", x15"); a_nl();
+        }
+        b = 15;
+        off = 0;
+        a_ins(m);
+    }
+    size == 1 { a_str("b "); a_w(t); } || { a_str(" "); a_x(t); }
+    a_str(", ["); a_x(b);
+    off != 0 { a_str(", #"); a_num(off); }
+    a_str("]"); a_nl();
+}
+
+// x<t> to or from [x29 + off] (a register saved in the frame)
+a_ldst_x(store = false, t = 0, off = 0) {
+    a_ldst(store, t, 8, R_BP, off);
+}
+
+a_push(n = 0) { a_ins("str "); a_x(n); a_str(", [x28, #-8]!"); a_nl(); }
+a_pop(n = 0) { a_ins("ldr "); a_x(n); a_str(", [x28], #8"); a_nl(); }
+
+// "op xD, xS" / "op xD, xA, xB" with x86 registers
+a_rr(op = "", d = 0, s = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(s); a_nl(); }
+a_rrr(op = "", d = 0, a = 0, b = 0) { a_ins(op); a_reg(d); a_str(", "); a_reg(a); a_str(", "); a_reg(b); a_nl(); }
+
+a_label_l(pos = 0) { a_str("L_"); a_hex(BASE_CODE + pos); }
+a_label(l = 0) { a_str("Lj"); a_num(l); }
+a_label_rt(rt = 0) { a_str("L_"); a_hex(BASE_CODE + SIZE_HEADER + rt); }
+
+// a protected block ?{ … } (cmd_protected_block): its RT_PROTECT, the last operation. A unit with
+// one keeps its slots in memory: what the block changed before an error stays changed (x19 … x26
+// come back as they were at its start, x1 … x8 as they happen to be)
+PROT_BLOCKS = 4096;
+prot_ops = [0 ; PROT_BLOCKS];
+n_prot_ops = 0;
+arm_prot_block() {
+    n_prot_ops >= PROT_BLOCKS { error("too many protected blocks for -arm"); }
+    prot_ops[n_prot_ops] = n_ops - 1;
+    n_prot_ops = n_prot_ops + 1;
+}
+is_prot_block(i = 0) {
+    q = 0;
+    * q < n_prot_ops { prot_ops[q] == i { : true; } q = q + 1; }
+    : false;
+}
+
+// a method k starts here (cmd_method): a label for the text, and where its operations start
+METHS = 1 << 16;
+meth_k = [0 ; 1];              // each method's symbol
+
+// ---- -native: the calls of methods ----
+// A method whose arguments take 8 slots or fewer gets them in x1 … x8 (the first pushed in x1),
+// not on the stack: the caller puts them there and pushes nothing (the "add rsp" after the call
+// goes). A leaf (it calls nothing) whose frame does not escape keeps them there, as the registers
+// of its parameters; another one pushes them at its start, where its body reads them (as if the
+// caller had), and drops them at its end.
+unit_k = -1;                   // the method whose operations these are (-1: the program's own)
+unit_n = 0;                    // its arguments' slots
+unit_leaf = false;             // its parameters stay in x1 … x8
+
+meth_slots(k = 0) {
+    n = 0;
+    j = 0;
+    * j < s_nparam[k] { n = n + size_param(s_extra[k] + j); j = j + 1; }
+    : n / 8;
+}
+
+// the arguments in registers: a method of 8 slots or fewer
+in_regs(k = 0) { : arm_native && meth_slots(k) <= 8; }
+
+// operation i calls a method (OP_CALL): its arguments into x1 … x8 → the operations it took (the
+// call, and the release of the arguments after it)
+arm_call_method(i = 0) {
+    k = op_v[i];
+    n = meth_slots(k);
+    !in_regs(k) { vs_flush(); a_ins("bl Lm"); a_num(k); a_nl(); : 1; }   // (its arguments on the stack, all of them)
+    n > 0 && (i + 1 >= n_ops || op_k[i + 1] != OP_STACK || op_v[i + 1] != 8 * n) {
+        // a call the release does not follow (a dispatch: one of several calls, then the release):
+        // its arguments, all pushed, into the registers too; the release drops them later
+        vs_flush();
+        q = 0;
+        * q < n { a_ldst_n(false, 1 + q, 8, 28, 8 * (n - 1 - q)); q = q + 1; }
+        a_ins("bl Lm"); a_num(k); a_nl();
+        : 1;
+    }
+    virt = n_vs;
+    virt > n { virt = n; }
+    d = n_vs - virt;                       // the pushes kept before the arguments: made
+    q = 0;
+    * q < d { vs_k[q] == 1 { a_push(vs_v[q]); } || { a_imm(14, vs_v[q]); a_push(14); } q = q + 1; }
+    real = n - virt;                       // the first arguments, on the stack
+    q = 0;
+    * q < virt {                           // the others, into x9 … x16 first (they may be in x1 … x8)
+        e = d + q;
+        t = 9 + q;
+        vs_k[e] == 1 { vs_v[e] != t { a_ins("mov "); a_x(t); a_str(", "); a_x(vs_v[e]); a_nl(); } } || { a_imm(t, vs_v[e]); }
+        q = q + 1;
+    }
+    n_vs = 0;
+    q = 0;
+    * q < real { a_ldst_n(false, 1 + q, 8, 28, 8 * (real - 1 - q)); q = q + 1; }
+    q = 0;
+    * q < virt { a_ins("mov "); a_x(1 + real + q); a_str(", "); a_x(9 + q); a_nl(); q = q + 1; }
+    real > 0 { arm_stack(8 * real); }
+    a_ins("bl Lm"); a_num(k); a_nl();
+    n > 0 { : 2; }
+    : 1;
+}
+a_method(k = 0) {
+    !want_arm { :; }
+    label_bind(label_new(LAB_METHOD, k));
+    n_meths >= METHS { error("too many methods for -arm"); }
+    meth_lo[n_meths] = n_ops;
+    meth_k[n_meths] = k;
+}
+
+// the method's operations end here
+a_method_end() {
+    !want_arm { :; }
+    meth_hi[n_meths] = n_ops;
+    n_meths = n_meths + 1;
+}
+
+// the label l, where it was bound; a method's start, or a place called, keeps its return address on
+// the x86 stack (as call does)
+arm_bind(l = 0) {
+    kind = lab_kind[l];
+    arm_native && kind == LAB_METHOD {     // its name too (a local symbol: profiles, backtraces)
+        k = lab_v[l];
+        a_str("_m_");
+        q = 0;
+        * q < s_len[k] { a_byte(source[s_ofs[k] + q]); q = q + 1; }
+        a_str("_"); a_num(k); a_str(":"); a_nl();
+    }
+    kind == LAB_METHOD { a_str("Lm"); a_num(lab_v[l]); } || { a_label(l); }
+    a_str(":"); a_nl();
+    kind == LAB_METHOD && in_regs(lab_v[l]) && !unit_leaf {   // its arguments where its body reads them
+        q = 1;
+        * q <= unit_n { a_push(q); q = q + 1; }
+    }
+    lazy && kind == LAB_METHOD { meth_entry = true; :; }   // with push rbp: stp (arm_lazy)
+    kind == LAB_METHOD || kind == LAB_CALLED { a_line("str x30, [x28, #-8]!"); }
+}
+
+meth_entry = false;
+
+// the whole text: the program's start, then each operation, each label before the one it was bound before
+arm_text() {
+    arm_len = 0;
+    arm_native { native_start(); } || { a_label_l(SIZE_HEADER + #runtime_bin); a_str(":"); a_nl(); }
+    promote = arm_native && optimize;
+    lazy = promote;
+    promote {
+        live_calc();
+        calls_count();
+        loop_depths();
+        unit_slots(0, n_ops, true);        // the program's own code: all but the methods
+        top_csr = unit_csr;
+        q = 0;
+        * q < n_cst { top_cst_v[q] = cst_v[q]; top_cst_r[q] = cst_r[q]; q = q + 1; }
+        n_top_cst = n_cst;
+        q = 0;                             // (only the slots its operations touch: uslot)
+        * q < n_uslot { top_list[q] = uslot[q]; top_slot[uslot[q]] = unit_reg[uslot[q]]; q = q + 1; }
+        n_top = n_uslot;
+        top_saved = 0;
+    }
+    j = 0;
+    i = 0;
+    m = 0;                                 // the next method
+    * i <= n_ops {
+        lazy && (lab_live(i) || thr_lab[i]) { vs_flush(); pend_flush(live_in[i]); }   // (a way in: before a unit's registers change too)
+        lazy && thr_lab[i] { a_str("Lt"); a_num(i); a_str(":"); a_nl(); }
+        arm_native && m < n_meths && i == meth_lo[m] { unit_k = meth_k[m]; unit_n = meth_slots(unit_k); unit_leaf = false; }
+        promote && m < n_meths && i == meth_lo[m] { unit_slots(meth_lo[m], meth_hi[m], false); }
+        (promote || arm_native) && m < n_meths && i == meth_hi[m] {
+            promote {
+                slots_clear();
+                q = 0;
+                * q < n_top { u = top_list[q]; uslot[q] = u; slot_in[u] = true; unit_reg[u] = top_slot[u]; q = q + 1; }
+                n_uslot = n_top;
+                q = 0;
+                * q < n_top_cst { cst_v[q] = top_cst_v[q]; cst_r[q] = top_cst_r[q]; q = q + 1; }
+                n_cst = n_top_cst;
+                n_saved = top_saved;
+                unit_top = true;
+            }
+            unit_k = -1;
+            unit_n = 0;
+            unit_leaf = false;
+            m = m + 1;
+            promote { unit_csr = top_csr; }
+        }
+        * j < n_binds && lab_op[binds[j]] <= i { arm_bind(binds[j]); j = j + 1; }
+        step = 1;
+        ARM_DEBUG && i < n_ops { a_str("// "); a_num(op_k[i]); a_str(" r"); a_num(op_r[i]); a_str(" v"); a_num(op_v[i]); a_str(" o"); a_num(op_o[i]); a_str(" live "); a_num(live_in[i]); a_nl(); }
+        lazy && i < n_ops { step = arm_lazy(i); }
+        || i < n_ops && arm_native && op_k[i] == OP_CALL { step = arm_call_method(i); }
+        || i < n_ops { arm_op(i); }
+        i = i + step;
+    }
+    lazy { arm_stubs(); }
+    arm_native { native_end(); }
+}
+
+// ---- -native: frame slots in registers ----
+// A unit (the program's code, or a method) may keep its most used frame slots (rbp - 8s) in the
+// registers x19 … x26 that its operations leave free: each one is weighed by its uses, 8 times
+// more for each loop around them. A unit that takes an address in its frame (lea, mov from rbp,
+// rbp as an index's base) keeps them all in memory; an optional's two slots stay in memory. A
+// method saves the registers it takes below its frame and restores them at each return (x86's
+// methods save only rbx, r12 … r15 they use); protected calls keep x19 … x26.
+SLOTS = 4096;
+unit_reg = [0 ; SLOTS];        // slot → its register (0: in memory)
+top_slot = [0 ; SLOTS];        // the program's own
+slot_w = [0 ; SLOTS];
+op_dep = [0 ; 1];
+promote = false;
+n_saved = 0;                   // registers the current method saves, and where (below its frame)
+saved_reg = [0 ; 8];
+top_saved = 0;
+saved_at = 0;
+unit_limit = 0;                // the method's x86 registers (its prologue's pushes)
+
+// how many loops around each operation (a jump back closes one)
+loop_depths() {
+    op_dep = [0 ; n_ops + 1];
+    i = 0;
+    * i < n_ops {
+        op_k[i] == OP_JMP && lab_op[op_o[i]] <= i {
+            op_dep[lab_op[op_o[i]]] = op_dep[lab_op[op_o[i]]] + 1;
+            op_dep[i + 1] = op_dep[i + 1] - 1;
+        }
+        i = i + 1;
+    }
+    d = 0;
+    i = 0;
+    * i <= n_ops { d = d + op_dep[i]; op_dep[i] = d; i = i + 1; }
+}
+
+// an x86 register a local may be in (rbx, r12 … r15) → its ARM one's bit (x19 … x23), or 0
+reg_bit(r = 0) {
+    r == 3 { : 1 << 19; }
+    r >= 12 && r <= 15 { : 1 << (r + 8); }
+    : 0;
+}
+
+// a frame offset's slot: rbp - 8s (s < PBASE); in a method, a parameter at rbp + 16 + 8j is slot
+// PBASE + j. → the slot, -1 if it cannot be one (the unit keeps all in memory), -2 if not a slot
+PBASE = SLOTS - 512;
+unit_top = true;
+slot_of(disp = 0) {
+    disp < 0 {
+        disp % 8 != 0 || -disp / 8 >= PBASE { : -1; }
+        : -disp / 8;
+    }
+    unit_top || disp < 16 { : -2; }
+    (disp - 16) % 8 != 0 || PBASE + (disp - 16) / 8 >= SLOTS { : -1; }
+    : PBASE + (disp - 16) / 8;
+}
+
+// the slot's weight grows by w; base is a register, disp an offset
+slot_use(base = 0, disp = 0, w = 0) {
+    base != R_BP { :; }
+    s = slot_of(disp);
+    s == -1 { promote_off = true; :; }
+    s >= 0 { slot_touch(s); slot_seen(s); }
+    s >= 0 && slot_w[s] >= 0 { slot_w[s] = slot_w[s] + w; }
+}
+
+slot_bad(disp = 0) {
+    s = slot_of(disp);
+    s >= 0 { slot_touch(s); slot_w[s] = -1; }
+}
+
+// slot s is one the unit touches
+slot_touch(s = 0) {
+    !slot_in[s] { slot_in[s] = true; uslot[n_uslot] = s; n_uslot = n_uslot + 1; }
+}
+
+// Registers no call keeps (x1 … x8) hold the slots no call is made while they are live: a slot's
+// operations from its first to its last (slot_lo, slot_hi), widened to every loop that overlaps
+// them (a jump back), and from the method's start for a parameter, must hold no call. They cost no
+// save. calls_upto: the calls before each operation.
+slot_lo = [-1 ; SLOTS];
+slot_hi = [-1 ; SLOTS];
+slot_in = [false ; SLOTS];
+uslot = [0 ; SLOTS];           // the slots the unit touches
+n_uslot = 0;
+top_list = [0 ; SLOTS];        // the program's own, kept while a method's are in use
+n_top = 0;
+cur_op = 0;
+calls_upto = [0 ; 1];
+BACKS = 4096;
+back_t = [0 ; BACKS];          // the unit's jumps back: their target, and where they are
+back_j = [0 ; BACKS];
+n_backs = 0;
+unit_csr = 0;                  // the registers of x1 … x8 its slots took (bits)
+// constants that take more than one instruction, inside loops: a register of x19 … x26 left free
+// holds one for the whole unit, loaded at its start (cst_v, its weight cst_w, its register cst_r)
+CSTS = 64;
+cst_v = [0 ; CSTS];
+cst_w = [0 ; CSTS];
+cst_r = [0 ; CSTS];
+n_cst = 0;
+top_cst_v = [0 ; CSTS];
+top_cst_r = [0 ; CSTS];
+n_top_cst = 0;
+
+// the instructions a_imm takes for v
+imm_cost(v = 0) {
+    n = 0;
+    k = 0;
+    * k < 4 { (v >> (16 * k)) & 0xFFFF != 0 { n = n + 1; } k = k + 1; }
+    n == 0 { : 1; }
+    : n;
+}
+
+cst_note(v = 0, w = 0) {
+    imm_cost(v) < 2 { :; }
+    q = 0;
+    * q < n_cst && cst_v[q] != v { q = q + 1; }
+    q == n_cst {
+        n_cst >= CSTS { :; }
+        cst_v[q] = v;
+        cst_w[q] = 0;
+        cst_r[q] = 0;
+        n_cst = n_cst + 1;
+    }
+    cst_w[q] = cst_w[q] + w;
+}
+
+// the register that holds the constant v in this unit, or 0
+cst_reg(v = 0) {
+    !promote { : 0; }
+    q = 0;
+    * q < n_cst { cst_v[q] == v && cst_r[q] != 0 { : cst_r[q]; } q = q + 1; }
+    : 0;
+}
+top_csr = 0;
+
+slot_seen(s = 0) {
+    slot_lo[s] < 0 || cur_op < slot_lo[s] { slot_lo[s] = cur_op; }
+    cur_op > slot_hi[s] { slot_hi[s] = cur_op; }
+}
+
+op_is_call(i = 0) {
+    k = op_k[i];
+    k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { : true; }
+    : k == OP_CALL_RT && op_v[i] != RT_DIV && op_v[i] != RT_MOD;
+}
+
+calls_count() {
+    calls_upto = [0 ; n_ops + 1];
+    i = 0;
+    * i < n_ops { calls_upto[i + 1] = calls_upto[i]; op_is_call(i) { calls_upto[i + 1] = calls_upto[i] + 1; } i = i + 1; }
+}
+
+// no call while slot s is live (its range widened to the loops around it)
+slot_call_free(s = 0) {
+    lo = slot_lo[s];
+    hi = slot_hi[s];
+    lo < 0 { : false; }
+    changed = true;
+    * changed {
+        changed = false;
+        b = 0;
+        * b < n_backs {
+            back_t[b] <= hi && back_j[b] >= lo && (back_t[b] < lo || back_j[b] > hi) {
+                back_t[b] < lo { lo = back_t[b]; }
+                back_j[b] > hi { hi = back_j[b]; }
+                changed = true;
+            }
+            b = b + 1;
+        }
+    }
+    : calls_upto[hi + 1] - calls_upto[lo] == 0;
+}
+promote_off = false;
+
+// the unit's choice: unit_reg for each slot; lo … hi - 1 its operations (top: those of no method)
+// the slots the last unit touched, back to nothing
+slots_clear() {
+    q = 0;
+    * q < n_uslot { u = uslot[q]; slot_w[u] = 0; unit_reg[u] = 0; slot_lo[u] = -1; slot_hi[u] = -1; slot_in[u] = false; q = q + 1; }
+    n_uslot = 0;
+}
+
+unit_slots(lo = 0, hi = 0, top = false) {
+    unit_top = top;
+    slots_clear();
+    n_backs = 0;
+    unit_csr = 0;
+    n_cst = 0;
+    promote_off = false;
+    used = 0;
+    calls = false;                         // (a leaf: no call in it)
+    leaf_bad = false;
+    m = 0;
+    i = lo;
+    * i < hi {
+        top && m < n_meths && i == meth_lo[m] { i = meth_hi[m]; m = m + 1; }
+        i < hi && !(top && m < n_meths && i == meth_lo[m]) {
+            k = op_k[i];
+            r = op_r[i];
+            v = op_v[i];
+            o = op_o[i];
+            d = op_dep[i];
+            d > 6 { d = 6; }
+            w = 1 << (3 * d);
+            cur_op = i;
+            (k == OP_IMM || k == OP_IMMS || k == OP_IMM64) && lbit(r) != 0 && d > 0 { cst_note(v, w); }
+            (k == OP_CMPI || k == OP_MULI) && d > 0 && (v > 4095 || v < -4095) { cst_note(v, w); }
+            jump = k == OP_JMP || k == OP_JCC || k == OP_JCC8;
+            jump && lab_op[o] <= i && n_backs < BACKS { back_t[n_backs] = lab_op[o]; back_j[n_backs] = i; n_backs = n_backs + 1; }
+            jump && lab_op[o] <= i && n_backs >= BACKS { promote_off = true; }
+            k != OP_XMOV && k != OP_XLD && k != OP_XOP && k != OP_I2F { used = used | reg_bit(r); }
+            k == OP_REG { used = used | reg_bit(v); v == R_BP { promote_off = true; } }
+            k == OP_ALU || k == OP_MULI || k == OP_MUL || k == OP_CMOV || k == OP_XMOV || k == OP_I2F { used = used | reg_bit(o); }
+            k == OP_LDX || k == OP_STX || k == OP_LDBX || k == OP_STBX {
+                used = used | reg_bit(v) | reg_bit(o);
+                v == R_BP || o == R_BP { promote_off = true; }
+            }
+            k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { calls = true; }
+            k == OP_CALL_RT && v == RT_PROTECT && is_prot_block(i) { promote_off = true; }
+            k == OP_CALL_RT && v != RT_DIV && v != RT_MOD { calls = true; }
+            k == OP_LOCAL && o != 0 && v >= 0 { leaf_bad = true; }   // an optional parameter: two slots, in memory
+            k == OP_LOCAL && o == 0 { slot_use(R_BP, v, w); }
+            k == OP_LOCAL && o != 0 { slot_bad(v); slot_bad(v + 8); }
+            k == OP_XLD { slot_use(R_BP, v, w); }
+            k == OP_LD || k == OP_ST || k == OP_CMPM || k == OP_SUBM || k == OP_ADDTOM || k == OP_PUSHM {
+                used = used | reg_bit(o >> 1);
+                slot_use(o >> 1, v, w);
+            }
+            k == OP_LEA { used = used | reg_bit(o >> 1); o >> 1 == R_BP { promote_off = true; } }
+            k == OP_STI || k == OP_ADDIM || k == OP_CMPIM {
+                mb = (o >> 32) >> 1;
+                used = used | reg_bit(mb);
+                slot_use(mb, ((o & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000, w);
+            }
+            i = i + 1;
+        }
+    }
+    // the method's prologue: push rbp ; mov rbp, rsp ; push r … (its x86 registers) ; sub rsp, N
+    unit_limit = 0;
+    !top {
+        j = lo + 2;
+        * j < hi && op_k[j] == OP_PUSH { j = j + 1; unit_limit = unit_limit + 1; }
+    }
+    n_saved = 0;
+    unit_leaf = !top && unit_k >= 0 && in_regs(unit_k) && !calls && !leaf_bad && !promote_off;
+    promote_off { :; }
+    // first the registers no call keeps, for the slots no call crosses (a parameter: from the start)
+    q = 0;
+    * q < n_uslot { u = uslot[q]; u >= PBASE && slot_lo[u] >= 0 { slot_lo[u] = lo; } q = q + 1; }
+    reg = 1;
+    unit_leaf { reg = unit_n + 1; }
+    top { reg = 9; }                       // (the program's own code calls its globals' start, placed at its end:
+                                           // its order is not the order it runs in)
+    * reg <= 8 {
+        best = -1;
+        bw = 7;                            // (inside a loop at least)
+        q = 0;
+        * q < n_uslot {
+            u = uslot[q];
+            w = slot_w[u];
+            u >= PBASE && unit_leaf || u == 0 { w = -1; }
+            w > bw && slot_call_free(u) { best = u; bw = w; }
+            q = q + 1;
+        }
+        best >= 0 {
+            unit_reg[best] = reg;
+            slot_w[best] = -1;
+            unit_csr = unit_csr | (1 << reg);
+        }
+        reg = reg + 1;
+    }
+    // the registers free, the heaviest slots first (weight 3 or more: a register saved costs two)
+    reg = 19;
+    * reg <= 26 {
+        used & (1 << reg) == 0 {
+            best = -1;
+            bw = 2;
+            q = 0;
+            * q < n_uslot {
+                u = uslot[q];
+                w = slot_w[u];
+                u >= PBASE { w = w - 1; }       // a parameter: also loaded at the start
+                u >= PBASE && unit_leaf || u == 0 { w = -1; }   // a leaf's: in x1 … x8 already
+                w > bw { best = u; bw = w; }
+                q = q + 1;
+            }
+            best >= 0 {
+                unit_reg[best] = reg;
+                slot_w[best] = -1;
+                used = used | (1 << reg);
+                !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
+            }
+        }
+        reg = reg + 1;
+    }
+    // the registers still free: the heaviest constants (in a loop: weight 8 or more; a method saves it)
+    reg = 19;
+    * reg <= 26 {
+        used & (1 << reg) == 0 {
+            best = -1;
+            bw = 15;
+            !top { bw = 31; }
+            q = 0;
+            * q < n_cst { cst_r[q] == 0 && cst_w[q] > bw { best = q; bw = cst_w[q]; } q = q + 1; }
+            best >= 0 {
+                cst_r[best] = reg;
+                used = used | (1 << reg);
+                !top { saved_reg[n_saved] = reg; n_saved = n_saved + 1; }
+            }
+        }
+        reg = reg + 1;
+    }
+}
+
+// the register of the slot at [base + disp], or 0
+pslot(base = 0, disp = 0) {
+    unit_leaf && base == R_BP && disp >= 16 && (disp - 16) % 8 == 0 && (disp - 16) / 8 < unit_n { : unit_n - (disp - 16) / 8; }   // x1 … x8
+    !promote || base != R_BP { : 0; }
+    s = slot_of(disp);
+    s < 0 { : 0; }
+    : unit_reg[s];
+}
+
+// ---- -native: values kept where they are, until they are needed ----
+// The operations keep x86's model: a value goes into rax or rcx (x9, x10) before each use. Here (with
+// promote), a constant, or a local in a register, loaded into rax, rcx, rdx, rsi or rdi is not copied
+// at once: it waits (pend_k, pend_v), and the operations that read that register read it where it is
+// (cmp x24, #1000; ldr x9, [x25, #8]). It is copied only where it is still needed (live) at a label,
+// a jump's target or an operation that reads registers this does not follow. live_in: for each
+// operation, which of rax, rcx, rdx, rsi, rdi and the flags it, or an operation after it, reads
+// before writing (x86's meaning of each operation); a comparison whose 0 or 1 is only tested by a
+// jump becomes the jump on its condition (cmp ; b.lt), and a test of a register before a jump cbz/cbnz.
+L_AX = 1;
+L_CX = 2;
+L_DX = 4;
+L_SI = 8;
+L_DI = 16;
+L_FL = 32;
+L_ALL = 63;
+live_in = [0 ; 1];
+at_lab = [0 ; 1];              // 1: a label is bound before the operation (or a method starts or ends)
+op_rd = 0;                     // op_rw's answer
+op_wr = 0;
+pend_k = [0 ; 16];             // by x86 register: 0 nothing waits, 1 an ARM register, 2 a constant
+pend_v = [0 ; 16];
+lazy = false;
+ARM_DEBUG = false;              // each operation as a comment (k, r, v, o, live_in) before its text
+// pushes of values waiting (a constant, or a register no operation writes before the pop) are kept
+// here and become values waiting at their pop: push rax … pop rcx is no memory at all; anything that
+// touches the stack (or a jump, a label, a call) pushes them for real first
+VS = 64;
+vs_k = [0 ; VS];
+vs_v = [0 ; VS];
+n_vs = 0;
+// the jumps to a runtime error that need values still waiting go through a stub (Le<n>), at the end
+STUBS = 1 << 16;
+stub_rt = [0 ; 1];
+stub_k = [0 ; 1];
+stub_v = [0 ; 1];
+n_stubs = 0;
+
+// the bit of an x86 register (0 for the others: never dead, never waiting)
+lbit(r = 0) {
+    r == R_AX { : L_AX; }
+    r == R_CX { : L_CX; }
+    r == R_DX { : L_DX; }
+    r == R_SI { : L_SI; }
+    r == R_DI { : L_DI; }
+    : 0;
+}
+
+// the registers (bits) operation i reads and writes, as x86 means it → op_rd, op_wr
+op_rw(i = 0) {
+    k = op_k[i];
+    r = op_r[i];
+    v = op_v[i];
+    o = op_o[i];
+    lr = lbit(r);
+    b = lbit(o >> 1);
+    mb = lbit((o >> 32) >> 1);
+    op_rd = 0;
+    op_wr = 0;
+    k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO || k == OP_LEA_CONST || k == OP_LEA_FWD || k == OP_RMOVX || k == OP_POP { op_wr = lr; :; }
+    k == OP_LOCAL || k == OP_GLOBAL { op_wr = lr; o == 1 { op_wr = lr | L_DX; } :; }
+    k == OP_REG { op_rd = lbit(v); op_wr = lr; :; }
+    k == OP_F2I { op_wr = lr | L_FL; :; }
+    k == OP_CMP_SET { op_rd = L_AX | L_CX; op_wr = L_AX | L_FL; :; }
+    k == OP_CMP { op_rd = L_AX | L_CX; op_wr = L_FL; :; }
+    k == OP_FCMP_SET { op_wr = L_AX | L_CX | L_FL; :; }
+    k == OP_ALU || k == OP_MUL { op_rd = lr | lbit(o); op_wr = lr | L_FL; :; }
+    k == OP_MULI { op_rd = lbit(o); op_wr = lr | L_FL; :; }
+    k == OP_ADDI || k == OP_SHRI || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG { op_rd = lr; op_wr = lr | L_FL; :; }
+    k == OP_SHL || k == OP_SAR { op_rd = lr | L_CX; op_wr = lr | L_FL; :; }
+    k == OP_CMPI || k == OP_TEST { op_rd = lr; op_wr = L_FL; :; }
+    k == OP_SETCC { op_rd = L_FL; op_wr = lr; :; }
+    k == OP_CMOV { op_rd = L_FL | lr | lbit(o); op_wr = lr; :; }
+    k == OP_ZXB { op_rd = lr; op_wr = lr; :; }
+    k == OP_LD || k == OP_LEA { op_rd = b; op_wr = lr; :; }
+    k == OP_ST || k == OP_ADDTOM { op_rd = b | lr; k == OP_ADDTOM { op_wr = L_FL; } :; }
+    k == OP_CMPM { op_rd = b | lr; op_wr = L_FL; :; }
+    k == OP_SUBM { op_rd = b | lr; op_wr = lr | L_FL; :; }
+    k == OP_PUSHM { op_rd = b; :; }
+    k == OP_STI { op_rd = mb; :; }
+    k == OP_ADDIM || k == OP_CMPIM { op_rd = mb; op_wr = L_FL; :; }
+    k == OP_LDX || k == OP_LDBX { op_rd = lbit(v) | lbit(o); op_wr = lr; :; }
+    k == OP_STX || k == OP_STBX { op_rd = lbit(v) | lbit(o) | lr; :; }
+    k == OP_PUSH || k == OP_PREFETCH { op_rd = lr; :; }
+    k == OP_XMOV || k == OP_I2F { op_rd = lbit(o); :; }
+    k == OP_JCC || k == OP_JCC8 { op_rd = L_FL; :; }
+    k == OP_JCC_RT { op_rd = L_FL | L_AX | L_CX; o != RT_ERROR_INDEX { op_rd = L_ALL; } :; }
+    k == OP_CALL_RT {
+        op_rd = rt_reads(v);
+        op_wr = L_AX | L_DX | L_FL;
+        v == RT_READ_AT { op_wr = op_wr | L_CX; }
+        :;
+    }
+    k == OP_CALL { op_wr = L_ALL; :; }        // a method: its arguments on the stack; it leaves no register
+    k == OP_CCALL || k == OP_CCALL32 { op_wr = L_ALL; :; }   // a C function: its arguments on the stack
+    k == OP_EPILOGUE { op_rd = L_AX | L_DX; :; }   // a method's result
+    k == OP_CALL_FWD || k == OP_RET { op_rd = L_ALL; :; }
+    // OP_JMP, OP_STACK, OP_FRAME, OP_ALIGN, OP_PUSHI, OP_XLD, OP_XOP: none of them
+}
+
+// the registers a routine of the C runtime reads (macos/native/rt.c)
+rt_reads(rt = 0) {
+    rt == RT_ALLOC { : L_CX; }
+    rt == RT_ARRAY_REP { : L_CX | L_DX; }
+    rt == RT_EXIT { : L_DI; }
+    rt == RT_ERROR { : L_SI; }
+    rt == RT_ERR_TEXT || rt == RT_READ_BYTE { : 0; }
+    rt == RT_PRINT_INT || rt == RT_PRINT_BOOL || rt == RT_PRINT_STR || rt == RT_ERROR_INT || rt == RT_ERROR_BOOL || rt == RT_ERROR_STR { : L_AX; }
+    rt == RT_WRITE_BYTE || rt == RT_INT_TEXT || rt == RT_TEXT || rt == RT_FAIL || rt == RT_READ_FILE || rt == RT_READ_FILE_OPT { : L_AX; }
+    rt == RT_SLEEP || rt == RT_SYSCALL || rt == RT_FD_CLOSE || rt == RT_NET_ACCEPT || rt == RT_PROF_START { : L_AX; }
+    rt == RT_PRINT_INT_OPT || rt == RT_PRINT_BOOL_OPT || rt == RT_PRINT_STR_OPT { : L_AX | L_DX; }
+    rt == RT_ERROR_INT_OPT || rt == RT_ERROR_BOOL_OPT || rt == RT_ERROR_STR_OPT || rt == RT_UNPROTECT { : L_AX | L_DX; }
+    rt == RT_TRUNCATE || rt == RT_TRUNCATE_NS { : L_AX | L_DX; }
+    rt == RT_DIV || rt == RT_MOD || rt == RT_CONCAT || rt == RT_CONCAT_INT || rt == RT_STR_EQUAL || rt == RT_ARRAY_CONCAT { : L_AX | L_CX; }
+    rt == RT_WRITE_FILE || rt == RT_APPEND_FILE || rt == RT_JSON_END || rt == RT_LINES || rt == RT_FD_READ || rt == RT_FD_SEND { : L_AX | L_CX; }
+    rt == RT_NET_LISTEN || rt == RT_NET_CONNECT || rt == RT_ERROR_INDEX { : L_AX | L_CX; }
+    rt == RT_PUT || rt == RT_READ_AT || rt == RT_REC_PARSE || rt == RT_SUB || rt == RT_WRITE_AT || rt == RT_WRITE_AT_NS { : L_AX | L_CX | L_DX; }
+    : L_ALL;
+}
+
+// what is live after operation i (its successors' live_in)
+live_out_of(i = 0) {
+    k = op_k[i];
+    out = 0;
+    k != OP_JMP && k != OP_RET && k != OP_EPILOGUE { out = live_in[i + 1]; }
+    k == OP_JMP || k == OP_JCC || k == OP_JCC8 { out = out | live_in[lab_op[op_o[i]]]; }
+    : out;
+}
+
+// live_in of every operation (backwards, again until nothing changes: the loops), and at_lab
+live_calc() {
+    live_in = [0 ; n_ops + 1];
+    live_in[n_ops] = L_ALL;
+    changed = true;
+    * changed {
+        changed = false;
+        i = n_ops - 1;
+        * i >= 0 {
+            op_rw(i);
+            n = op_rd | (live_out_of(i) & (L_ALL ^ op_wr));
+            n != live_in[i] { live_in[i] = n; changed = true; }
+            i = i - 1;
+        }
+    }
+    at_lab = [0 ; n_ops + 1];
+    j = 0;
+    * j < n_binds { at_lab[lab_op[binds[j]]] = 1; j = j + 1; }
+    m = 0;
+    * m < n_meths { at_lab[meth_lo[m]] = 1; at_lab[meth_hi[m]] = 1; m = m + 1; }
+    // the jumps to each operation's labels (a label of another kind, or an address taken, for good)
+    refs_at = [0 ; n_ops + 1];
+    threaded_at = [0 ; n_ops + 1];
+    thr_lab = [false ; n_ops + 1];
+    i = 0;
+    * i < n_ops {
+        k = op_k[i];
+        k == OP_JMP || k == OP_JCC || k == OP_JCC8 { refs_at[lab_op[op_o[i]]] = refs_at[lab_op[op_o[i]]] + 1; }
+        k == OP_LEA_FWD || k == OP_CALL_FWD { refs_at[lab_op[op_v[i]]] = refs_at[lab_op[op_v[i]]] + 1000; }
+        i = i + 1;
+    }
+    j = 0;
+    * j < n_binds { lab_kind[binds[j]] == LAB_METHOD || lab_kind[binds[j]] == LAB_CALLED { refs_at[lab_op[binds[j]]] = refs_at[lab_op[binds[j]]] + 1000; } j = j + 1; }
+    m = 0;
+    * m < n_meths { refs_at[meth_lo[m]] = refs_at[meth_lo[m]] + 1000; refs_at[meth_hi[m]] = refs_at[meth_hi[m]] + 1000; m = m + 1; }
+    stub_rt = [0 ; STUBS];
+    stub_k = [0 ; STUBS * 8];
+    stub_v = [0 ; STUBS * 8];
+    n_stubs = 0;
+}
+
+// x86 register r's value into it, if it waits
+pend_fix(r = 0) {
+    pend_k[r] == 1 && pend_v[r] != a_rn(r) { a_ins("mov "); a_reg(r); a_str(", "); a_x(pend_v[r]); a_nl(); }
+    pend_k[r] == 2 { a_imm(a_rn(r), pend_v[r]); }
+    pend_k[r] = 0;
+}
+
+// every value waiting: into its register where live (bits) says it is needed, else dropped
+pend_flush(live = 0) {
+    r = 0;
+    * r < 8 {
+        pend_k[r] != 0 { (lbit(r) & live) != 0 { pend_fix(r); } || { pend_k[r] = 0; } }
+        r = r + 1;
+    }
+}
+
+// before a jump to operation t: the values waiting that are live there, into their registers
+pend_to(t = 0) {
+    r = 0;
+    * r < 8 {
+        pend_k[r] != 0 && (lbit(r) & live_in[t]) != 0 { pend_fix(r); }
+        r = r + 1;
+    }
+}
+
+// the ARM register n is about to be written: the values waiting in it, into their registers
+pend_clobber(n = 0) {
+    q = 0;
+    * q < n_vs { vs_k[q] == 1 && vs_v[q] == n { vs_flush(); } q = q + 1; }
+    r = 0;
+    * r < 8 {
+        pend_k[r] == 1 && pend_v[r] == n { pend_fix(r); }
+        r = r + 1;
+    }
+}
+
+// a register of x0 … x7 no push kept nor value waiting is in → its number, or -1
+scratch_free() {
+    x = 0;
+    * x < 8 {
+        busy = false;
+        q = 0;
+        * q < n_vs { vs_k[q] == 1 && vs_v[q] == x { busy = true; } q = q + 1; }
+        r = 0;
+        * r < 8 { pend_k[r] == 1 && pend_v[r] == x { busy = true; } r = r + 1; }
+        unit_leaf && x >= 1 && x <= unit_n { busy = true; }
+        (unit_csr >> x) & 1 != 0 { busy = true; }
+        !busy { : x; }
+        x = x + 1;
+    }
+    : -1;
+}
+
+// the pushes kept, made
+vs_flush() {
+    q = 0;
+    * q < n_vs {
+        vs_k[q] == 1 { a_push(vs_v[q]); } || { a_imm(14, vs_v[q]); a_push(14); }   // (x14: x16, x17 may hold a result being made)
+        q = q + 1;
+    }
+    n_vs = 0;
+}
+
+// operation i does not touch the program's stack (x28) nor jump: the pushes kept can wait
+vs_safe(i = 0) {
+    k = op_k[i];
+    k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO || k == OP_LOCAL || k == OP_GLOBAL { : true; }
+    k == OP_LEA_CONST || k == OP_ALU || k == OP_ADDI || k == OP_MUL || k == OP_MULI || k == OP_CMP || k == OP_CMPI { : true; }
+    k == OP_TEST || k == OP_SETCC || k == OP_XMOV || k == OP_I2F || k == OP_XLD || k == OP_XOP || k == OP_RMOVX || k == OP_PREFETCH { : true; }
+    k == OP_SHRI || k == OP_NEG || k == OP_NOT || k == OP_NOTB || k == OP_FNEG || k == OP_ZXB || k == OP_F2I || k == OP_FCMP_SET { : true; }
+    k == OP_JCC_RT && op_o[i] == RT_ERROR_INDEX { : true; }
+    k == OP_CALL_RT && (op_v[i] == RT_DIV || op_v[i] == RT_MOD) { : true; }
+    k == OP_CMP_SET && !fused_jump(i) { : true; }
+    k == OP_REG { : op_v[i] != R_SP; }
+    k == OP_LD || k == OP_ST || k == OP_LEA || k == OP_CMPM || k == OP_SUBM || k == OP_ADDTOM || k == OP_PUSHM { : (op_o[i] >> 1) != R_SP && k != OP_PUSHM; }
+    k == OP_LDX || k == OP_STX || k == OP_LDBX || k == OP_STBX { : op_v[i] != R_SP && op_o[i] != R_SP; }
+    k == OP_STI || k == OP_ADDIM || k == OP_CMPIM { : ((op_o[i] >> 32) >> 1) != R_SP; }
+    : false;
+}
+
+// the register a result of operation i for r goes into: a local's own, when i + 1 only stores r
+// there (no label between) → that register, and skip = 1; else r's
+skip = 0;
+dest_of(i = 0, r = 0) {
+    skip = 0;
+    lbit(r) == 0 || i + 1 >= n_ops || lab_live(i + 1) { : a_rn(r); }
+    op_k[i + 1] != OP_ST || op_r[i + 1] != r { : a_rn(r); }
+    p = pslot(op_o[i + 1] >> 1, op_v[i + 1]);
+    p == 0 { : a_rn(r); }
+    skip = 1;
+    : p;
+}
+
+// the result of an operation for r is in d (dest_of): r's value waits there
+dest_done(r = 0, d = 0) {
+    pend_k[r] = 0;
+    d != a_rn(r) { pend_k[r] = 1; pend_v[r] = d; }
+}
+
+// before writing d, after reading the operands: what waits in d into its register (r's old value
+// is gone)
+dest_clear(r = 0, d = 0) {
+    lbit(r) != 0 { pend_k[r] = 0; }
+    pend_clobber(d);
+}
+
+// a value to store: the zero register for a 0 waiting
+srcz(r = 0) {
+    pend_k[r] == 2 && pend_v[r] == 0 { : 31; }
+    : srcr(r);
+}
+
+// the ARM register that holds x86 register r's value now (a constant waiting goes into r)
+srcr(r = 0) {
+    pend_k[r] == 1 { : pend_v[r]; }
+    pend_k[r] == 2 { pend_fix(r); }
+    : a_rn(r);
+}
+
+// a constant that fits an add, sub or cmp (12 bits) waits in r
+pend_small(r = 0) { : pend_k[r] == 2 && pend_v[r] >= 0 && pend_v[r] <= 4095; }
+
+// cmp x<a>, v
+a_cmp_imm(a = 0, v = 0) {
+    v >= 0 && v <= 4095 { a_ins("cmp "); a_x(a); a_str(", #"); a_num(v); a_nl(); :; }
+    v < 0 && v >= -4095 { a_ins("cmn "); a_x(a); a_str(", #"); a_num(-v); a_nl(); :; }
+    cst_reg(v) > 0 { a_ins("cmp "); a_x(a); a_str(", "); a_x(cst_reg(v)); a_nl(); :; }
+    a_imm(17, v);
+    a_ins("cmp "); a_x(a); a_str(", x17"); a_nl();
+}
+
+// cmp rax, rcx, from where their values are
+a_cmp_ax_cx() {
+    pend_k[R_CX] == 2 { a_cmp_imm(srcr(R_AX), pend_v[R_CX]); :; }
+    a = srcr(R_AX);
+    c = srcr(R_CX);
+    a_ins("cmp "); a_x(a); a_str(", "); a_x(c); a_nl();
+}
+
+// a load or store at [x<b> + off] (b an ARM register)
+a_ldst_n(store = false, t = 0, size = 8, b = 0, off = 0) {
+    m = "ldr";
+    store { m = "str"; }
+    off >= 0 && off <= 4095 * size && off % size == 0 {
+        a_ins(m);
+    } || off >= -256 && off <= 255 {
+        store { a_ins("stur"); } || { a_ins("ldur"); }
+    } || {
+        off >= -4095 && off <= 4095 { a_add_imm(15, b, off); } || {
+            a_imm(15, off);
+            a_ins("add x15, "); a_x(b); a_str(", x15"); a_nl();
+        }
+        b = 15;
+        off = 0;
+        a_ins(m);
+    }
+    size == 1 { a_str("b "); a_w(t); } || { a_str(" "); a_x(t); }
+    a_str(", ["); a_x(b);
+    off != 0 { a_str(", #"); a_num(off); }
+    a_str("]"); a_nl();
+}
+
+// a label some jump still reaches is bound before operation j (one whose every jump was threaded,
+// below, is not: only the way before it gets there)
+refs_at = [0 ; 1];
+threaded_at = [0 ; 1];
+thr_lab = [false ; 1];         // a jump threaded to operation j: its label Lt<j>
+lab_live(j = 0) { : at_lab[j] != 0 && refs_at[j] > threaded_at[j]; }
+
+// A jump to label l on which rax is known to be 0 or not (the jump of `cmp ; cset ; test ; jcc`, or
+// of `test ; jcc`) where l is `test rax ; jcc M` (the end of && or ||) need not test it again: it goes
+// on to M, or past that jump (Lt<j+2>). → whether it can (thread_ok), and then thread() its target
+thread_to = -1;                // the label to jump to (-1: Lt<thread_op>)
+thread_op = 0;
+thread_ok(l = 0, i = 0) {
+    j = lab_op[l];
+    j <= i + 2 || j + 2 > n_ops { : false; }
+    op_k[j] != OP_TEST || op_r[j] != R_AX { : false; }
+    op_k[j + 1] != OP_JCC && op_k[j + 1] != OP_JCC8 { : false; }
+    op_v[j + 1] != CC_E && op_v[j + 1] != CC_NE { : false; }
+    lab_live(j + 1) { : false; }
+    : (live_out_of(j + 1) & (L_AX | L_CX | L_FL)) == 0;
+}
+
+thread(l = 0, nonzero = false) {
+    j = lab_op[l];
+    threaded_at[j] = threaded_at[j] + 1;
+    (op_v[j + 1] == CC_NE) == nonzero {
+        thread_to = op_o[j + 1];
+        thread_op = lab_op[thread_to];
+    } || {
+        thread_to = -1;
+        thread_op = j + 2;
+        thr_lab[j + 2] = true;
+    }
+}
+
+// b.<cc> to label l, on which rax is (nonzero) or not 0: threaded when it can be
+a_jump_known(cc = "", l = 0, i = 0, nonzero = false) {
+    !thread_ok(l, i) { a_jump(cc, l); :; }
+    thread(l, nonzero);
+    pend_to(thread_op);
+    a_ins("b."); a_str(cc); a_str(" "); a_thread_target(); a_nl();
+}
+
+a_thread_target() {
+    thread_to >= 0 { a_label(thread_to); :; }
+    a_str("Lt"); a_num(thread_op);
+}
+
+// operation i at the end of a comparison whose 0 or 1 a test and a jump only look at: i + 1 tests
+// rax, i + 2 jumps if it is 0 or not, no label between, and rax and the flags dead after — or dead
+// on the way on, the jump threaded past its target's own test
+fused_jump(i = 0) {
+    i + 2 >= n_ops { : false; }
+    op_k[i + 1] != OP_TEST || op_r[i + 1] != R_AX { : false; }
+    op_k[i + 2] != OP_JCC && op_k[i + 2] != OP_JCC8 { : false; }
+    op_v[i + 2] != CC_E && op_v[i + 2] != CC_NE { : false; }
+    lab_live(i + 1) || lab_live(i + 2) { : false; }
+    (live_out_of(i + 2) & (L_AX | L_CX | L_FL)) == 0 { : true; }
+    : (live_in[i + 3] & (L_AX | L_CX | L_FL)) == 0 && thread_ok(op_o[i + 2], i);
+}
+
+// b.<cc> to label l (the values live there into their registers first)
+a_jump(cc = "", l = 0) {
+    pend_to(lab_op[l]);
+    a_ins("b."); a_str(cc); a_str(" "); a_label(l); a_nl();
+}
+
+// ARM's opposite condition
+a_not_cond(c = "") {
+    c == "gt" { : "le"; }
+    c == "le" { : "gt"; }
+    c == "ge" { : "lt"; }
+    : "ge";
+}
+
+// operation i, with the values waiting → how many operations it took (1; 2 or 3 when it took the
+// test and jump after it, or the store of its result)
+arm_lazy(i = 0) {
+    k = op_k[i];
+    r = op_r[i];
+    v = op_v[i];
+    o = op_o[i];
+    lr = lbit(r);
+    n_vs > 0 && !vs_safe(i) && k != OP_PUSH && k != OP_POP && k != OP_CALL { vs_flush(); }
+    // a constant, or a local in a register, into a register: it waits
+    lr != 0 && (k == OP_IMM || k == OP_IMM64 || k == OP_IMMS || k == OP_ZERO) {
+        pend_k[r] = 0;
+        (live_out_of(i) & lr) != 0 { pend_k[r] = 2; pend_v[r] = v; k == OP_ZERO { pend_v[r] = 0; } }
+        pend_k[r] == 2 && cst_reg(v) > 0 { pend_k[r] = 1; pend_v[r] = cst_reg(v); }   // in its register
+        : 1;
+    }
+    p = 0;
+    k == OP_LOCAL && o == 0 { p = pslot(R_BP, v); }
+    k == OP_LD { p = pslot(o >> 1, v); }
+    k == OP_REG && (v == R_BX || v >= 12) { p = a_rn(v); }
+    lr != 0 && p > 0 && (k == OP_LOCAL || k == OP_LD || k == OP_REG) {
+        pend_k[r] = 0;
+        (live_out_of(i) & lr) != 0 { pend_k[r] = 1; pend_v[r] = p; }
+        : 1;
+    }
+    lr != 0 && k == OP_REG && lbit(v) != 0 && pend_k[v] != 0 {
+        pend_k[r] = pend_k[v];
+        pend_v[r] = pend_v[v];
+        : 1;
+    }
+    lr != 0 && k == OP_REG && lbit(v) != 0 {   // one of the five into another: a mov
+        t = srcr(v);
+        dest_clear(r, a_rn(r));
+        t != a_rn(r) { a_ins("mov "); a_reg(r); a_str(", "); a_x(t); a_nl(); }
+        : 1;
+    }
+    lr == 0 && k == OP_REG && (r == R_BX || r >= 12) && lbit(v) != 0 {   // into a local kept in rbx, r12 …
+        d = a_rn(r);
+        pend_k[v] == 2 { pend_clobber(d); a_imm(d, pend_v[v]); : 1; }
+        t = srcz(v);
+        pend_clobber(d);
+        t != d { a_ins("mov "); a_x(d); a_str(", "); a_x(t); a_nl(); }
+        : 1;
+    }
+    // a method's start: its return address and rbp, as two pushes would leave them
+    k == OP_PUSH && r == R_BP && meth_entry {
+        meth_entry = false;
+        a_line("stp x29, x30, [x28, #-16]!");
+        : 1;
+    }
+    // pushes and pops of values waiting
+    k == OP_PUSH && (pend_k[r] != 0 || r == R_BX || r >= 12) && n_vs < VS {
+        pend_k[r] != 0 { vs_k[n_vs] = pend_k[r]; vs_v[n_vs] = pend_v[r]; } || { vs_k[n_vs] = 1; vs_v[n_vs] = a_rn(r); }
+        n_vs = n_vs + 1;
+        : 1;
+    }
+    k == OP_POP && lr != 0 && n_vs > 0 {
+        n_vs = n_vs - 1;
+        pend_k[r] = vs_k[n_vs];
+        pend_v[r] = vs_v[n_vs];
+        : 1;
+    }
+    // a value computed: into a free register of x0 … x7 (nothing between reaches C or a method)
+    k == OP_PUSH && lr != 0 && n_vs < VS && scratch_free() >= 0 {
+        x = scratch_free();
+        a_ins("mov "); a_x(x); a_str(", "); a_reg(r); a_nl();
+        vs_k[n_vs] = 1;
+        vs_v[n_vs] = x;
+        n_vs = n_vs + 1;
+        : 1;
+    }
+    (k == OP_PUSH || k == OP_POP) && n_vs > 0 { vs_flush(); }
+    k == OP_PUSH { a_push(srcr(r)); : 1; }
+    k == OP_PREFETCH { a = srcr(r); a_ins("prfm pldl1keep, ["); a_x(a); a_str("]"); a_nl(); : 1; }
+    k == OP_POP && lr != 0 { pend_k[r] = 0; a_pop(a_rn(r)); : 1; }
+    // a comparison and the jump on it
+    k == OP_CMP_SET && fused_jump(i) {
+        a_cmp_ax_cx();
+        pend_k[R_AX] = 0;
+        cc = v;
+        op_v[i + 2] == CC_E { cc = cc ^ 1; }
+        a_jump_known(a_cond(cc), op_o[i + 2], i, op_v[i + 2] == CC_NE);
+        : 3;
+    }
+    k == OP_FCMP_SET && (v == '<' || v == '>' || v == T_LE || v == T_GE) && fused_jump(i) {
+        v == '<' || v == T_LE { a_line("fcmp d1, d0"); } || { a_line("fcmp d0, d1"); }
+        c = "ge";
+        v == '<' || v == '>' { c = "gt"; }
+        op_v[i + 2] == CC_E { c = a_not_cond(c); }
+        pend_k[R_AX] = 0;
+        pend_k[R_CX] = 0;
+        a_jump_known(c, op_o[i + 2], i, op_v[i + 2] == CC_NE);
+        : 3;
+    }
+    k == OP_CMP_SET {
+        a_cmp_ax_cx();
+        pend_k[R_AX] = 0;
+        a_ins("cset x9, "); a_str(a_cond(v)); a_nl();
+        : 1;
+    }
+    k == OP_CMP { a_cmp_ax_cx(); : 1; }
+    k == OP_CMPI { a_cmp_imm(srcr(r), v); : 1; }
+    k == OP_TEST && i + 1 < n_ops && !lab_live(i + 1) && (op_k[i + 1] == OP_JCC || op_k[i + 1] == OP_JCC8)
+            && (op_v[i + 1] == CC_E || op_v[i + 1] == CC_NE) && (live_out_of(i + 1) & L_FL) == 0 {
+        a = srcr(r);
+        vs_flush();
+        th = r == R_AX && thread_ok(op_o[i + 1], i - 1);
+        th { thread(op_o[i + 1], op_v[i + 1] == CC_NE); pend_to(thread_op); } || { pend_to(lab_op[op_o[i + 1]]); }
+        op_v[i + 1] == CC_E { a_ins("cbz "); } || { a_ins("cbnz "); }
+        a_x(a); a_str(", ");
+        th { a_thread_target(); } || { a_label(op_o[i + 1]); }
+        a_nl();
+        : 2;
+    }
+    k == OP_TEST { a = srcr(r); a_ins("tst "); a_x(a); a_str(", "); a_x(a); a_nl(); : 1; }
+    k == OP_JCC || k == OP_JCC8 { a_jump(a_cond(v), o); : 1; }
+    k == OP_JMP {
+        pend_to(lab_op[o]);
+        a_ins("b "); a_label(o); a_nl();
+        pend_flush(0);
+        : 1;
+    }
+    k == OP_JCC_RT && o == RT_ERROR_INDEX && pend_k[R_AX] == 0 && pend_k[R_CX] == 0 { arm_op(i); : 1; }
+    k == OP_JCC_RT && o == RT_ERROR_INDEX {
+        a_ins("b."); a_str(a_cond(v)); a_str(" ");
+        a_stub(o);
+        : 1;
+    }
+    // division: sdiv (x86's idiv, but INT_MIN / -1 gives INT_MIN and the rest 0, as the runtime does);
+    // by zero: the runtime's routine, for its error
+    // by a power of 2: shifts, rounding towards 0 as idiv does (a negative a gets 2^k - 1 first)
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) && (live_out_of(i) & L_DX) == 0
+            && pend_k[R_CX] == 2 && pend_v[R_CX] > 1 && (pend_v[R_CX] & (pend_v[R_CX] - 1)) == 0 {
+        cv = pend_v[R_CX];
+        kk = 0;
+        * (1 << kk) < cv { kk = kk + 1; }
+        a = srcr(R_AX);
+        d = dest_of(i, R_AX);
+        sk = skip;
+        a_ins("asr x16, "); a_x(a); a_str(", #63"); a_nl();
+        a_ins("add x16, "); a_x(a); a_str(", x16, lsr #"); a_num(64 - kk); a_nl();
+        dest_clear(R_AX, d);
+        v == RT_DIV { a_ins("asr "); a_x(d); a_str(", x16, #"); a_num(kk); a_nl(); }
+        || {
+            a_ins("and x16, x16, #0x"); a_hex(0 - cv); a_nl();
+            a_ins("sub "); a_x(d); a_str(", "); a_x(a); a_str(", x16"); a_nl();
+        }
+        dest_done(R_AX, d);
+        pend_k[R_DX] = 0;
+        : 1 + sk;
+    }
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD) && (live_out_of(i) & L_DX) == 0 {
+        a = srcr(R_AX);
+        c = 0;
+        pend_k[R_CX] == 2 && pend_v[R_CX] != 0 { a_imm(17, pend_v[R_CX]); c = 17; }
+        c == 0 {
+            pend_k[R_AX] == 0 && pend_k[R_CX] == 0 {
+                rt_used[v / 5] = true;
+                a_ins("cbz x10, Lrt"); a_num(v); a_nl();
+                c = 10;
+            } || {
+                c = srcr(R_CX);
+                a_ins("cbz "); a_x(c); a_str(", ");
+                a_stub(v);
+            }
+        }
+        d = dest_of(i + 0, R_AX);
+        sk = skip;
+        v == RT_DIV {
+            dest_clear(R_AX, d);
+            a_ins("sdiv "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl();
+        } || {
+            a_ins("sdiv x16, "); a_x(a); a_str(", "); a_x(c); a_nl();
+            dest_clear(R_AX, d);
+            a_ins("msub "); a_x(d); a_str(", x16, "); a_x(c); a_str(", "); a_x(a); a_nl();
+        }
+        dest_done(R_AX, d);
+        pend_k[R_DX] = 0;
+        : 1 + sk;
+    }
+    // arithmetic: from where the values are, into r (or straight into the local it is stored in)
+    k == OP_ALU && (v == ALU_ADD || v == ALU_SUB || v == ALU_AND || v == ALU_OR || v == ALU_XOR) {
+        m = "eor ";
+        v == ALU_ADD { m = "add "; }
+        v == ALU_SUB { m = "sub "; }
+        v == ALU_AND { m = "and "; }
+        v == ALU_OR { m = "orr "; }
+        a = srcr(r);
+        imm = (v == ALU_ADD || v == ALU_SUB) && pend_small(o);
+        c = 0;
+        !imm { c = srcr(o); }
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        imm { a_ins(m); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(pend_v[o]); a_nl(); }
+        || { a_ins(m); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl(); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_ADDI {
+        a = srcr(r);
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        a_add_imm(d, a, v);
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    // a constant factor: in x17 (not in rax), a power of 2: a shift
+    k == OP_MUL || k == OP_MULI {
+        a = 0;
+        c = 17;
+        cv = 0;
+        known = false;                     // a constant factor (cv, any sign) goes into x17
+        k == OP_MULI { cv = v; known = true; a = srcr(o); }
+        k == OP_MUL && pend_k[r] == 2 { cv = pend_v[r]; known = true; a = srcr(o); }
+        k == OP_MUL && !known && pend_k[o] == 2 { cv = pend_v[o]; known = true; a = srcr(r); }
+        k == OP_MUL && !known { a = srcr(r); c = srcr(o); }
+        kk = -1;
+        cv > 0 && (cv & (cv - 1)) == 0 { kk = 0; * (1 << kk) < cv { kk = kk + 1; } }
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        kk >= 0 {
+            a_ins("lsl "); a_x(d); a_str(", "); a_x(a); a_str(", #"); a_num(kk); a_nl();
+        } || {
+            known && cst_reg(cv) > 0 { c = cst_reg(cv); known = false; }
+            known { a_imm(17, cv); }
+            a_ins("mul "); a_x(d); a_str(", "); a_x(a); a_str(", "); a_x(c); a_nl();
+        }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    // memory: addresses and values from where they are
+    k == OP_LDBX && pend_k[o] == 2 && pend_v[o] >= 0 && pend_v[o] <= 4095 {   // [base + a small constant]
+        bn = srcr(v);
+        off = pend_v[o];
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        a_ins("ldrb "); a_w(d); a_str(", ["); a_x(bn); off != 0 { a_str(", #"); a_num(off); } a_str("]"); a_nl();
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_LDX || k == OP_LDBX {
+        bn = srcr(v);
+        xn = srcr(o);
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        k == OP_LDX { a_ins("ldr "); a_x(d); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str(", lsl #3]"); a_nl(); }
+        || { a_ins("ldrb "); a_w(d); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str("]"); a_nl(); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_STX || k == OP_STBX {
+        bn = srcr(v);
+        xn = srcr(o);
+        t = srcz(r);
+        k == OP_STX { a_ins("str "); a_x(t); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str(", lsl #3]"); a_nl(); }
+        || { a_ins("strb "); a_w(t); a_str(", ["); a_x(bn); a_str(", "); a_x(xn); a_str("]"); a_nl(); }
+        : 1;
+    }
+    lr != 0 && (k == OP_LD || ((k == OP_LOCAL || k == OP_GLOBAL) && o == 0)) {
+        b = o >> 1;
+        k == OP_LOCAL { b = R_BP; }
+        k == OP_GLOBAL { b = R_ABS; }
+        bn = -1;                           // (x0 is a register a value may wait in)
+        lbit(b) != 0 { bn = srcr(b); }
+        d = dest_of(i, r);
+        sk = skip;
+        dest_clear(r, d);
+        bn >= 0 { a_ldst_n(false, d, 8, bn, v); } || { a_ldst(false, d, 8, b, v); }
+        dest_done(r, d);
+        : 1 + sk;
+    }
+    k == OP_ST {
+        p = pslot(o >> 1, v);
+        p > 0 {
+            pend_k[r] == 2 { pend_clobber(p); a_imm(p, pend_v[r]); : 1; }
+            t = srcz(r);
+            pend_clobber(p);
+            t != p { a_ins("mov "); a_x(p); a_str(", "); a_x(t); a_nl(); }
+            : 1;
+        }
+        t = 0;
+        pend_k[r] == 2 && pend_v[r] != 0 { a_imm(16, pend_v[r]); t = 16; } || { t = srcz(r); }
+        lbit(o >> 1) != 0 { a_ldst_n(true, t, 8, srcr(o >> 1), v); : 1; }
+        a_ldst(true, t, 8, o >> 1, v);
+        : 1;
+    }
+    k == OP_CMPM && lbit(o >> 1) != 0 && pslot(o >> 1, v) == 0 {
+        a = srcr(r);
+        a_ldst_n(false, 16, 8, srcr(o >> 1), v);
+        a_ins("cmp "); a_x(a); a_str(", x16"); a_nl();
+        : 1;
+    }
+    // loads that read no register waiting
+    lr != 0 && (k == OP_LOCAL || k == OP_GLOBAL || k == OP_LEA_CONST || k == OP_RMOVX || k == OP_F2I) {
+        pend_k[r] = 0;
+        o == 1 && (k == OP_LOCAL || k == OP_GLOBAL) { pend_k[R_DX] = 0; }
+        arm_op(i);
+        : 1;
+    }
+    k == OP_SETCC && lr != 0 { pend_k[r] = 0; a_ins("cset "); a_reg(r); a_str(", "); a_str(a_cond(v)); a_nl(); : 1; }
+    k == OP_FCMP_SET { pend_k[R_AX] = 0; pend_k[R_CX] = 0; arm_op(i); : 1; }
+    k == OP_XMOV { a = srcr(o); a_ins("fmov d"); a_num(r); a_str(", "); a_x(a); a_nl(); : 1; }
+    k == OP_I2F { a = srcr(o); a_ins("scvtf d"); a_num(r); a_str(", "); a_x(a); a_nl(); : 1; }
+    k == OP_XLD || k == OP_XOP || k == OP_ALIGN { arm_op(i); : 1; }
+    k == OP_CALL && arm_native { pend_flush(live_in[i]); : arm_call_method(i); }
+    // the others: every value live there into its register first, and the pushes kept made
+    n_vs > 0 { vs_flush(); }
+    pend_flush(live_in[i]);
+    arm_op(i);
+    : 1;
+}
+
+// the jump's target (after "b.<cc> " or "cbz x<n>, "): the runtime's routine rt, through a stub that
+// puts rax's and rcx's values waiting into them
+a_stub(rt = 0) {
+    n_stubs >= STUBS { error("too many checks for -native"); }
+    stub_rt[n_stubs] = rt;
+    q = 0;
+    * q < 2 { stub_k[n_stubs * 8 + q] = pend_k[q]; stub_v[n_stubs * 8 + q] = pend_v[q]; q = q + 1; }
+    rt_used[rt / 5] = true;
+    a_str("Le"); a_num(n_stubs); a_nl();
+    n_stubs = n_stubs + 1;
+}
+
+// the stubs: the values a runtime error needs, then the error
+arm_stubs() {
+    s = 0;
+    * s < n_stubs {
+        a_str("Le"); a_num(s); a_str(":"); a_nl();
+        q = 0;
+        * q < 2 { pend_k[q] = stub_k[s * 8 + q]; pend_v[q] = stub_v[s * 8 + q]; pend_fix(q); q = q + 1; }
+        a_ins("b Lrt"); a_num(stub_rt[s]); a_nl();
+        s = s + 1;
+    }
+}
+
+// ---- -native: a whole program for the C runtime (macos/native/rt.c) ----
+// The conventions of the text stay those of -arm (x28 is the program's stack, of 8-byte slots,
+// which the runtime allocates: the code builds arrays on it); a routine of the runtime is
+// _nh_<its name>(rax, rcx, rdx, rsi, rdi, the stack) → {rax, rdx}, reached through Lrt<n>.
+
+native_start() {
+    a_line(".text");
+    a_line(".p2align 2");
+    a_line(".globl _main");
+    a_str("_main:"); a_nl();
+    a_line("stp x29, x30, [sp, #-16]!");
+    a_line("mov x29, sp");
+    a_line("adrp x16, Lbase_sp@PAGE");    // the sp of the program's code (protected calls restore it)
+    a_line("mov x17, sp");
+    a_line("str x17, [x16, Lbase_sp@PAGEOFF]");
+    a_line("mov x0, #0");                 // the program's stack: 256 MiB (pages come when touched)
+    a_line("mov x1, #268435456");
+    a_line("mov x2, #3");
+    a_line("mov x3, #4098");              // MAP_PRIVATE | MAP_ANON
+    a_line("mov x4, #-1");
+    a_line("mov x5, #0");
+    a_line("bl _mmap");
+    a_line("cmn x0, #1");
+    a_line("b.eq Lno_stack");
+    a_line("mov x16, #268435456");
+    a_line("add x0, x0, x16");
+    a_line("sub x0, x0, #64");
+    a_line("adrp x16, Lstack_top@PAGE");
+    a_line("str x0, [x16, Lstack_top@PAGEOFF]");
+    a_line("mov x28, x0");
+    a_line("mov x29, x0");
+    a_line("adrp x27, _nh_globals@PAGE");
+    a_line("add x27, x27, _nh_globals@PAGEOFF");
+    a_line("b Lprogram");
+    a_str("Lno_stack:"); a_nl();
+    a_line("mov x0, #2");
+    a_line("bl __exit");
+    // for the runtime (src1/native.nihil), as C functions: the sp of the program's code, its stack's
+    // top, the globals, and x19 … x28 (the collector's roots)
+    a_str("_nh_base_sp:"); a_nl();
+    a_line("adrp x0, Lbase_sp@PAGE");
+    a_line("ldr x0, [x0, Lbase_sp@PAGEOFF]");
+    a_line("ret");
+    a_str("_nh_stack_top:"); a_nl();
+    a_line("adrp x0, Lstack_top@PAGE");
+    a_line("ldr x0, [x0, Lstack_top@PAGEOFF]");
+    a_line("ret");
+    a_str("_nh_globals_start:"); a_nl();
+    a_line("adrp x0, _nh_globals@PAGE");
+    a_line("add x0, x0, _nh_globals@PAGEOFF");
+    a_line("ret");
+    a_str("_nh_globals_bytes:"); a_nl();
+    a_line("adrp x0, _nh_globals_size@PAGE");
+    a_line("ldr x0, [x0, _nh_globals_size@PAGEOFF]");
+    a_line("ret");
+    a_str("_nh_regs:"); a_nl();
+    a_line("stp x19, x20, [x0]");
+    a_line("stp x21, x22, [x0, #16]");
+    a_line("stp x23, x24, [x0, #32]");
+    a_line("stp x25, x26, [x0, #48]");
+    a_line("stp x27, x28, [x0, #64]");
+    a_line("ret");
+    // nh_resume(record, sp): back where a protected call resumes, after a runtime error in it
+    // (native.nihil: x28, x29, where, x19 … x26 as the call had them), with rax and rdx 0
+    a_line(".globl _nh_resume");
+    a_str("_nh_resume:"); a_nl();
+    a_line("mov sp, x1");
+    a_line("ldp x28, x29, [x0]");
+    a_line("ldr x16, [x0, #16]");
+    a_line("ldp x19, x20, [x0, #24]");
+    a_line("ldp x21, x22, [x0, #40]");
+    a_line("ldp x23, x24, [x0, #56]");
+    a_line("ldp x25, x26, [x0, #72]");
+    a_line("mov x9, #0");
+    a_line("mov x11, #0");
+    a_line("br x16");
+    a_str("Lprogram:"); a_nl();
+}
+
+native_end() {
+    // the routines reached by a jump (an error: index, division by zero): their registers pushed as
+    // the arguments of their methods (src1/native.nihil)
+    rt = 0;
+    * rt < 64 {
+        rt_used[rt] && rt_meth[rt] >= 0 {    // reached by a jump (an error): its method, which does not return
+            n = rt * 5;
+            a_str("Lrt"); a_num(n); a_str(":"); a_nl();
+            rd = rt_reads(n);
+            in_regs(rt_meth[rt]) { arm_args_regs(rd); }
+            || {
+                rd & L_AX != 0 { a_push(9); }
+                rd & L_CX != 0 { a_push(10); }
+                rd & L_DX != 0 { a_push(11); }
+                rd & L_SI != 0 { a_push(12); }
+                rd & L_DI != 0 { a_push(13); }
+            }
+            a_ins("bl Lm"); a_num(rt_meth[rt]); a_nl();
+            a_line("brk #1");
+        } || rt_used[rt] {
+            error("internal error: -native: a routine of the runtime with no method in src1/native.nihil");
+        }
+        rt = rt + 1;
+    }
+    // the constants
+    a_line(".data");
+    a_line(".p2align 4");
+    a_str("Lconst:"); a_nl();
+    i = 0;
+    * i < size_const {
+        a_ins(".byte "); 
+        j = 0;
+        * j < 16 && i < size_const {
+            j > 0 { a_str(","); }
+            a_num(cst[i] & 255);
+            i = i + 1;
+            j = j + 1;
+        }
+        a_nl();
+    }
+    a_line(".p2align 3");
+    a_str("Lbase_sp:"); a_nl();
+    a_line(".quad 0");
+    a_str("Lstack_top:"); a_nl();
+    a_line(".quad 0");
+    a_line(".globl _nh_globals");
+    a_line(".globl _nh_globals_size");
+    a_line(".p2align 3");
+    a_str("_nh_globals_size:"); a_nl();
+    a_ins(".quad "); a_num(n_globals * 8 + 16); a_nl();
+    a_ins(".zerofill __DATA,__bss,_nh_globals,"); a_num(n_globals * 8 + 16); a_str(",4"); a_nl();
+}
+
+// a routine's method in the runtime written in Nihil (src1/native.nihil)
+rt_name(rt = 0) {
+    rt == RT_DIV { : "__nihil_rt_div"; }
+    rt == RT_MOD { : "__nihil_rt_mod"; }
+    rt == RT_PRINT_INT { : "__nihil_rt_print_int"; }
+    rt == RT_PRINT_BOOL { : "__nihil_rt_print_bool"; }
+    rt == RT_PRINT_STR { : "__nihil_rt_print_str"; }
+    rt == RT_EXIT { : "__nihil_rt_exit"; }
+    rt == RT_ERROR { : "__nihil_rt_error"; }
+    rt == RT_ALLOC { : "__nihil_rt_alloc"; }
+    rt == RT_ARRAY_REP { : "__nihil_rt_array_rep"; }
+    rt == RT_ERROR_INDEX { : "__nihil_rt_error_index"; }
+    rt == RT_WRITE_BYTE { : "__nihil_rt_write_byte"; }
+    rt == RT_READ_BYTE { : "__nihil_rt_read_byte"; }
+    rt == RT_STR_EQUAL { : "__nihil_rt_str_equal"; }
+    rt == RT_ERROR_INT { : "__nihil_rt_error_int"; }
+    rt == RT_ERROR_BOOL { : "__nihil_rt_error_bool"; }
+    rt == RT_ERROR_STR { : "__nihil_rt_error_str"; }
+    rt == RT_READ_FILE { : "__nihil_rt_read_file"; }
+    rt == RT_TEXT { : "__nihil_rt_text"; }
+    rt == RT_PRINT_INT_OPT { : "__nihil_rt_print_int_opt"; }
+    rt == RT_PRINT_BOOL_OPT { : "__nihil_rt_print_bool_opt"; }
+    rt == RT_PRINT_STR_OPT { : "__nihil_rt_print_str_opt"; }
+    rt == RT_ERROR_INT_OPT { : "__nihil_rt_error_int_opt"; }
+    rt == RT_ERROR_BOOL_OPT { : "__nihil_rt_error_bool_opt"; }
+    rt == RT_ERROR_STR_OPT { : "__nihil_rt_error_str_opt"; }
+    rt == RT_READ_FILE_OPT { : "__nihil_rt_read_file_opt"; }
+    rt == RT_CONCAT { : "__nihil_rt_concat"; }
+    rt == RT_SLEEP { : "__nihil_rt_sleep"; }
+    rt == RT_WRITE_FILE { : "__nihil_rt_write_file"; }
+    rt == RT_APPEND_FILE { : "__nihil_rt_append_file"; }
+    rt == RT_READ_AT { : "__nihil_rt_read_at"; }
+    rt == RT_WRITE_AT { : "__nihil_rt_write_at"; }
+    rt == RT_WRITE_AT_NS { : "__nihil_rt_write_at_ns"; }
+    rt == RT_TRUNCATE { : "__nihil_rt_truncate"; }
+    rt == RT_TRUNCATE_NS { : "__nihil_rt_truncate_ns"; }
+    rt == RT_INT_TEXT { : "__nihil_rt_int_text"; }
+    rt == RT_ARRAY_CONCAT { : "__nihil_rt_array_concat"; }
+    rt == RT_NET_LISTEN { : "__nihil_rt_net_listen"; }
+    rt == RT_NET_ACCEPT { : "__nihil_rt_net_accept"; }
+    rt == RT_FD_READ { : "__nihil_rt_fd_read"; }
+    rt == RT_FD_SEND { : "__nihil_rt_fd_send"; }
+    rt == RT_FD_CLOSE { : "__nihil_rt_fd_close"; }
+    rt == RT_SYSCALL { : "__nihil_rt_syscall"; }
+    rt == RT_JSON_END { : "__nihil_rt_json_end"; }
+    rt == RT_SUB { : "__nihil_rt_sub"; }
+    rt == RT_PUT { : "__nihil_rt_put"; }
+    rt == RT_REC_PARSE { : "__nihil_rt_rec_parse"; }
+    rt == RT_LINES { : "__nihil_rt_lines"; }
+    rt == RT_NET_CONNECT { : "__nihil_rt_net_connect"; }
+    rt == RT_PROTECT { : "__nihil_rt_protect"; }
+    rt == RT_UNPROTECT { : "__nihil_rt_unprotect"; }
+    rt == RT_ERR_TEXT { : "__nihil_rt_err_text"; }
+    rt == RT_FAIL { : "__nihil_rt_fail"; }
+    rt == RT_CONCAT_INT { : "__nihil_rt_concat_int"; }
+    rt == RT_PROF_START { : "__nihil_rt_prof_start"; }
+    : "__nihil_rt_unknown";
+}
+
+// the operation i
+arm_op(i = 0) {
+    k = op_k[i];
+    r = op_r[i];
+    v = op_v[i];
+    o = op_o[i];
+    k == OP_LOCAL && o == 0 && pslot(R_BP, v) > 0 { a_ins("mov "); a_reg(r); a_str(", "); a_x(pslot(R_BP, v)); a_nl(); :; }
+    k >= OP_IMM && k <= OP_REG { arm_load(k, r, v, o); :; }
+    k == OP_CMP_SET { arm_cmp_set(v); :; }
+    k == OP_CMP { a_line("cmp x9, x10"); :; }
+    k == OP_CALL_RT && arm_native && (v == RT_DIV || v == RT_MOD) {   // sdiv (by 0: the routine's error)
+        rt_used[v / 5] = true;
+        a_ins("cbz x10, Lrt"); a_num(v); a_nl();
+        v == RT_DIV { a_line("sdiv x9, x9, x10"); } || { a_line("sdiv x16, x9, x10"); a_line("msub x9, x16, x10, x9"); }
+        :;
+    }
+    k == OP_CALL_RT && o > 0 { arm_call_nihil(v, o - 1, i); :; }
+    k == OP_CALL_RT { arm_call_rt(v); :; }
+    k == OP_CCALL || k == OP_CCALL32 {
+        n = r & 255;
+        fixed = (r >> 8) - 1;              // -1: no variable arguments
+        j = n;
+        * j > 0 { j = j - 1; a_pop(j); }   // the last argument is on top
+        nv = 0;
+        fixed >= 0 { nv = n - fixed; }
+        room = 16 * ((nv + 1) / 2);
+        room > 0 {
+            a_ins("sub sp, sp, #"); a_num(room); a_nl();
+            j = 0;
+            * j < nv { a_ins("str "); a_x(fixed + j); a_str(", [sp, #"); a_num(8 * j); a_str("]"); a_nl(); j = j + 1; }
+        }
+        a_ins("bl _"); q = 0; * q < o { a_byte(source[v + q]); q = q + 1; } a_nl();
+        room > 0 { a_ins("add sp, sp, #"); a_num(room); a_nl(); }
+        k == OP_CCALL32 { a_line("sxtw x9, w0"); } || { a_line("mov x9, x0"); }
+        :;
+    }
+    k == OP_ALU { arm_alu(v, r, o); :; }
+    k == OP_PUSH { a_push(a_rn(r)); :; }
+    k == OP_POP { a_pop(a_rn(r)); :; }
+    k == OP_ZERO { a_imm(a_rn(r), 0); :; }
+    k == OP_STACK { arm_stack(v); :; }
+    k == OP_LEA_CONST { arm_lea_const(r, v); :; }
+    k == OP_CALL { a_ins("bl Lm"); a_num(v); a_nl(); :; }
+    k == OP_RET { a_pop(30); a_line("ret"); :; }
+    // [base + disp]: o = base * 2 + wide, v = disp
+    b = o >> 1;
+    p = 0;
+    k == OP_LOCAL && o == 0 || k == OP_XLD { p = pslot(R_BP, v); }
+    k == OP_LD || k == OP_ST || k == OP_CMPM || k == OP_SUBM || k == OP_ADDTOM || k == OP_PUSHM { p = pslot(b, v); }
+    mb = (o >> 32) >> 1;
+    md = ((o & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000;
+    k == OP_STI || k == OP_ADDIM || k == OP_CMPIM { p = pslot(mb, md); }
+    p > 0 {
+        k == OP_LOCAL || k == OP_LD { a_ins("mov "); a_reg(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_ST { a_ins("mov "); a_x(p); a_str(", "); a_reg(r); a_nl(); :; }
+        k == OP_CMPM { a_ins("cmp "); a_reg(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_SUBM { a_ins("sub "); a_reg(r); a_str(", "); a_reg(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_ADDTOM { a_ins("add "); a_x(p); a_str(", "); a_x(p); a_str(", "); a_reg(r); a_nl(); :; }
+        k == OP_PUSHM { a_push(p); :; }
+        k == OP_XLD { a_ins("fmov d"); a_num(r); a_str(", "); a_x(p); a_nl(); :; }
+        k == OP_STI { a_imm(p, v); :; }
+        k == OP_ADDIM { a_add_imm(p, p, v); :; }
+        k == OP_CMPIM { a_imm(17, v); a_ins("cmp "); a_x(p); a_str(", x17"); a_nl(); :; }
+    }
+    k == OP_LD { a_ldst(false, a_rn(r), 8, b, v); :; }
+    k == OP_ST { a_ldst(true, a_rn(r), 8, b, v); :; }
+    k == OP_LEA { a_add_imm(a_rn(r), a_rn(b), v); :; }
+    k == OP_CMPM { a_ldst(false, 16, 8, b, v); a_ins("cmp "); a_reg(r); a_str(", x16"); a_nl(); :; }
+    k == OP_SUBM { a_ldst(false, 16, 8, b, v); a_ins("sub "); a_reg(r); a_str(", "); a_reg(r); a_str(", x16"); a_nl(); :; }
+    k == OP_ADDTOM { a_ldst(false, 16, 8, b, v); a_ins("add x16, x16, "); a_reg(r); a_nl(); a_ldst(true, 16, 8, b, v); :; }
+    k == OP_PUSHM { a_ldst(false, 16, 8, b, v); a_push(16); :; }
+    // [base + index (* 8)]: v = base, o = index
+    k == OP_LDX { a_ins("ldr "); a_reg(r); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str(", lsl #3]"); a_nl(); :; }
+    k == OP_STX { a_ins("str "); a_reg(r); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str(", lsl #3]"); a_nl(); :; }
+    k == OP_LDBX { a_ins("ldrb "); a_w(a_rn(r)); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str("]"); a_nl(); :; }
+    k == OP_STBX { a_ins("strb "); a_w(a_rn(r)); a_str(", ["); a_reg(v); a_str(", "); a_reg(o); a_str("]"); a_nl(); :; }
+    // qword [base + disp] with a constant v: o = mem_o(base, disp, wide) (mb, md)
+    k == OP_STI { a_imm(16, v); a_ldst(true, 16, 8, mb, md); :; }
+    k == OP_ADDIM { a_ldst(false, 16, 8, mb, md); a_add_imm(16, 16, v); a_ldst(true, 16, 8, mb, md); :; }
+    k == OP_CMPIM { a_ldst(false, 16, 8, mb, md); a_imm(17, v); a_line("cmp x16, x17"); :; }
+    k == OP_PUSHI { a_imm(16, v); a_push(16); :; }
+    k == OP_ADDI { a_add_imm(a_rn(r), a_rn(r), v); :; }
+    k == OP_CMPI { a_imm(17, v); a_ins("cmp "); a_reg(r); a_str(", x17"); a_nl(); :; }
+    k == OP_MULI { a_imm(17, v); a_ins("mul "); a_reg(r); a_str(", "); a_reg(o); a_str(", x17"); a_nl(); :; }
+    k == OP_MUL { a_rrr("mul ", r, r, o); :; }
+    k == OP_SHRI { a_ins("lsr "); a_reg(r); a_str(", "); a_reg(r); a_str(", #"); a_num(v); a_nl(); :; }
+    k == OP_SHL { a_rrr("lsl ", r, r, R_CX); :; }
+    k == OP_SAR { a_rrr("asr ", r, r, R_CX); :; }
+    k == OP_NEG { a_rr("neg ", r, r); :; }
+    k == OP_NOT { a_rr("mvn ", r, r); :; }
+    k == OP_NOTB { a_ins("eor "); a_reg(r); a_str(", "); a_reg(r); a_str(", #1"); a_nl(); :; }
+    k == OP_FNEG { a_imm(16, 1 << 63); a_ins("eor "); a_reg(r); a_str(", "); a_reg(r); a_str(", x16"); a_nl(); :; }
+    k == OP_TEST { a_rr("tst ", r, r); :; }
+    k == OP_SETCC { a_ins("cset "); a_reg(r); a_str(", "); a_str(a_cond(v)); a_nl(); :; }
+    k == OP_CMOV { a_ins("csel "); a_reg(r); a_str(", "); a_reg(o); a_str(", "); a_reg(r); a_str(", "); a_str(a_cond(v)); a_nl(); :; }
+    k == OP_JCC || k == OP_JCC8 { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label(o); a_nl(); :; }
+    k == OP_JMP { a_ins("b "); a_label(o); a_nl(); :; }
+    k == OP_IMM64 || k == OP_IMMS { a_imm(a_rn(r), v); :; }
+    k == OP_XMOV { a_ins("fmov d"); a_num(r); a_str(", "); a_reg(o); a_nl(); :; }
+    k == OP_RMOVX { a_ins("fmov "); a_reg(r); a_str(", d"); a_num(o); a_nl(); :; }
+    k == OP_XLD { a_ldst(false, 16, 8, R_BP, v); a_ins("fmov d"); a_num(r); a_str(", x16"); a_nl(); :; }
+    k == OP_XOP { arm_xop(v, r, o); :; }
+    k == OP_I2F { a_ins("scvtf d"); a_num(r); a_str(", "); a_reg(o); a_nl(); :; }
+    k == OP_F2I { arm_f2i(r, o); :; }
+    k == OP_FCMP_SET { arm_fcmp_set(v); :; }
+    k == OP_ZXB { a_ins("and "); a_reg(r); a_str(", "); a_reg(r); a_str(", #0xff"); a_nl(); :; }
+    k == OP_LEA_FWD {
+        a_ins("adrp "); a_reg(r); a_str(", "); a_label(v); a_str("@PAGE"); a_nl();
+        a_ins("add "); a_reg(r); a_str(", "); a_reg(r); a_str(", "); a_label(v); a_str("@PAGEOFF"); a_nl();
+        :;
+    }
+    k == OP_FRAME {
+        arm_stack(-v - 8 * n_saved);
+        saved_at = -8 * unit_limit - v;    // below the frame: x29 + saved_at - 8 (j + 1)
+        j = 0;
+        * j < n_saved { a_ldst_x(true, saved_reg[j], saved_at - 8 * (j + 1)); j = j + 1; }
+        q = 0;                             // the parameters in registers: loaded once
+        * promote && !unit_top && q < n_uslot {
+            u = uslot[q];
+            u >= PBASE && unit_reg[u] != 0 { a_ldst_x(false, unit_reg[u], 16 + 8 * (u - PBASE)); }
+            q = q + 1;
+        }
+        q = 0;                             // the constants in registers
+        * promote && q < n_cst { cst_r[q] != 0 { a_imm(cst_r[q], cst_v[q]); } q = q + 1; }
+        :;
+    }
+    k == OP_CALL_FWD { a_ins("bl "); a_label(v); a_nl(); :; }
+    k == OP_ALIGN { :; }
+    k == OP_PREFETCH { a_ins("prfm pldl1keep, ["); a_reg(r); a_str("]"); a_nl(); :; }
+    k == OP_JCC_RT && arm_native { rt_used[o / 5] = true; a_ins("b."); a_str(a_cond(v)); a_str(" Lrt"); a_num(o); a_nl(); :; }
+    k == OP_JCC_RT { a_ins("b."); a_str(a_cond(v)); a_str(" "); a_label_rt(o); a_nl(); :; }
+    k == OP_EPILOGUE {
+        j = 0;
+        * j < n_saved { a_ldst_x(false, saved_reg[j], saved_at - 8 * (j + 1)); j = j + 1; }
+        arm_epilogue(v);
+        :;
+    }
+    error("internal error: an operation with no ARM64 text");
+}
+
+// ---- each operation ----
+
+// r ← (k, v) (OP_IMM, OP_LOCAL, OP_GLOBAL, OP_REG); o = 1: an optional, its presence into rdx too
+arm_load(k = 0, r = 0, v = 0, o = 0) {
+    k == OP_IMM { a_imm(a_rn(r), v); :; }
+    k == OP_REG { a_rn(r) != a_rn(v) { a_rr("mov ", r, v); } :; }
+    base = R_BP;
+    k == OP_GLOBAL { base = R_ABS; }
+    a_ldst(false, a_rn(r), 8, base, v);
+    o == 1 { a_ldst(false, a_rn(R_DX), 8, base, v + 8); }
+}
+
+arm_cmp_set(cc = 0) {
+    a_line("cmp x9, x10");
+    a_ins("cset x9, "); a_str(a_cond(cc)); a_nl();
+}
+
+arm_alu(alu = 0, r = 0, s = 0) {
+    alu == ALU_ADD { a_rrr("add ", r, r, s); :; }
+    alu == ALU_SUB { a_rrr("sub ", r, r, s); :; }
+    alu == ALU_AND { a_rrr("and ", r, r, s); :; }
+    alu == ALU_OR { a_rrr("orr ", r, r, s); :; }
+    a_rrr("eor ", r, r, s);
+}
+
+// ---- -native: the runtime's routines written in Nihil (src1/native.nihil: __nihil_rt_<name>) ----
+// A routine with such a method is called as a method: the registers it reads (rax, rcx, rdx, rsi,
+// rdi, in that order) are its arguments, pushed; its result comes back in rax (and rdx). rcx, rsi
+// and rdi, which the routines of x86 keep, are kept around it when live after.
+RT_METHS = 64;
+rt_meth = [-2 ; RT_METHS];                 // the method of each routine (by rt / 5), -1: none, -2: not looked up
+rt_meth_pass = -1;
+
+rt_method(rt = 0) {
+    n_passes != rt_meth_pass {              // each pass makes its symbols again
+        rt_meth_pass = n_passes;
+        u = 0;
+        RT_METHS { rt_meth[u] = -2; u = u + 1; }
+    }
+    j = rt / 5;
+    rt_meth[j] == -2 {
+        k = lookup_text(rt_name(rt));
+        k >= 0 && s_flags[k] & FLAG_METHOD == 0 { k = -1; }
+        rt_meth[j] = k;
+    }
+    k = rt_meth[j];
+    k >= 0 { note_call(k); }
+    : k;
+}
+
+// the registers a routine reads (rd: rax, rcx, rdx, rsi, rdi, in that order) into x1 … x5
+arm_args_regs(rd = 0) {
+    a = 1;
+    rd & L_AX != 0 { a_ins("mov "); a_x(a); a_str(", x9"); a_nl(); a = a + 1; }
+    rd & L_CX != 0 { a_ins("mov "); a_x(a); a_str(", x10"); a_nl(); a = a + 1; }
+    rd & L_DX != 0 { a_ins("mov "); a_x(a); a_str(", x11"); a_nl(); a = a + 1; }
+    rd & L_SI != 0 { a_ins("mov "); a_x(a); a_str(", x12"); a_nl(); a = a + 1; }
+    rd & L_DI != 0 { a_ins("mov "); a_x(a); a_str(", x13"); a_nl(); a = a + 1; }
+}
+
+arm_call_nihil(rt = 0, k = 0, i = 0) {
+    rt == RT_PROTECT { a_line("mov x16, x28"); }   // the stack as the protected call has it
+    keep = L_CX | L_SI | L_DI;
+    lazy { keep = keep & live_out_of(i); }
+    rt == RT_READ_AT { keep = keep & (L_ALL ^ L_CX); }
+    keep & L_CX != 0 { a_push(10); }
+    keep & L_SI != 0 { a_push(12); }
+    keep & L_DI != 0 { a_push(13); }
+    rd = rt_reads(rt);
+    n = 0;
+    rt == RT_PROTECT {                     // where to resume, x28, x29, x19 … x26
+        a_push(9); a_push(16); a_push(29);
+        j = 19;
+        * j <= 26 { a_push(j); j = j + 1; }
+        n = 11;
+        rd = 0;
+    }
+    regs = in_regs(k) && rt != RT_PROTECT;
+    regs { arm_args_regs(rd); }
+    || {
+        rd & L_AX != 0 { a_push(9); n = n + 1; }
+        rd & L_CX != 0 { a_push(10); n = n + 1; }
+        rd & L_DX != 0 { a_push(11); n = n + 1; }
+        rd & L_SI != 0 { a_push(12); n = n + 1; }
+        rd & L_DI != 0 { a_push(13); n = n + 1; }
+    }
+    a_ins("bl Lm"); a_num(k); a_nl();
+    !regs { arm_stack(8 * n); }
+    keep & L_DI != 0 { a_pop(13); }
+    keep & L_SI != 0 { a_pop(12); }
+    keep & L_CX != 0 { a_pop(10); }
+    rt == RT_READ_AT || rt == RT_UNPROTECT {   // its other results, in globals of native.nihil
+        a_ldst(false, 11, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_dx")]);
+    }
+    rt == RT_READ_AT { a_ldst(false, 10, 8, R_ABS, g_addr[lookup_text("__nihil_rt_ret_cx")]); }
+}
+
+arm_call_rt(rt = 0) {
+    arm_native { error("internal error: -native: a routine of the runtime with no method in src1/native.nihil"); }
+    a_ins("bl "); a_label_rt(rt); a_str("_c"); a_nl();
+}
+
+arm_lea_const(r = 0, c = 0) {
+    n = a_rn(r);
+    a_ins("adrp "); a_x(n); a_str(", Lconst@PAGE"); a_nl();
+    a_ins("add "); a_x(n); a_str(", "); a_x(n); a_str(", Lconst@PAGEOFF"); a_nl();
+    c != 0 { a_add_imm(n, n, c); }
+}
+
+arm_stack(n = 0) { arm_native && n == 0 { :; } a_add_imm(28, 28, n); }
+
+// the frame's size, known at the end (put_frame), goes into its operation (op_v): the frames open
+FRAMES = 16;
+frame_pos = [0 ; FRAMES];
+frame_op = [0 ; FRAMES];
+n_frames = 0;
+
+arm_frame(pos = 0, i_op = 0) {
+    i = 0;
+    * i < n_frames && frame_pos[i] != pos { i = i + 1; }
+    i == n_frames {
+        n_frames >= FRAMES { error("internal error: too many open frames"); }
+        n_frames = n_frames + 1;
+    }
+    frame_pos[i] = pos;
+    frame_op[i] = i_op;
+}
+
+arm_put_frame(pos = 0, size = 0) {
+    i = 0;
+    * i < n_frames && frame_pos[i] != pos { i = i + 1; }
+    i == n_frames { :; }
+    j = frame_op[i];
+    j < n_ops && op_k[j] == OP_FRAME && op_end[j] == pos + 4 { op_v[j] = size; }   // (unless it was cut back)
+    n_frames = n_frames - 1;               // closed: its place goes to the last one open
+    frame_pos[i] = frame_pos[n_frames];
+    frame_op[i] = frame_op[n_frames];
+}
+
+arm_epilogue(n = 0) {
+    n == 0 {
+        a_line("mov x28, x29");
+    } || {
+        a_add_imm(28, 29, -8 * n);
+        i = n;
+        * i > 0 { i = i - 1; a_pop(a_rn(REGS[i])); }
+    }
+    arm_native { a_line("ldp x29, x30, [x28], #16"); } || { a_pop(29); a_pop(30); }
+    unit_k >= 0 && in_regs(unit_k) && !unit_leaf && unit_n > 0 { arm_stack(8 * unit_n); }   // its arguments
+    a_line("ret");
+}
+
+// cvttsd2si: x86 gives the smallest INT for NaN and out of range; ARM saturates (0 for NaN)
+arm_f2i(r = 0, x = 0) {
+    n = a_rn(r);
+    a_ins("fcvtzs "); a_x(n); a_str(", d"); a_num(x); a_nl();
+    a_imm(16, 1 << 63);
+    a_imm(17, (1 << 63) - 1);
+    a_ins("cmp "); a_x(n); a_str(", x17"); a_nl();
+    a_ins("csel "); a_x(n); a_str(", x16, "); a_x(n); a_str(", eq"); a_nl();
+    a_ins("fcmp d"); a_num(x); a_str(", d"); a_num(x); a_nl();
+    a_ins("csel "); a_x(n); a_str(", x16, "); a_x(n); a_str(", vs"); a_nl();
+}
+
+arm_fcmp_set(t = 0) {
+    t == '<' || t == T_LE { a_line("fcmp d1, d0"); } || { a_line("fcmp d0, d1"); }
+    t == '>' || t == '<' { a_line("cset x9, gt"); :; }
+    t == T_GE || t == T_LE { a_line("cset x9, ge"); :; }
+    t == T_EQ {
+        a_line("cset x9, eq");
+        a_line("cset x10, vc");
+        a_line("and x9, x9, x10");
+        :;
+    }
+    a_line("cset x9, ne");
+    a_line("cset x10, vs");
+    a_line("orr x9, x9, x10");
+}
+
+arm_xop(xop = 0, x = 0, y = 0) {
+    xop == XOP_ADD { a_ins("fadd d"); }
+    xop == XOP_SUB { a_ins("fsub d"); }
+    xop == XOP_MUL { a_ins("fmul d"); }
+    xop == XOP_DIV { a_ins("fdiv d"); }
+    a_num(x); a_str(", d"); a_num(x); a_str(", d"); a_num(y); a_nl();
+}

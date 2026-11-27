@@ -1,0 +1,1741 @@
+// =============================================================================
+// native.nihil — the runtime of programs compiled with -native (macOS, ARM64), written in Nihil.
+//
+// A routine RT_<NAME> of the runtime (00_data.nihil) is the method __nihil_rt_<name> here, when
+// there is one (42_arm.nihil: rt_method); the others are still in C (macos/native/rt.c). Its
+// arguments are the registers the routine reads, in the order rax, rcx, rdx, rsi, rdi (rt_reads),
+// all INTs: addresses of texts and arrays are INTs here (a text's length is the 8 bytes before
+// it). The system is reached through its C library: __nihil_c("name", …) (memcpy, write, mmap …).
+//
+// A routine must not use what compiles to itself: no + of texts in __nihil_rt_concat, no $ in
+// __nihil_rt_int_text, no == of texts in __nihil_rt_str_equal.
+// =============================================================================
+
+// ---- the heap and its collector (first in the file: their globals are set before any block is made) ----
+// As macos/native/rt.c's was: conservative mark, no sweep. Blocks of 21 size classes live in pages
+// of 64 KiB, one class to a page; a larger one takes whole pages. Whether a block is in use is in a
+// map, a byte for each 32 bytes of the arena (`used`); a mark sets the bytes of the used blocks it
+// reaches in the other map (`marked`), then the two swap and the old one is cleared. A class hands
+// out the next block whose byte is clear, in the pages the mark left with room; a page with nothing
+// marked goes back to the system unread. From 64 MB live a child process (fork) marks while the
+// program goes on (`marked` is shared with it); the program marks there what it hands out
+// meanwhile. The roots: the globals, the program's stack (x28 to its top), the registers x19 … x28
+// and the records of the protected calls. All of it is memory of its own (mmap, calloc), not blocks.
+__nihil_gc_arena = 0;
+__nihil_gc_pkind = 0;                      // a byte a page: 0 free, 1 small, 2 large (head), 3 large (rest)
+__nihil_gc_pclass = 0;                     // a byte a page: its class
+__nihil_gc_pspan = 0;                      // 8 bytes a page: a large block's pages (head) or its head
+__nihil_gc_pnext = 0;                      // 8 bytes a page: the next page with room of its class (+ 1)
+__nihil_gc_free = 0;                       // single free pages below high (8 bytes each)
+__nihil_gc_nfree = 0;
+__nihil_gc_high = 0;                       // pages in use or used before
+__nihil_gc_csize = 0;                      // the 21 classes' sizes (8 bytes each)
+__nihil_gc_cls = 0;                        // the class of a block of b bytes: a byte at (b + 15) / 16
+__nihil_gc_cur = 0;                        // a class's page it hands out of (+ 1), its next slot, its pages with room
+__nihil_gc_slot = 0;
+__nihil_gc_room = 0;
+__nihil_gc_used = 0;
+__nihil_gc_marked = 0;
+__nihil_gc_marked_high = 0;
+__nihil_gc_allocated = 0;
+__nihil_gc_live = 0;
+__nihil_gc_live_small = 0;
+__nihil_gc_live_large = 0;
+__nihil_gc_next_at = 0;
+__nihil_gc_threshold = 0;
+__nihil_gc_child = 0;
+__nihil_gc_wait_at = 0;
+__nihil_gc_fork_min = 0;
+__nihil_gc_poll = 0;
+__nihil_gc_stats = false;
+__nihil_gc_torture = false;
+__nihil_gc_stack = 0;                      // the mark's stack of blocks to scan (8 bytes each)
+__nihil_gc_sn = 0;
+__nihil_gc_scap = 0;
+__nihil_gc_regs = 0;                       // x19 … x28 at a mark (nh_regs)
+__nihil_gc_line = 0;                       // a line of statistics being made
+__nihil_rt_high_fd = 2;                    // the highest descriptor a call made: a marking child closes them
+__nihil_out = 0;                           // the output not written yet (64 KiB of its own) and its length
+__nihil_out_n = 0;
+__nihil_err_buf = 0;                       // inside a protected call: the error's text, kept for ?! (4000 bytes)
+__nihil_err_n = 0;
+__nihil_err_capture = false;
+__nihil_prot = 0;                          // the protected calls' records: x28, x29, where to resume, x19 … x26
+__nihil_prot_depth = 0;
+
+// 64 GiB of address space, 2 GiB for each map: only what is used becomes memory
+__nihil_gc_init() {
+    __nihil_gc_arena = __nihil_c("mmap", 0, 1 << 36, 3, 0x1042, -1, 0);   // PRIVATE | ANON | NORESERVE
+    __nihil_gc_pkind = __nihil_c("calloc", 1, 1 << 20);
+    __nihil_gc_pclass = __nihil_c("calloc", 1, 1 << 20);
+    __nihil_gc_pspan = __nihil_c("calloc", 8, 1 << 20);
+    __nihil_gc_pnext = __nihil_c("calloc", 8, 1 << 20);
+    __nihil_gc_free = __nihil_c("calloc", 8, 1 << 20);
+    __nihil_gc_csize = __nihil_c("calloc", 8, 21);
+    __nihil_gc_cls = __nihil_c("calloc", 1, 2049);
+    __nihil_gc_cur = __nihil_c("calloc", 8, 21);
+    __nihil_gc_slot = __nihil_c("calloc", 8, 21);
+    __nihil_gc_room = __nihil_c("calloc", 8, 21);
+    __nihil_gc_regs = __nihil_c("calloc", 8, 10);
+    __nihil_gc_line = __nihil_c("calloc", 1, 256);
+    __nihil_gc_arena == -1 || __nihil_gc_pkind == 0 || __nihil_gc_pspan == 0 || __nihil_gc_free == 0 { __nihil_gc_oom(); }
+    __nihil_gc_used = __nihil_gc_map_new();
+    __nihil_gc_marked = __nihil_gc_map_new();
+    __s = 32;
+    __c = 0;
+    * __c < 21 {                           // 32, 48, 64, 96 … 32768
+        __nihil_poke8(__nihil_gc_csize + 8 * __c, __s);
+        __c % 2 == 0 { __s = __s + __s / 2; } || { __s = __s / 3 * 4; }
+        __c = __c + 1;
+    }
+    __q = 0;
+    __c = 0;
+    * __q <= 2048 {                        // the smallest class that holds 16 · q bytes
+        * __nihil_peek(__nihil_gc_csize + 8 * __c) < 16 * __q { __c = __c + 1; }
+        __nihil_rt_pokeb(__nihil_gc_cls, __q, __c);
+        __q = __q + 1;
+    }
+    __nihil_gc_next_at = 16 << 20;
+    __nihil_gc_threshold = 16 << 20;
+    __nihil_gc_fork_min = 64 << 20;
+    __nihil_gc_poll = 4 << 20;
+    __nihil_gc_stats = __nihil_gc_env("NIHIL_GC_STATS");
+    __nihil_gc_torture = __nihil_gc_env("NIHIL_GC_TORTURE");
+    __nihil_gc_torture {
+        __nihil_gc_threshold = 65536;
+        __nihil_gc_next_at = 65536;
+        __nihil_gc_fork_min = 1 << 20;
+        __nihil_gc_poll = 256 << 10;
+    }
+}
+
+// the variable of the environment named s is set
+__nihil_gc_env(s = "") {
+    __b = __nihil_c("calloc", 1, #s + 1);
+    __nihil_c("memcpy", __b, __nihil_addr(s), #s);
+    __r = __nihil_c("getenv", __b) != 0;
+    __nihil_c("free", __b);
+    : __r;
+}
+
+__nihil_gc_oom() {
+    __nihil_c("write", 2, __nihil_addr("nihil: out of memory\n"), 21);
+    __nihil_c("_exit", 2);
+}
+
+__nihil_gc_map_new() {
+    __m = __nihil_c("mmap", 0, 4096 + (1 << 31), 3, 0x1041, -1, 0);       // SHARED | ANON | NORESERVE
+    __m == -1 { __nihil_gc_oom(); }
+    : __m;
+}
+
+// the first bytes of a map, for n pages, zero again (their memory back to the system)
+__nihil_gc_map_clear(m = 0, n = 0) {
+    __len = (4096 + ((n << 16) >> 5) + 16383) & -16384;
+    __nihil_c("mmap", m, __len, 3, 0x1011, -1, 0) == -1 { __nihil_gc_oom(); }   // FIXED | SHARED | ANON
+}
+
+// the pages p … p + n - 1 back to the system: zero when used again
+__nihil_gc_release(p = 0, n = 0) {
+    __nihil_c("mmap", __nihil_gc_arena + (p << 16), n << 16, 3, 0x1012, -1, 0) == -1 { __nihil_gc_oom(); }   // FIXED | PRIVATE | ANON
+    __nihil_c("memset", __nihil_gc_pkind + p, 0, n);
+}
+
+// n contiguous free pages (zeroed) → the first
+__nihil_gc_pages(n = 0) {
+    n == 1 {
+        * __nihil_gc_nfree > 0 {
+            __nihil_gc_nfree = __nihil_gc_nfree - 1;
+            __p = __nihil_peek(__nihil_gc_free + 8 * __nihil_gc_nfree);
+            __nihil_peekb(__nihil_gc_pkind + __p) == 0 { : __p; }
+        }
+    } || __nihil_gc_nfree >= n {           // a run among the free pages
+        __run = 0;
+        __p = 0;
+        * __p < __nihil_gc_high {
+            __nihil_peekb(__nihil_gc_pkind + __p) == 0 { __run = __run + 1; } || { __run = 0; }
+            __run == n { : __p - n + 1; }
+            __p = __p + 1;
+        }
+    }
+    __nihil_gc_high + n > (1 << 20) { __nihil_rt_failed("out of memory"); }
+    __p = __nihil_gc_high;
+    __nihil_gc_high = __nihil_gc_high + n;
+    : __p;
+}
+
+// alloc(n): a block of n words. The usual case here, without a call: a small block, no collection
+// due, its class's page with room (its next slot clear in `used`), zeroed 8 bytes at a time
+__nihil_rt_alloc(n = 0) {
+    __nihil_gc_arena == 0 || n < 0 || n > 62 { : __nihil_gc_alloc(n, true); }   // (n itself: n · 8 could overflow)
+    __bytes = n * 8 + 16;
+    __al = __nihil_gc_allocated + __bytes;
+    __al > __nihil_gc_threshold || __nihil_gc_child != 0 { : __nihil_gc_alloc(n, true); }
+    __c = __nihil_peekb(__nihil_gc_cls + (__bytes + 15) / 16);
+    __cp = __nihil_peek(__nihil_gc_cur + 8 * __c);
+    __cp == 0 { : __nihil_gc_alloc(n, true); }
+    __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
+    __i = __nihil_peek(__nihil_gc_slot + 8 * __c);
+    __pg = __nihil_gc_arena + ((__cp - 1) << 16);
+    __m = __nihil_gc_used + 4096 + ((__cp - 1) << 11);
+    __off = __i * __s;
+    * __off + __s <= 65536 && __nihil_peekb(__m + (__off >> 5)) != 0 { __off = __off + __s; }
+    __off + __s > 65536 { : __nihil_gc_alloc(n, true); }
+    __nihil_poke8(__nihil_gc_slot + 8 * __c, __off / __s + 1);
+    __nihil_gc_allocated = __al;
+    __b = __pg + __off;
+    __e = __b + __s;
+    __z = __b;
+    * __z < __e { __nihil_poke8(__z, 0); __z = __z + 8; }
+    __nihil_poke8(__b + 8, n);
+    __nihil_rt_pokeb(__m, __off >> 5, 1);
+    : __b + 16;
+}
+
+__nihil_rt_array_rep(n = 0, fill = 0) {
+    __a = __nihil_gc_alloc(n, fill == 0);
+    fill != 0 {
+        __p = __a;
+        __end = __a + 8 * n;
+        * __p < __end { __nihil_poke8(__p, fill); __p = __p + 8; }
+    }
+    : __a;
+}
+
+// a block for n words → its words (zeroed; its length n). lazy: the caller may write only part of a
+// large one (a big array of zeros): its pages count when written, not now
+__nihil_gc_alloc(n = 0, lazy = false) {
+    n < 0 { __nihil_rt_failed("negative array size"); }
+    n >= 1 << 40 { __nihil_rt_failed("array too large"); }
+    __nihil_gc_arena == 0 { __nihil_gc_init(); }
+    __bytes = n * 8 + 16;
+    lazy && __bytes > 32768 { __nihil_gc_allocated = __nihil_gc_allocated + 65536; }
+    || { __nihil_gc_allocated = __nihil_gc_allocated + __bytes; }
+    __nihil_gc_allocated > __nihil_gc_threshold { __nihil_gc_collect(); }
+    __b = 0;
+    __bytes <= 32768 {
+        __c = __nihil_peekb(__nihil_gc_cls + (__bytes + 15) / 16);
+        __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
+        __b = __nihil_gc_small(__c, __s);
+        __s <= 512 { __z = __b; * __z < __b + __s { __nihil_poke8(__z, 0); __z = __z + 8; } }
+        || { __nihil_c("memset", __b, 0, __s); }
+    } || {
+        __np = (__bytes + 65535) >> 16;
+        __p = __nihil_gc_pages(__np);
+        __nihil_rt_pokeb(__nihil_gc_pkind, __p, 2);
+        __nihil_poke8(__nihil_gc_pspan + 8 * __p, __np);
+        __i = 1;
+        * __i < __np {
+            __nihil_rt_pokeb(__nihil_gc_pkind, __p + __i, 3);
+            __nihil_poke8(__nihil_gc_pspan + 8 * (__p + __i), __p);
+            __i = __i + 1;
+        }
+        __b = __nihil_gc_arena + (__p << 16);
+    }
+    __nihil_poke8(__b + 8, n);
+    __m = 4096 + ((__b - __nihil_gc_arena) >> 5);
+    __nihil_rt_pokeb(__nihil_gc_used, __m, 1);
+    __nihil_gc_child != 0 { __nihil_rt_pokeb(__nihil_gc_marked, __m, 1); }   // a child marks: this block lives
+    : __b + 16;
+}
+
+// a free block of the class c (its size s) → its address
+__nihil_gc_small(c = 0, s = 0) {
+    __k = 65536 / s;
+    * true {
+        __cp = __nihil_peek(__nihil_gc_cur + 8 * c);
+        __cp != 0 {
+            __p = __cp - 1;
+            __i = __nihil_peek(__nihil_gc_slot + 8 * c);
+            __m = __nihil_gc_used + 4096 + (__p << 11);
+            * __i < __k && __nihil_peekb(__m + ((__i * s) >> 5)) != 0 { __i = __i + 1; }
+            __i < __k {
+                __nihil_poke8(__nihil_gc_slot + 8 * c, __i + 1);
+                : __nihil_gc_arena + (__p << 16) + __i * s;
+            }
+            __nihil_poke8(__nihil_gc_cur + 8 * c, 0);
+        }
+        __r = __nihil_peek(__nihil_gc_room + 8 * c);
+        __r != 0 {
+            __p = __r - 1;
+            __nihil_poke8(__nihil_gc_room + 8 * c, __nihil_peek(__nihil_gc_pnext + 8 * __p));
+            __nihil_poke8(__nihil_gc_cur + 8 * c, __p + 1);
+            __nihil_poke8(__nihil_gc_slot + 8 * c, 0);
+        } || {
+            __p = __nihil_gc_pages(1);     // a new page of that class
+            __nihil_rt_pokeb(__nihil_gc_pkind, __p, 1);
+            __nihil_rt_pokeb(__nihil_gc_pclass, __p, c);
+            __nihil_poke8(__nihil_gc_cur + 8 * c, __p + 1);
+            __nihil_poke8(__nihil_gc_slot + 8 * c, 0);
+        }
+    }
+    : 0;
+}
+
+// ---- the mark ----
+
+// the words from from to to: each one that points into a used block not marked yet marks it and
+// puts it on the stack (its words scanned later)
+__nihil_gc_mark_range(from = 0, to = 0) {
+    __arena = __nihil_gc_arena;
+    __top = __arena + (__nihil_gc_high << 16);
+    __p = (from + 7) & -8;
+    * __p + 8 <= to {
+        __w = __nihil_peek(__p);
+        __p = __p + 8;
+        __w >= __arena && __w < __top {
+            __off = __w - __arena;
+            __pg = __off >> 16;
+            __kind = __nihil_peekb(__nihil_gc_pkind + __pg);
+            __b = 0;
+            __s = 0;
+            __kind == 1 {
+                __s = __nihil_peek(__nihil_gc_csize + 8 * __nihil_peekb(__nihil_gc_pclass + __pg));
+                __i = (__off & 65535) / __s;
+                (__i + 1) * __s <= 65536 { __b = __arena + (__pg << 16) + __i * __s; }
+            } || __kind == 3 {
+                __b = __arena + (__nihil_peek(__nihil_gc_pspan + 8 * __pg) << 16);
+            } || __kind == 2 {
+                __b = __arena + (__pg << 16);
+            }
+            __b != 0 {
+                __m = 4096 + ((__b - __arena) >> 5);
+                __nihil_peekb(__nihil_gc_used + __m) != 0 && __nihil_peekb(__nihil_gc_marked + __m) == 0 {
+                    __nihil_rt_pokeb(__nihil_gc_marked, __m, 1);
+                    __kind == 1 { __nihil_gc_live_small = __nihil_gc_live_small + __s; }
+                    __nihil_gc_sn == __nihil_gc_scap {
+                        __nihil_gc_scap == 0 { __nihil_gc_scap = 65536; } || { __nihil_gc_scap = 2 * __nihil_gc_scap; }
+                        __nihil_gc_stack = __nihil_c("realloc", __nihil_gc_stack, 8 * __nihil_gc_scap);
+                        __nihil_gc_stack == 0 { __nihil_gc_oom(); }
+                    }
+                    __nihil_poke8(__nihil_gc_stack + 8 * __nihil_gc_sn, __b);
+                    __nihil_gc_sn = __nihil_gc_sn + 1;
+                }
+            }
+        }
+    }
+}
+
+// a block's words (none for a text); of a large one, only the system's pages ever written
+// (mincore): the others are zero, and reading them would make them real
+__nihil_gc_mark_block(b = 0) {
+    __pg = (b - __nihil_gc_arena) >> 16;
+    __bytes = 0;
+    __nihil_peekb(__nihil_gc_pkind + __pg) == 1 { __bytes = __nihil_peek(__nihil_gc_csize + 8 * __nihil_peekb(__nihil_gc_pclass + __pg)); }
+    || { __bytes = __nihil_peek(__nihil_gc_pspan + 8 * __pg) << 16; }
+    __nihil_peek(b) & 4 != 0 {             // a text: not scanned; a large one still counts (written whole)
+        __bytes > 32768 { __nihil_gc_live_large = __nihil_gc_live_large + __bytes; }
+        :;
+    }
+    __bytes <= 32768 { __nihil_gc_mark_range(b + 16, b + __bytes); :; }
+    __sp = __nihil_c32("getpagesize");
+    __vec = __nihil_c("malloc", 65536);
+    __end = b + __bytes;
+    __chunk = b;
+    * __chunk < __end {
+        __n = (__end - __chunk) / __sp;
+        __n > 65536 { __n = 65536; }
+        __nihil_c32("mincore", __chunk, __n * __sp, __vec) != 0 {
+            __nihil_gc_live_large = __nihil_gc_live_large + __n * __sp;
+            __from = __chunk;
+            __chunk == b { __from = b + 16; }
+            __nihil_gc_mark_range(__from, __chunk + __n * __sp);
+        } || {
+            __i = 0;
+            * __i < __n {
+                __nihil_peekb(__vec + __i) & 0x7F != 0 {
+                    __nihil_gc_live_large = __nihil_gc_live_large + __sp;
+                    __from = __chunk + __i * __sp;
+                    __to = __from + __sp;
+                    __from == b { __from = b + 16; }
+                    __nihil_gc_mark_range(__from, __to);
+                }
+                __i = __i + 1;
+            }
+        }
+        __chunk = __chunk + __n * __sp;
+    }
+    __nihil_c("free", __vec);
+}
+
+__nihil_gc_mark_all() {
+    __nihil_gc_live_small = 0;
+    __nihil_gc_live_large = 0;
+    __nihil_c("nh_regs", __nihil_gc_regs);
+    __nihil_gc_mark_range(__nihil_gc_regs, __nihil_gc_regs + 80);
+    __g = __nihil_c("nh_globals_start");
+    __nihil_gc_mark_range(__g, __g + __nihil_c("nh_globals_bytes"));
+    __nihil_gc_mark_range(__nihil_peek(__nihil_gc_regs + 72), __nihil_c("nh_stack_top"));   // x28 …
+    __nihil_prot != 0 { __nihil_gc_mark_range(__nihil_prot, __nihil_prot + 88 * __nihil_prot_depth); }
+    * __nihil_gc_sn > 0 {
+        __nihil_gc_sn = __nihil_gc_sn - 1;
+        __nihil_gc_mark_block(__nihil_peek(__nihil_gc_stack + 8 * __nihil_gc_sn));
+    }
+}
+
+__nihil_gc_now_us() {
+    __ts = __nihil_c("calloc", 1, 16);
+    __nihil_c32("clock_gettime", 6, __ts);
+    __t = __nihil_peek(__ts) * 1000000 + __nihil_peek(__ts + 8) / 1000;
+    __nihil_c("free", __ts);
+    : __t;
+}
+
+// a line of statistics on stderr: its parts (texts, numbers) put one by one (no block made)
+__nihil_gc_at = 0;
+__nihil_gc_say(s = "") { __nihil_c("memcpy", __nihil_gc_line + __nihil_gc_at, __nihil_addr(s), #s); __nihil_gc_at = __nihil_gc_at + #s; }
+__nihil_gc_num(v = 0) { __nihil_gc_at = __nihil_rt_put_dec(__nihil_gc_line, __nihil_gc_at, v); }
+__nihil_gc_said() { __nihil_c("write", 2, __nihil_gc_line, __nihil_gc_at); __nihil_gc_at = 0; }
+
+// after a mark (in `marked`): it becomes `used`; the pages with nothing marked go back to the system
+// (past 256 kept), the others with room wait for their class; since: bytes made after the mark began
+__nihil_gc_after_mark(t0 = 0, t_mark = 0, ended = false, since = 0) {
+    __t = __nihil_gc_used;
+    __nihil_gc_used = __nihil_gc_marked;
+    __nihil_gc_marked = __t;
+    __kept = 0;
+    __nihil_gc_nfree = 0;
+    __nihil_c("memset", __nihil_gc_cur, 0, 8 * 21);
+    __nihil_c("memset", __nihil_gc_room, 0, 8 * 21);
+    __p = 0;
+    * __p < __nihil_gc_high {
+        __kind = __nihil_peekb(__nihil_gc_pkind + __p);
+        __kind == 1 {
+            __c = __nihil_peekb(__nihil_gc_pclass + __p);
+            __k = 65536 / __nihil_peek(__nihil_gc_csize + 8 * __c);
+            __w = __nihil_gc_used + 4096 + (__p << 11);
+            __end = __w + 2048;
+            __n = 0;
+            * __w < __end { __n = __n + ((__nihil_peek(__w) * 0x0101010101010101) >> 56); __w = __w + 8; }   // bytes 0 or 1
+            __n == 0 && __kept >= 256 {
+                __nihil_gc_release(__p, 1);
+                __nihil_poke8(__nihil_gc_free + 8 * __nihil_gc_nfree, __p);
+                __nihil_gc_nfree = __nihil_gc_nfree + 1;
+            } || __n < __k {
+                __n == 0 { __kept = __kept + 1; }
+                __nihil_poke8(__nihil_gc_pnext + 8 * __p, __nihil_peek(__nihil_gc_room + 8 * __c));
+                __nihil_poke8(__nihil_gc_room + 8 * __c, __p + 1);
+            }
+            __p = __p + 1;
+        } || __kind == 2 {
+            __np = __nihil_peek(__nihil_gc_pspan + 8 * __p);
+            __nihil_peekb(__nihil_gc_used + 4096 + (__p << 11)) == 0 {
+                __nihil_gc_release(__p, __np);
+                __i = 0;
+                * __i < __np { __nihil_poke8(__nihil_gc_free + 8 * __nihil_gc_nfree, __p + __i); __nihil_gc_nfree = __nihil_gc_nfree + 1; __i = __i + 1; }
+            }
+            __p = __p + __np;
+        } || {
+            __kind == 0 { __nihil_poke8(__nihil_gc_free + 8 * __nihil_gc_nfree, __p); __nihil_gc_nfree = __nihil_gc_nfree + 1; }
+            __p = __p + 1;
+        }
+    }
+    __h = __nihil_gc_high;
+    __nihil_gc_marked_high > __h { __h = __nihil_gc_marked_high; }
+    __nihil_gc_map_clear(__nihil_gc_marked, __h);
+    __nihil_gc_marked_high = __nihil_gc_high;
+    __nihil_gc_live = __nihil_gc_live_small + __nihil_gc_live_large;
+    __nihil_gc_allocated = since;
+    __nihil_gc_next_at = __nihil_gc_live;
+    __nihil_gc_next_at < 16 << 20 { __nihil_gc_next_at = 16 << 20; }
+    __nihil_gc_torture { __nihil_gc_next_at = 65536; }
+    __nihil_gc_threshold = __nihil_gc_next_at;
+    __nihil_gc_stats {
+        __nihil_gc_say("gc");
+        ended { __nihil_gc_say(" end"); }
+        __nihil_gc_say(": "); __nihil_gc_num(__nihil_gc_now_us() - t0);
+        __nihil_gc_say(" us (mark "); __nihil_gc_num(t_mark);
+        __nihil_gc_say("), live "); __nihil_gc_num(__nihil_gc_live >> 10);
+        __nihil_gc_say(" KiB, heap "); __nihil_gc_num(((__nihil_gc_high - __nihil_gc_nfree) << 16) >> 10);
+        __nihil_gc_say(" KiB, next after "); __nihil_gc_num(__nihil_gc_next_at >> 10);
+        __nihil_gc_say(" KiB\n");
+        __nihil_gc_said();
+    }
+}
+
+// the program stopped while this process marks
+__nihil_gc_collect_now() {
+    __t0 = __nihil_gc_now_us();
+    __nihil_gc_mark_all();
+    __nihil_gc_after_mark(__t0, __nihil_gc_now_us() - __t0, false, 0);
+}
+
+// a child to mark the heap → whether it started
+__nihil_gc_fork() {
+    __t0 = __nihil_gc_now_us();
+    __pid = __nihil_c32("fork");
+    __pid < 0 { : false; }
+    __pid == 0 {                           // the child: mark, and end
+        __top = __nihil_rt_high_fd;
+        __top < 255 { __top = 255; }
+        __fd = 0;
+        * __fd <= __top { __nihil_c32("close", __fd); __fd = __fd + 1; }   // no socket of the program kept open here
+        __c0 = __nihil_gc_now_us();
+        __nihil_gc_mark_all();
+        __h = __nihil_gc_marked;
+        __nihil_poke8(__h, __nihil_gc_live_small);
+        __nihil_poke8(__h + 8, __nihil_gc_live_large);
+        __nihil_poke8(__h + 24, __nihil_gc_now_us() - __c0);
+        __nihil_poke8(__h + 16, 1);        // done
+        __nihil_c("_exit", 0);
+    }
+    __nihil_gc_child = __pid;
+    __nihil_gc_wait_at = __nihil_gc_next_at;
+    __nihil_gc_wait_at < 4 * __nihil_gc_poll { __nihil_gc_wait_at = 4 * __nihil_gc_poll; }
+    __nihil_gc_allocated = 0;
+    __nihil_gc_threshold = __nihil_gc_poll;
+    __nihil_gc_stats {
+        __nihil_gc_say("gc fork: "); __nihil_gc_num(__nihil_gc_now_us() - __t0);
+        __nihil_gc_say(" us (the program stopped), "); __nihil_gc_num(__nihil_gc_live >> 20);
+        __nihil_gc_say(" MB live at the last mark\n");
+        __nihil_gc_said();
+    }
+    : true;
+}
+
+// a child marks: if it has ended, its map is the mark; wait for it when the program has made as
+// many new bytes as were live; otherwise look again after 4 MiB more
+__nihil_gc_poll_child() {
+    __st = __nihil_c("calloc", 1, 8);
+    __t0 = __nihil_gc_now_us();
+    __r = 0;
+    __nihil_gc_allocated < __nihil_gc_wait_at {
+        __r = __nihil_c32("waitpid", __nihil_gc_child, __st, 1);   // WNOHANG
+        __r == 0 { __nihil_c("free", __st); __nihil_gc_threshold = __nihil_gc_allocated + __nihil_gc_poll; :; }
+    } || {
+        __r = __nihil_c32("waitpid", __nihil_gc_child, __st, 0);
+        * __r < 0 && __nihil_rt_peek4(__nihil_c("__error")) == 4 { __r = __nihil_c32("waitpid", __nihil_gc_child, __st, 0); }
+    }
+    __status = __nihil_rt_peek4(__st);
+    __nihil_c("free", __st);
+    __nihil_gc_child = 0;
+    __t_wait = __nihil_gc_now_us() - __t0;
+    __h = __nihil_gc_marked;
+    __r < 0 || __status & 0xFFFF != 0 || __nihil_peek(__h + 16) != 1 {   // its map is not trusted
+        __nihil_gc_map_clear(__nihil_gc_marked, __nihil_gc_high);
+        __nihil_gc_collect_now();
+        :;
+    }
+    __nihil_gc_live_small = __nihil_peek(__h);
+    __nihil_gc_live_large = __nihil_peek(__h + 8);
+    __nihil_gc_stats {
+        __nihil_gc_say("gc end: the child marked in "); __nihil_gc_num(__nihil_peek(__h + 24));
+        __nihil_gc_say(" us; "); __nihil_gc_num(__nihil_gc_allocated >> 10);
+        __nihil_gc_say(" KiB made since the fork\n");
+        __nihil_gc_said();
+    }
+    __nihil_gc_after_mark(__t0, __t_wait, true, __nihil_gc_allocated);
+}
+
+__nihil_gc_collect() {
+    __nihil_gc_child != 0 { __nihil_gc_poll_child(); :; }
+    __nihil_gc_live >= __nihil_gc_fork_min && __nihil_gc_fork() { :; }
+    __nihil_gc_collect_now();
+}
+
+// ---- the program's end, the error's text, the profiler (Linux only: here it samples nothing) ----
+
+__nihil_rt_prof_start(symbols = 0) { : 0; }
+
+__nihil_rt_exit(code = 0) {
+    __nihil_rt_flush();
+    __nihil_gc_child != 0 { __nihil_c32("kill", __nihil_gc_child, 9); }
+    __nihil_gc_stats {                     // the program's own peak (not a marking child's)
+        __u = __nihil_c("calloc", 1, 160);
+        __nihil_c32("getrusage", 0, __u);
+        __nihil_gc_say("gc: peak memory of the program "); __nihil_gc_num(__nihil_peek(__u + 32) >> 20);
+        __nihil_gc_say(" MB\n");
+        __nihil_gc_said();
+    }
+    __nihil_c("_exit", code);
+}
+
+// the text of the last error caught by ?!
+__nihil_rt_err_text() {
+    __t = __nihil_rt_new_text(__nihil_err_n);
+    __nihil_c("memcpy", __t, __nihil_err_buf, __nihil_err_n);
+    : __nihil_str_at(__t);
+}
+
+// ---- output, errors and the protected calls (SPEC §25) ----
+
+// n bytes at p to the descriptor fd, all of them (EINTR: again)
+__nihil_rt_write_all(fd = 0, p = 0, n = 0) {
+    * n > 0 {
+        __k = __nihil_c("write", fd, p, n);
+        __k < 0 && __nihil_rt_peek4(__nihil_c("__error")) == 4 { __k = 0; } || __k <= 0 { : 0; }
+        p = p + __k;
+        n = n - __k;
+    }
+    : 0;
+}
+
+__nihil_rt_flush() {
+    __nihil_out_n > 0 { __nihil_rt_write_all(1, __nihil_out, __nihil_out_n); }
+    __nihil_out_n = 0;
+}
+
+// n bytes at p to the output (64 KiB kept before they are written)
+__nihil_rt_out(p = 0, n = 0) {
+    __nihil_out == 0 { __nihil_out = __nihil_c("malloc", 65536); }
+    * n > 0 {
+        __nihil_out_n == 65536 { __nihil_rt_flush(); }
+        __k = 65536 - __nihil_out_n;
+        __k > n { __k = n; }
+        __nihil_c("memcpy", __nihil_out + __nihil_out_n, p, __k);
+        __nihil_out_n = __nihil_out_n + __k;
+        p = p + __k;
+        n = n - __k;
+    }
+}
+
+__nihil_rt_out_text(s = "") { __nihil_rt_out(__nihil_addr(s), #s); }
+
+// v in decimal into the 24 bytes at b → where its digits start (they end at b + 24)
+__nihil_rt_digits(b = 0, v = 0) {
+    __n = __nihil_rt_width(v);
+    __nihil_rt_put_int(b + 24 - __n, __n, v);
+    : b + 24 - __n;
+}
+
+__nihil_rt_print_int(v = 0) {
+    __b = __nihil_c("malloc", 24);
+    __p = __nihil_rt_digits(__b, v);
+    __nihil_rt_out(__p, __b + 24 - __p);
+    __nihil_c("free", __b);
+    : 0;
+}
+__nihil_rt_print_bool(v = 0) { v != 0 { __nihil_rt_out_text("true"); : 0; } __nihil_rt_out_text("false"); : 0; }
+__nihil_rt_print_str(s = 0) { __nihil_rt_out(s, __nihil_peek(s - 8)); : 0; }
+__nihil_rt_print_int_opt(v = 0, d = 0) { d == 0 { __nihil_rt_out_text("_"); : 0; } : __nihil_rt_print_int(v); }
+__nihil_rt_print_bool_opt(v = 0, d = 0) { d == 0 { __nihil_rt_out_text("_"); : 0; } : __nihil_rt_print_bool(v); }
+__nihil_rt_print_str_opt(v = 0, d = 0) { d == 0 { __nihil_rt_out_text("_"); : 0; } : __nihil_rt_print_str(v); }
+__nihil_rt_write_byte(b = 0) {
+    __nihil_out == 0 { __nihil_out = __nihil_c("malloc", 65536); }
+    __nihil_out_n == 65536 { __nihil_rt_flush(); }
+    __nihil_rt_pokeb(__nihil_out, __nihil_out_n, b);
+    __nihil_out_n = __nihil_out_n + 1;
+    : 0;
+}
+
+// what goes to stderr: written, or kept for ?! inside a protected call (4000 bytes at most)
+__nihil_rt_err_write(p = 0, n = 0) {
+    __nihil_err_capture {
+        n > 4000 - __nihil_err_n { n = 4000 - __nihil_err_n; }
+        __nihil_c("memcpy", __nihil_err_buf + __nihil_err_n, p, n);
+        __nihil_err_n = __nihil_err_n + n;
+        :;
+    }
+    __nihil_rt_write_all(2, p, n);
+}
+
+__nihil_rt_err_text_put(s = "") { __nihil_rt_err_write(__nihil_addr(s), #s); }
+
+__nihil_rt_err_num(v = 0) {
+    __b = __nihil_c("malloc", 24);
+    __p = __nihil_rt_digits(__b, v);
+    __nihil_rt_err_write(__p, __b + 24 - __p);
+    __nihil_c("free", __b);
+}
+
+__nihil_rt_err_begin() {
+    __nihil_err_buf == 0 { __nihil_err_buf = __nihil_c("malloc", 4000); }
+    __nihil_prot_depth > 0 { __nihil_err_n = 0; __nihil_err_capture = true; :; }
+    __nihil_rt_flush();
+    __nihil_rt_err_text_put("nihil: ");
+}
+
+// the error is said: out of the program (2), or back where the protected call around it resumes
+__nihil_rt_err_end() {
+    !__nihil_err_capture { __nihil_c("_exit", 2); }
+    __nihil_err_capture = false;
+    __nihil_err_n > 0 && __nihil_peekb(__nihil_err_buf + __nihil_err_n - 1) == 10 { __nihil_err_n = __nihil_err_n - 1; }
+    __nihil_prot_depth = __nihil_prot_depth - 1;
+    __nihil_c("nh_resume", __nihil_prot + 88 * __nihil_prot_depth, __nihil_c("nh_base_sp"));
+}
+
+// an error: its text (n bytes at p), then a line break
+__nihil_rt_fail_at(p = 0, n = 0) {
+    __nihil_rt_err_begin();
+    __nihil_rt_err_write(p, n);
+    __nihil_rt_err_text_put("\n");
+    __nihil_rt_err_end();
+}
+
+__nihil_rt_error_int(v = 0) { __nihil_rt_flush(); __nihil_rt_err_num(v); : 0; }
+__nihil_rt_error_bool(v = 0) { __nihil_rt_flush(); v != 0 { __nihil_rt_err_text_put("true"); : 0; } __nihil_rt_err_text_put("false"); : 0; }
+__nihil_rt_error_str(s = 0) { __nihil_rt_flush(); __nihil_rt_err_write(s, __nihil_peek(s - 8)); : 0; }
+__nihil_rt_error_int_opt(v = 0, d = 0) { d == 0 { __nihil_rt_flush(); __nihil_rt_err_text_put("_"); : 0; } : __nihil_rt_error_int(v); }
+__nihil_rt_error_bool_opt(v = 0, d = 0) { d == 0 { __nihil_rt_flush(); __nihil_rt_err_text_put("_"); : 0; } : __nihil_rt_error_bool(v); }
+__nihil_rt_error_str_opt(v = 0, d = 0) { d == 0 { __nihil_rt_flush(); __nihil_rt_err_text_put("_"); : 0; } : __nihil_rt_error_str(v); }
+
+// error(rsi): an error whose text is the C text at m ("out of memory" is never caught: the heap may
+// be inconsistent)
+__nihil_rt_error(m = 0) {
+    __nihil_rt_is(m, "out of memory") == true { __nihil_prot_depth = 0; }
+    __nihil_rt_fail_at(m, __nihil_c("strlen", m));
+    : 0;
+}
+
+__nihil_rt_fail(s = 0) { __nihil_rt_fail_at(s, __nihil_peek(s - 8)); : 0; }
+
+__nihil_rt_error_index(a = 0, i = 0) {
+    __nihil_rt_err_begin();
+    __nihil_rt_err_text_put("index ");
+    __nihil_rt_err_num(i);
+    __nihil_rt_err_text_put(" out of bounds (size ");
+    __nihil_rt_err_num(__nihil_peek(a - 8));
+    __nihil_rt_err_text_put(")\n");
+    __nihil_rt_err_end();
+    : 0;
+}
+
+// by zero only (the division itself is sdiv in the code)
+__nihil_rt_div(a = 0, b = 0) { __nihil_rt_fail_at(__nihil_addr("division by zero"), 16); : 0; }
+__nihil_rt_mod(a = 0, b = 0) { __nihil_rt_fail_at(__nihil_addr("division by zero"), 16); : 0; }
+
+// a protected call starts: where it resumes after an error, and the registers it has then
+__nihil_rt_protect(resume = 0, sp = 0, fp = 0, r19 = 0, r20 = 0, r21 = 0, r22 = 0, r23 = 0, r24 = 0, r25 = 0, r26 = 0) {
+    __nihil_prot == 0 { __nihil_prot = __nihil_c("calloc", 88, 65); }
+    __nihil_prot_depth >= 64 { __nihil_rt_fail_at(__nihil_addr("more than 64 protected calls inside each other"), 46); }
+    __r = __nihil_prot + 88 * __nihil_prot_depth;
+    __nihil_prot_depth = __nihil_prot_depth + 1;
+    __nihil_poke8(__r, sp);
+    __nihil_poke8(__r + 8, fp);
+    __nihil_poke8(__r + 16, resume);
+    __nihil_poke8(__r + 24, r19);
+    __nihil_poke8(__r + 32, r20);
+    __nihil_poke8(__r + 40, r21);
+    __nihil_poke8(__r + 48, r22);
+    __nihil_poke8(__r + 56, r23);
+    __nihil_poke8(__r + 64, r24);
+    __nihil_poke8(__r + 72, r25);
+    __nihil_poke8(__r + 80, r26);
+    : resume;
+}
+
+// it ended without an error: its result (rax, rdx) stays
+__nihil_rt_unprotect(v = 0, d = 0) {
+    __nihil_prot_depth = __nihil_prot_depth - 1;
+    __nihil_err_n = 0;
+    __nihil_rt_ret_dx = d;
+    : v;
+}
+
+// a new text of n bytes (and the 0 after them), zeroed; the collector does not look inside it
+__nihil_rt_new_text(__n = 0) {
+    __n < 0 { __n = 0; }
+    __t = __nihil_addr(__nihil_bytes(__n));
+    __nihil_poke8(__t - 16, 4);
+    : __t;
+}
+
+__nihil_rt_concat(a = 0, b = 0) {
+    __la = __nihil_peek(a - 8);
+    __lb = __nihil_peek(b - 8);
+    __t = __nihil_rt_new_text(__la + __lb);
+    __nihil_c("memcpy", __t, a, __la);
+    __nihil_c("memcpy", __t + __la, b, __lb);
+    : __nihil_str_at(__t);
+}
+
+__nihil_rt_str_equal(a = 0, b = 0) {
+    a == b { : true; }
+    __n = __nihil_peek(a - 8);
+    __n != __nihil_peek(b - 8) { : false; }
+    : __nihil_c32("memcmp", a, b, __n) == 0;
+}
+
+// how many characters v takes in decimal
+__nihil_rt_width(v = 0) {
+    __n = 1;
+    v < 0 { __n = 2; }
+    * v >= 10 || v <= -10 { v = v / 10; __n = __n + 1; }
+    : __n;
+}
+
+// v in decimal into the text at t, ending before t[end]
+__nihil_rt_put_int(__t = 0, end = 0, v = 0) {
+    __s = __nihil_str_at(__t);
+    __neg = v < 0;
+    __i = end;
+    __going = true;
+    * __going {
+        __d = v % 10;
+        __d < 0 { __d = -__d; }
+        __i = __i - 1;
+        __nihil_poke(__s, __i, '0' + __d);
+        v = v / 10;
+        __going = v != 0;
+    }
+    __neg { __nihil_poke(__s, __i - 1, '-'); }
+}
+
+__nihil_rt_int_text(v = 0) {
+    __n = __nihil_rt_width(v);
+    __t = __nihil_rt_new_text(__n);
+    __nihil_rt_put_int(__t, __n, v);
+    : __nihil_str_at(__t);
+}
+
+__nihil_rt_concat_int(a = 0, v = 0) {
+    __la = __nihil_peek(a - 8);
+    __n = __nihil_rt_width(v);
+    __t = __nihil_rt_new_text(__la + __n);
+    __nihil_c("memcpy", __t, a, __la);
+    __nihil_rt_put_int(__t, __la + __n, v);
+    : __nihil_str_at(__t);
+}
+
+// s[from … to)
+__nihil_rt_sub(__s = 0, from = 0, to = 0) {
+    __n = to - from;
+    __n < 0 { __n = 0; }
+    __t = __nihil_rt_new_text(__n);
+    __nihil_c("memcpy", __t, __s + from, __n);
+    : __nihil_str_at(__t);
+}
+
+// the text s into the text being made at dst, from at → where it ends
+__nihil_rt_put(dst = 0, at = 0, __s = 0) {
+    __n = __nihil_peek(__s - 8);
+    __nihil_c("memmove", dst + at, __s, __n);
+    : at + __n;
+}
+
+__nihil_rt_array_concat(a = 0, b = 0) {
+    __na = __nihil_peek(a - 8);
+    __nb = __nihil_peek(b - 8);
+    __r = [0 ; __na + __nb];
+    __t = __nihil_addr(__r);
+    __nihil_c("memcpy", __t, a, 8 * __na);
+    __nihil_c("memcpy", __t + 8 * __na, b, 8 * __nb);
+    : __r;
+}
+
+// ---- the system: Linux's calls (their numbers, flags, layouts and errno values), made with macOS's ----
+// The prelude speaks Linux (it is the same on both systems): __nihil_syscall([n, a1 … a6]) comes
+// here (RT_SYSCALL) and is made with the functions of macOS's C library.
+
+__nihil_rt_dirs = [0 ; 256];               // a directory read by getdents64: its DIR (opendir)
+
+// the byte b at the address a + i
+__nihil_rt_pokeb(a = 0, i = 0, b = 0) { __nihil_poke(__nihil_str_at(a), i, b); }
+
+// the 4 bytes at a, as an unsigned number / v's 4 bytes there
+__nihil_rt_peek4(a = 0) { : __nihil_peek(a) & 0xFFFFFFFF; }
+__nihil_rt_poke4(a = 0, v = 0) {
+    __i = 0;
+    * __i < 4 { __nihil_rt_pokeb(a, __i, (v >> (8 * __i)) & 255); __i = __i + 1; }
+}
+
+// macOS's errno → Linux's (1 … 34 are the same)
+__nihil_rt_errno() {
+    __e = __nihil_rt_peek4(__nihil_c("__error"));
+    __e == 35 { : 11; } __e == 11 { : 35; } __e == 63 { : 36; } __e == 77 { : 37; } __e == 78 { : 38; }
+    __e == 66 { : 39; } __e == 62 { : 40; } __e == 91 { : 42; } __e == 90 { : 43; } __e == 99 { : 60; }
+    __e == 96 { : 61; } __e == 101 { : 62; } __e == 98 { : 63; } __e == 97 { : 67; } __e == 100 { : 71; }
+    __e == 95 { : 72; } __e == 94 { : 74; } __e == 84 { : 75; } __e == 92 { : 84; } __e == 68 { : 87; }
+    __e == 38 { : 88; } __e == 39 { : 89; } __e == 40 { : 90; } __e == 41 { : 91; } __e == 42 { : 92; }
+    __e == 43 { : 93; } __e == 44 { : 94; } __e == 102 { : 95; } __e == 46 { : 96; } __e == 47 { : 97; }
+    __e == 48 { : 98; } __e == 49 { : 99; } __e == 50 { : 100; } __e == 51 { : 101; } __e == 52 { : 102; }
+    __e == 53 { : 103; } __e == 54 { : 104; } __e == 55 { : 105; } __e == 56 { : 106; } __e == 57 { : 107; }
+    __e == 58 { : 108; } __e == 59 { : 109; } __e == 60 { : 110; } __e == 61 { : 111; } __e == 64 { : 112; }
+    __e == 65 { : 113; } __e == 37 { : 114; } __e == 36 { : 115; } __e == 70 { : 116; } __e == 69 { : 122; }
+    __e == 89 { : 125; } __e == 105 { : 130; } __e == 104 { : 131; }
+    : __e;
+}
+
+// a result of C: negative → -Linux's errno
+__nihil_rt_res(r = 0) {
+    r < 0 { : -__nihil_rt_errno(); }
+    : r;
+}
+
+// a descriptor made (open, socket, accept, dup, pipe): a marking child closes up to the highest
+__nihil_rt_fd_made(fd = 0) {
+    fd > __nihil_rt_high_fd { __nihil_rt_high_fd = fd; }
+    : fd;
+}
+
+__nihil_rt_cloexec(fd = 0) { __nihil_cvar("fcntl", 2, fd, 2, 1); }   // F_SETFD, FD_CLOEXEC
+
+// Linux's open flags → macOS's
+__nihil_rt_open_flags(l = 0) {
+    __f = l & 3;
+    l & 0x40 != 0 { __f = __f | 0x200; }
+    l & 0x80 != 0 { __f = __f | 0x800; }
+    l & 0x200 != 0 { __f = __f | 0x400; }
+    l & 0x400 != 0 { __f = __f | 0x8; }
+    l & 0x800 != 0 { __f = __f | 0x4; }
+    l & 0x10000 != 0 { __f = __f | 0x100000; }
+    l & 0x20000 != 0 { __f = __f | 0x100; }
+    l & 0x80000 != 0 { __f = __f | 0x1000000; }
+    : __f;
+}
+
+__nihil_rt_at_dir(d = 0) {
+    d == -100 { : -2; }
+    : d;
+}
+
+// a new socket or connection: closed on exec when asked; a peer that went away is an error on
+// send, not SIGPIPE (macOS has no MSG_NOSIGNAL)
+__nihil_rt_own_socket(fd = 0, flags = 0) {
+    fd < 0 { : -__nihil_rt_errno(); }
+    __nihil_rt_fd_made(fd);
+    flags & 0x80000 != 0 { __nihil_rt_cloexec(fd); }
+    __one = __nihil_c("malloc", 8);
+    __nihil_rt_poke4(__one, 1);
+    __nihil_c32("setsockopt", fd, 0xFFFF, 0x1022, __one, 4);   // SOL_SOCKET, SO_NOSIGPIPE
+    __nihil_c("free", __one);
+    : fd;
+}
+
+// Linux's sockaddr_in at l (u16 family, u16 port, u32 address) → macOS's, in a new buffer (free it)
+__nihil_rt_sockaddr(l = 0) {
+    __a = __nihil_c("calloc", 1, 16);
+    __nihil_rt_pokeb(__a, 0, 16);
+    __nihil_rt_pokeb(__a, 1, 2);
+    __nihil_c("memcpy", __a + 2, l + 2, 6);
+    : __a;
+}
+
+// one of the Linux files programs read (/proc/self/environ, /proc/uptime, /proc/sys/kernel/random/
+// uuid): a file of its own, already removed, with the contents, read from the start; else -2
+__nihil_rt_virtual_fd(path = 0) {
+    __b = __nihil_c("calloc", 1, 64);
+    __n = 0;
+    __nihil_rt_is(path, "/proc/self/environ") == true {
+        __env = __nihil_peek(__nihil_c("_NSGetEnviron"));
+        __k = 0;
+        * __nihil_peek(__env + 8 * __k) != 0 { __n = __n + __nihil_c("strlen", __nihil_peek(__env + 8 * __k)) + 1; __k = __k + 1; }
+        __nihil_c("free", __b);
+        __b = __nihil_c("calloc", 1, __n + 1);
+        __at = 0;
+        __k = 0;
+        * __nihil_peek(__env + 8 * __k) != 0 {
+            __e = __nihil_peek(__env + 8 * __k);
+            __m = __nihil_c("strlen", __e) + 1;
+            __nihil_c("memcpy", __b + __at, __e, __m);
+            __at = __at + __m;
+            __k = __k + 1;
+        }
+    } || __nihil_rt_is(path, "/proc/uptime") == true {
+        __ts = __nihil_c("calloc", 1, 16);
+        __nihil_c32("clock_gettime", 6, __ts);
+        __n = __nihil_rt_put_dec(__b, 0, __nihil_peek(__ts));
+        __nihil_rt_pokeb(__b, __n, '.');
+        __cs = __nihil_peek(__ts + 8) / 10000000;
+        __nihil_rt_pokeb(__b, __n + 1, '0' + __cs / 10);
+        __nihil_rt_pokeb(__b, __n + 2, '0' + __cs % 10);
+        __nihil_c("memcpy", __b + __n + 3, __nihil_addr(" 0.00\n"), 6);
+        __n = __n + 9;
+        __nihil_c("free", __ts);
+    } || __nihil_rt_is(path, "/proc/sys/kernel/random/uuid") == true {
+        __u = __nihil_c("calloc", 1, 16);
+        __nihil_c("arc4random_buf", __u, 16);
+        __nihil_rt_pokeb(__u, 6, (__nihil_peekb(__u + 6) & 0x0F) | 0x40);
+        __nihil_rt_pokeb(__u, 8, (__nihil_peekb(__u + 8) & 0x3F) | 0x80);
+        __hex = "0123456789abcdef";
+        __i = 0;
+        * __i < 16 {
+            __i == 4 || __i == 6 || __i == 8 || __i == 10 { __nihil_rt_pokeb(__b, __n, '-'); __n = __n + 1; }
+            __v = __nihil_peekb(__u + __i);
+            __nihil_rt_pokeb(__b, __n, __hex[__v >> 4]);
+            __nihil_rt_pokeb(__b, __n + 1, __hex[__v & 15]);
+            __n = __n + 2;
+            __i = __i + 1;
+        }
+        __nihil_rt_pokeb(__b, __n, 10);
+        __n = __n + 1;
+        __nihil_c("free", __u);
+    } || {
+        __nihil_c("free", __b);
+        : -2;                                   // ENOENT: maps, pagemap …
+    }
+    __name = __nihil_c("calloc", 1, 32);
+    __nihil_c("memcpy", __name, __nihil_addr("/tmp/nihil-proc-XXXXXX"), 22);
+    __fd = __nihil_c32("mkstemp", __name);
+    __fd >= 0 {
+        __nihil_c32("unlink", __name);
+        __at = 0;
+        * __at < __n {
+            __w = __nihil_c("write", __fd, __b + __at, __n - __at);
+            __w <= 0 { __at = __n; } || { __at = __at + __w; }
+        }
+        __nihil_c("lseek", __fd, 0, 0);
+        __nihil_rt_cloexec(__fd);
+    }
+    __nihil_c("free", __name);
+    __nihil_c("free", __b);
+    __fd < 0 { : -2; }
+    : __fd;
+}
+
+// the C text at p is the text s
+__nihil_rt_is(p = 0, s = "") {
+    __nihil_c("strlen", p) != #s { : false; }
+    : __nihil_c32("memcmp", p, __nihil_addr(s), #s) == 0;
+}
+
+// v (not negative) in decimal into the buffer at b, from at → where it ends
+__nihil_rt_put_dec(b = 0, at = 0, v = 0) {
+    __w = __nihil_rt_width(v);
+    __i = at + __w;
+    * __i > at { __i = __i - 1; __nihil_rt_pokeb(b, __i, '0' + v % 10); v = v / 10; }
+    : at + __w;
+}
+
+// getdents64(fd, buf, cap): Linux's records (d_ino, d_off, d_reclen, d_type, d_name), from readdir
+__nihil_rt_getdents(fd = 0, buf = 0, cap = 0) {
+    fd < 0 || fd >= 256 { : -9; }
+    __nihil_rt_dirs[fd] == 0 {
+        __copy = __nihil_c32("dup", fd);
+        __d = 0;
+        __copy >= 0 { __d = __nihil_c("fdopendir", __copy); }
+        __d == 0 { : -__nihil_rt_errno(); }
+        __nihil_rt_dirs[fd] = __d;
+    }
+    __dir = __nihil_rt_dirs[fd];
+    __used = 0;
+    * true {
+        __pos = __nihil_c("telldir", __dir);
+        __e = __nihil_c("readdir", __dir);
+        __e == 0 { : __used; }
+        __len = __nihil_c("strlen", __e + 21);
+        __rec = (19 + __len + 1 + 7) & -8;
+        __used + __rec > cap { __nihil_c("seekdir", __dir, __pos); : __used; }
+        __r = buf + __used;
+        __nihil_c("memset", __r, 0, __rec);
+        __nihil_poke8(__r, __nihil_peek(__e));
+        __nihil_rt_pokeb(__r, 16, __rec & 255);
+        __nihil_rt_pokeb(__r, 17, __rec >> 8);
+        __nihil_rt_pokeb(__r, 18, __nihil_peekb(__e + 20));
+        __nihil_c("memcpy", __r + 19, __e + 21, __len);
+        __used = __used + __rec;
+    }
+    : __used;
+}
+
+__nihil_rt_close(fd = 0) {
+    fd >= 0 && fd < 256 && __nihil_rt_dirs[fd] != 0 {
+        __nihil_c32("closedir", __nihil_rt_dirs[fd]);
+        __nihil_rt_dirs[fd] = 0;
+    }
+    __nihil_c32("close", fd);
+}
+
+// fstat / newfstatat into Linux's struct stat at b (144 bytes): dev, ino, mode, size, mtime
+__nihil_rt_stat(kind = 0, x1 = 0, x2 = 0, x3 = 0, x4 = 0) {
+    __st = __nihil_c("calloc", 1, 144);
+    __r = 0;
+    __b = 0;
+    kind == 5 {
+        __r = __nihil_c32("fstat", x1, __st);
+        __b = x2;
+    } || {
+        __fl = 0;
+        x4 & 0x100 != 0 { __fl = 0x20; }
+        __r = __nihil_c32("fstatat", __nihil_rt_at_dir(x1), x2, __st, __fl);
+        __b = x3;
+    }
+    __r != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __st); : -__e; }
+    __nihil_c("memset", __b, 0, 144);
+    __nihil_poke8(__b, __nihil_rt_peek4(__st));                              // st_dev
+    __nihil_poke8(__b + 8, __nihil_peek(__st + 8));                          // st_ino
+    __nihil_rt_poke4(__b + 24, __nihil_rt_peek4(__st + 4) & 0xFFFF);         // st_mode
+    __nihil_poke8(__b + 48, __nihil_peek(__st + 96));                        // st_size
+    __nihil_poke8(__b + 88, __nihil_peek(__st + 48));                        // st_mtime
+    __nihil_poke8(__b + 96, __nihil_peek(__st + 56));                        // st_mtime_nsec
+    __nihil_c("free", __st);
+    : 0;
+}
+
+// mincore(start, len, vec): Linux's 4 KiB pages, from macOS's (16 KiB); a page never written
+// reports only MINCORE_ANONYMOUS: nothing there
+__nihil_rt_mincore(start = 0, len = 0, vec = 0) {
+    __pg = __nihil_c32("getpagesize");
+    __first = start & -__pg;
+    __n = (start + len - __first + __pg - 1) / __pg;
+    __v = __nihil_c("malloc", __n);
+    __v == 0 { : -12; }
+    __nihil_c32("mincore", __first, __n * __pg, __v) != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __v); : -__e; }
+    __pages = (len + 4095) / 4096;
+    __i = 0;
+    * __i < __pages {
+        __s = __nihil_peekb(__v + (start + __i * 4096 - __first) / __pg) & 0x7F;
+        __s != 0 { __nihil_rt_pokeb(vec, __i, 1); } || { __nihil_rt_pokeb(vec, __i, 0); }
+        __i = __i + 1;
+    }
+    __nihil_c("free", __v);
+    : 0;
+}
+
+// x: [n, a1 … a6] (an array: as many as it has, the others 0)
+__nihil_rt_arg(x = 0, i = 0) {
+    i < __nihil_peek(x - 8) { : __nihil_peek(x + 8 * i); }
+    : 0;
+}
+
+__nihil_rt_syscall(x = 0) {
+    : __nihil_rt_sys(__nihil_rt_arg(x, 0), __nihil_rt_arg(x, 1), __nihil_rt_arg(x, 2), __nihil_rt_arg(x, 3),
+                     __nihil_rt_arg(x, 4), __nihil_rt_arg(x, 5), __nihil_rt_arg(x, 6));
+}
+
+// one Linux call: its number and arguments → its result (negative: -errno, Linux's)
+__nihil_rt_sys(__n = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0) {
+    __n == 0 { : __nihil_rt_res(__nihil_c("read", a1, a2, a3)); }
+    __n == 1 { : __nihil_rt_res(__nihil_c("write", a1, a2, a3)); }
+    __n == 3 { __nihil_rt_close(a1); : 0; }
+    __n == 5 { : __nihil_rt_stat(5, a1, a2, a3, a4); }
+    __n == 262 { : __nihil_rt_stat(262, a1, a2, a3, a4); }
+    __n == 8 { : __nihil_rt_res(__nihil_c("lseek", a1, a2, a3)); }
+    __n == 9 {                                              // mmap: the flags' numbers differ
+        __f = a4 & 3;
+        a4 & 0x10 != 0 { __f = __f | 0x10; }
+        a4 & 0x20 != 0 { __f = __f | 0x1000; }
+        a4 & 0x4000 != 0 { __f = __f | 0x40; }
+        __p = __nihil_c("mmap", a1, a2, a3, __f, a5, a6);
+        __p == -1 { : -__nihil_rt_errno(); }
+        : __p;
+    }
+    __n == 11 { : __nihil_rt_res(__nihil_c32("munmap", a1, a2)); }
+    __n == 13 {                                             // rt_sigaction: only SIG_DFL / SIG_IGN
+        a2 != 0 { __h = 0; __nihil_peek(a2) == 1 { __h = 1; } __nihil_c("signal", a1, __h); }
+        : 0;
+    }
+    __n == 17 { : __nihil_rt_res(__nihil_c("pread", a1, a2, a3, a4)); }
+    __n == 18 { : __nihil_rt_res(__nihil_c("pwrite", a1, a2, a3, a4)); }
+    __n == 21 { : __nihil_rt_res(__nihil_c32("access", a1, a2)); }
+    __n == 27 { : __nihil_rt_mincore(a1, a2, a3); }
+    __n == 28 {                                             // madvise: MADV_DONTNEED zeroes the pages on Linux
+        a3 == 4 {
+            __nihil_c("mmap", a1, a2, 3, 0x1012, -1, 0) == -1 { : -__nihil_rt_errno(); }
+        }
+        : 0;
+    }
+    __n == 33 { : __nihil_rt_fd_made(__nihil_rt_res(__nihil_c32("dup2", a1, a2))); }
+    __n == 35 { : __nihil_rt_res(__nihil_c32("nanosleep", a1, a2)); }
+    __n == 39 { : __nihil_rt_res(__nihil_c32("getpid")); }
+    __n == 41 { : __nihil_rt_own_socket(__nihil_c32("socket", a1, a2 & 15, a3), a2); }
+    __n == 42 || __n == 49 {                                // connect, bind: macOS's sockaddr
+        __a = __nihil_rt_sockaddr(a2);
+        __r = 0;
+        __n == 42 { __r = __nihil_c32("connect", a1, __a, 16); } || { __r = __nihil_c32("bind", a1, __a, 16); }
+        __r = __nihil_rt_res(__r);
+        __nihil_c("free", __a);
+        : __r;
+    }
+    __n == 43 || __n == 288 {                               // accept, accept4(fd, addr, len, flags)
+        __c = __nihil_c32("accept", a1, 0, 0);
+        * __c < 0 && __nihil_rt_peek4(__nihil_c("__error")) == 4 { __c = __nihil_c32("accept", a1, 0, 0); }
+        __fl = 0;
+        __n == 288 { __fl = a4; }
+        : __nihil_rt_own_socket(__c, __fl);
+    }
+    __n == 44 { : __nihil_rt_res(__nihil_c("send", a1, a2, a3, 0)); }
+    __n == 45 { : __nihil_rt_res(__nihil_c("recv", a1, a2, a3, 0)); }
+    __n == 50 { : __nihil_rt_res(__nihil_c32("listen", a1, a2)); }
+    __n == 54 {                                             // setsockopt: SOL_SOCKET and its options differ
+        __lv = a2;
+        __op = a3;
+        a2 == 1 {
+            __lv = 0xFFFF;
+            __op = 0;
+            a3 == 2 { __op = 4; }
+            a3 == 9 { __op = 8; }
+            a3 == 20 { __op = 0x1006; }
+            a3 == 21 { __op = 0x1005; }
+            __op == 0 { : 0; }
+        }
+        : __nihil_rt_res(__nihil_c32("setsockopt", a1, __lv, __op, a4, a5));
+    }
+    __n == 57 { : __nihil_rt_res(__nihil_c32("fork")); }
+    __n == 59 { __nihil_c32("execve", a1, a2, a3); : -__nihil_rt_errno(); }
+    __n == 60 || __n == 231 { __nihil_c("_exit", a1); }
+    __n == 61 {                                             // wait4(pid, status, options, rusage)
+        __st = __nihil_c("calloc", 1, 8);
+        __r = __nihil_c32("wait4", a1, __st, a3, 0);
+        __r < 0 { __e = __nihil_rt_errno(); __nihil_c("free", __st); : -__e; }
+        a2 != 0 { __nihil_rt_poke4(a2, __nihil_rt_peek4(__st)); }
+        __nihil_c("free", __st);
+        : __r;
+    }
+    __n == 62 { : __nihil_rt_res(__nihil_c32("kill", a1, a2)); }
+    __n == 73 { : __nihil_rt_res(__nihil_c32("flock", a1, a2)); }
+    __n == 74 {                                             // fsync, through the drive's cache
+        __nihil_cvar("fcntl", 2, a1, 51) == 0 { : 0; }
+        : __nihil_rt_res(__nihil_c32("fsync", a1));
+    }
+    __n == 77 { : __nihil_rt_res(__nihil_c32("ftruncate", a1, a2)); }
+    __n == 80 { : __nihil_rt_res(__nihil_c32("chdir", a1)); }
+    __n == 82 { : __nihil_rt_res(__nihil_c32("rename", a1, a2)); }
+    __n == 83 { : __nihil_rt_res(__nihil_c32("mkdir", a1, a2)); }
+    __n == 87 { : __nihil_rt_res(__nihil_c32("unlink", a1)); }
+    __n == 217 { : __nihil_rt_getdents(a1, a2, a3); }
+    __n == 228 {                                            // clock_gettime(0 realtime, 1 monotonic, timespec)
+        __ts = __nihil_c("calloc", 1, 16);
+        __ck = 0;
+        a1 == 1 { __ck = 6; }
+        __nihil_c32("clock_gettime", __ck, __ts) != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __ts); : -__e; }
+        __nihil_poke8(a2, __nihil_peek(__ts));
+        __nihil_poke8(a2 + 8, __nihil_peek(__ts + 8));
+        __nihil_c("free", __ts);
+        : 0;
+    }
+    __n == 257 {                                            // openat: the Linux files programs read
+        __nihil_c32("memcmp", a2, __nihil_addr("/proc/"), 6) == 0 { : __nihil_rt_virtual_fd(a2); }
+        : __nihil_rt_fd_made(__nihil_rt_res(__nihil_cvar("openat", 3, __nihil_rt_at_dir(a1), a2, __nihil_rt_open_flags(a3), a4)));
+    }
+    __n == 263 {
+        __fl = 0;
+        a3 & 0x200 != 0 { __fl = 0x80; }
+        : __nihil_rt_res(__nihil_c32("unlinkat", __nihil_rt_at_dir(a1), a2, __fl));
+    }
+    __n == 293 {                                            // pipe2(fds, flags)
+        __p = __nihil_c("calloc", 1, 8);
+        __nihil_c32("pipe", __p) != 0 { __e = __nihil_rt_errno(); __nihil_c("free", __p); : -__e; }
+        a2 & 0x80000 != 0 { __nihil_rt_cloexec(__nihil_rt_peek4(__p)); __nihil_rt_cloexec(__nihil_rt_peek4(__p + 4)); }
+        __nihil_rt_fd_made(__nihil_rt_peek4(__p));
+        __nihil_rt_fd_made(__nihil_rt_peek4(__p + 4));
+        __nihil_poke8(a1, __nihil_peek(__p));
+        __nihil_c("free", __p);
+        : 0;
+    }
+    __n == 436 {                                            // close_range(first, last, 0)
+        __last = __nihil_c32("getdtablesize") - 1;
+        a2 < __last { __last = a2; }
+        __fd = a1;
+        * __fd <= __last { __nihil_c32("close", __fd); __fd = __fd + 1; }
+        : 0;
+    }
+    : -38;                                                  // ENOSYS
+}
+
+// ---- texts made from arrays, files, the network, the input ----
+// Before waiting or reading, what was printed is written (__nihil_rt_flush).
+
+// what read_at gives besides its text (rdx, rcx: 42_arm.nihil, arm_call_nihil)
+__nihil_rt_ret_dx = 0;
+__nihil_rt_ret_cx = 0;
+
+__nihil_rt_failed(m = "") { __nihil_rt_fail_at(__nihil_addr(m), #m); }
+
+// the characters of an array of INTs → a text
+__nihil_rt_text(a = 0) {
+    __n = __nihil_peek(a - 8);
+    __t = __nihil_rt_new_text(__n);
+    __i = 0;
+    * __i < __n { __nihil_rt_pokeb(__t, __i, __nihil_peek(a + 8 * __i)); __i = __i + 1; }
+    : __nihil_str_at(__t);
+}
+
+// the text at s (n bytes) as a C path in a new buffer (free it), and whether it can be one: shorter
+// than 4096 bytes, no zero byte in it
+__nihil_rt_path_ok = false;
+__nihil_rt_cpath(s = 0) {
+    __n = __nihil_peek(s - 8);
+    __k = __n;
+    __k > 4095 { __k = 4095; }
+    __p = __nihil_c("calloc", 1, __k + 1);
+    __nihil_c("memcpy", __p, s, __k);
+    __nihil_rt_path_ok = __n < 4096 && __nihil_c("memchr", s, 0, __n) == 0;
+    : __p;
+}
+
+// a C text → a Nihil one
+__nihil_rt_from_c(p = 0) { : __nihil_rt_sub(p, 0, __nihil_c("strlen", p)); }
+
+__nihil_rt_read(path = 0, optional = false) {
+    __p = __nihil_rt_cpath(path);
+    __fd = -1;
+    __nihil_rt_path_ok { __fd = __nihil_rt_sys(257, -100, __p, 0, 0); }
+    __fd < 0 {
+        optional { __nihil_c("free", __p); : 0; }
+        __nihil_rt_failed("could not read '" + __nihil_rt_from_c(__p) + "'");
+    }
+    __size = __nihil_rt_sys(8, __fd, 0, 2);
+    __cap = __size;
+    __stream = __size <= 0;
+    __stream { __cap = 65536; } || { __nihil_rt_sys(8, __fd, 0, 0); }
+    __t = __nihil_rt_new_text(__cap);
+    __got = 0;
+    * true {
+        __got == __cap && !__stream { __nihil_rt_finish(__t, __got); __nihil_rt_sys(3, __fd); __nihil_c("free", __p); : __t; }
+        __got == __cap {
+            __u = __nihil_rt_new_text(__cap * 2);
+            __nihil_c("memcpy", __u, __t, __got);
+            __t = __u;
+            __cap = __cap * 2;
+        }
+        __k = __nihil_rt_sys(0, __fd, __t + __got, __cap - __got);
+        __k < 0 && __k != -4 {
+            __nihil_rt_sys(3, __fd);
+            optional { __nihil_c("free", __p); : 0; }
+            __nihil_rt_failed("could not read '" + __nihil_rt_from_c(__p) + "'");
+        }
+        __k == 0 { __nihil_rt_finish(__t, __got); __nihil_rt_sys(3, __fd); __nihil_c("free", __p); : __t; }
+        __k > 0 { __got = __got + __k; }
+    }
+    : 0;
+}
+
+// a text made longer than it is: its length n (and the 0 after it)
+__nihil_rt_finish(t = 0, n = 0) {
+    __nihil_poke8(t - 8, n);
+    __nihil_rt_pokeb(t, n, 0);
+}
+
+__nihil_rt_read_file(path = 0) { : __nihil_rt_read(path, false); }
+__nihil_rt_read_file_opt(path = 0) { : __nihil_rt_read(path, true); }
+
+// why a file could not be written (Linux's errno)
+__nihil_rt_reason(e = 0) {
+    e == 2 { : "no such file or directory"; }
+    e == 13 { : "permission denied"; }
+    e == 17 { : "file exists"; }
+    e == 20 { : "a part of the path is not a directory"; }
+    e == 21 { : "it is a directory"; }
+    e == 28 { : "no space left on the device"; }
+    e == 30 { : "read-only file system"; }
+    e == 36 { : "the path is too long"; }
+    e == 122 { : "disk quota exceeded"; }
+    e == 255 { : "the path has a zero byte"; }
+    : "error " + $e;
+}
+
+// flag: 0 replace (atomically), 1 append, 2 at an offset, 3 truncate, 4 at an offset without fsync,
+// 5 truncate without fsync
+__nihil_rt_write(path = 0, text = 0, offset = 0, flag = 0) {
+    __n = __nihil_peek(path - 8);
+    __k = __n;
+    __k > 4064 { __k = 4064; }
+    __p = __nihil_c("calloc", 1, __k + 64);
+    __nihil_c("memcpy", __p, path, __k);
+    __e = 0;
+    __nihil_c("memchr", path, 0, __k) != 0 { __e = 255; }
+    __e == 0 && __n > 4064 { __e = 36; }
+    __tmp = 0;
+    __e == 0 {
+        __target = __p;
+        __of = 0x41;
+        flag == 0 {
+            __tmp = __nihil_c("calloc", 1, __k + 64);
+            __nihil_c("memcpy", __tmp, __p, __k);
+            __nihil_c("memcpy", __tmp + __k, __nihil_addr(".nihil-tmp."), 11);
+            __nihil_rt_put_dec(__tmp, __k + 11, __nihil_rt_sys(39));
+            __target = __tmp;
+            __of = 0x241;
+        }
+        flag == 1 { __of = 0x441; }
+        flag == 3 || flag == 5 { __of = 1; }
+        __fd = __nihil_rt_sys(257, -100, __target, __of, 420);
+        __fd < 0 { __e = -__fd; }
+        __e == 0 {
+            __r = 0;
+            flag == 3 || flag == 5 {
+                __r = __nihil_rt_sys(77, __fd, offset);
+            } || {
+                __s = text;
+                __left = __nihil_peek(text - 8);
+                * __left > 0 && __r >= 0 {
+                    flag >= 2 { __r = __nihil_rt_sys(18, __fd, __s, __left, offset); } || { __r = __nihil_rt_sys(1, __fd, __s, __left); }
+                    __r == -4 { __r = 0; } || __r >= 0 { offset = offset + __r; __s = __s + __r; __left = __left - __r; __r = 0; }
+                }
+            }
+            __r >= 0 && flag < 4 { __r = __nihil_rt_sys(74, __fd); }
+            __r < 0 {
+                __nihil_rt_sys(3, __fd);
+                flag == 0 { __nihil_rt_sys(87, __tmp); }
+                __e = -__r;
+            } || {
+                __r = __nihil_rt_sys(3, __fd);
+                __r >= 0 && flag == 0 { __r = __nihil_rt_sys(82, __tmp, __p); }
+                __r < 0 { flag == 0 { __nihil_rt_sys(87, __tmp); } __e = -__r; }
+            }
+        }
+    }
+    __tmp != 0 { __nihil_c("free", __tmp); }
+    __e == 0 { __nihil_c("free", __p); : 0; }
+    __nihil_rt_failed("could not write '" + __nihil_rt_from_c(__p) + "': " + __nihil_rt_reason(__e));
+    : 0;
+}
+
+__nihil_rt_write_file(path = 0, text = 0) { : __nihil_rt_write(path, text, 0, 0); }
+__nihil_rt_append_file(path = 0, text = 0) { : __nihil_rt_write(path, text, 0, 1); }
+__nihil_rt_write_at(path = 0, text = 0, offset = 0) { : __nihil_rt_write(path, text, offset, 2); }
+__nihil_rt_write_at_ns(path = 0, text = 0, offset = 0) { : __nihil_rt_write(path, text, offset, 4); }
+__nihil_rt_truncate(path = 0, offset = 0) { : __nihil_rt_write(path, path, offset, 3); }
+__nihil_rt_truncate_ns(path = 0, offset = 0) { : __nihil_rt_write(path, path, offset, 5); }
+
+// read_at keeps up to 4 files open while the path names the same file (st_dev, st_ino)
+__nihil_rt_fd1 = [0 ; 4];                  // its descriptor + 1 (0: the slot is free)
+__nihil_rt_fdev = [0 ; 4];
+__nihil_rt_fino = [0 ; 4];
+__nihil_rt_fpath = [0 ; 4];                // its path (a C text of its own)
+__nihil_rt_fnext = 0;
+
+__nihil_rt_slot_close(s = 0) {
+    __nihil_rt_sys(3, __nihil_rt_fd1[s] - 1);
+    __nihil_rt_fd1[s] = 0;
+    __nihil_c("free", __nihil_rt_fpath[s]);
+    __nihil_rt_fpath[s] = 0;
+}
+
+// read_at(path, offset, count) → the text read (0: no file), rdx the file's size (-1: no file),
+// rcx a stamp of its version (mtime and inode)
+__nihil_rt_read_at(path = 0, offset = 0, want = 0) {
+    __nihil_rt_ret_cx = 0;
+    __nihil_rt_ret_dx = -1;
+    __p = __nihil_rt_cpath(path);
+    !__nihil_rt_path_ok { __nihil_c("free", __p); : 0; }
+    __st = __nihil_c("calloc", 1, 144);
+    __r = __nihil_rt_sys(262, -100, __p, __st, 0);
+    __slot = -1;
+    __i = 0;
+    * __i < 4 {
+        __slot < 0 && __nihil_rt_fd1[__i] != 0 && __nihil_c32("strcmp", __nihil_rt_fpath[__i], __p) == 0 { __slot = __i; }
+        __i = __i + 1;
+    }
+    __r < 0 {
+        __slot >= 0 { __nihil_rt_slot_close(__slot); }
+        __nihil_c("free", __st); __nihil_c("free", __p);
+        : 0;
+    }
+    __keep = false;
+    __fd = -1;
+    __slot >= 0 && __nihil_rt_fdev[__slot] == __nihil_peek(__st) && __nihil_rt_fino[__slot] == __nihil_peek(__st + 8) {
+        __fd = __nihil_rt_fd1[__slot] - 1;
+        __keep = true;
+    } || {
+        __slot >= 0 { __nihil_rt_slot_close(__slot); }
+        __fd = __nihil_rt_sys(257, -100, __p, 0x80000, 0);
+        __fd < 0 { __nihil_c("free", __st); __nihil_c("free", __p); : 0; }
+        __nihil_rt_sys(5, __fd, __st) < 0 { __nihil_rt_sys(3, __fd); __nihil_c("free", __st); __nihil_c("free", __p); : 0; }
+        __nihil_peek(path - 8) <= 256 {
+            __s = __nihil_rt_fnext;
+            __nihil_rt_fnext = (__nihil_rt_fnext + 1) & 3;
+            __nihil_rt_fd1[__s] != 0 { __nihil_rt_slot_close(__s); }
+            __nihil_rt_fd1[__s] = __fd + 1;
+            __nihil_rt_fdev[__s] = __nihil_peek(__st);
+            __nihil_rt_fino[__s] = __nihil_peek(__st + 8);
+            __nihil_rt_fpath[__s] = __p;
+            __p = 0;
+            __keep = true;
+        }
+    }
+    __size = __nihil_peek(__st + 48);
+    __stamp = __nihil_peek(__st + 88) * 1000000000 + __nihil_peek(__st + 96) + 0x9E3779B97F4A7C15 * __nihil_peek(__st + 8);
+    __count = 0;
+    offset >= 0 && offset < __size {
+        __count = __size - offset;
+        want < 0 { __count = 0; } || __count > want { __count = want; }
+    }
+    __t = __nihil_rt_new_text(__count);
+    __got = 0;
+    * __got < __count {
+        __k = __nihil_rt_sys(17, __fd, __t + __got, __count - __got, offset + __got);
+        __k == -4 { __k = 0; } || __k <= 0 { __count = __got; } || { __got = __got + __k; }
+    }
+    __nihil_rt_finish(__t, __got);
+    !__keep { __nihil_rt_sys(3, __fd); }
+    __p != 0 { __nihil_c("free", __p); }
+    __nihil_c("free", __st);
+    __nihil_rt_ret_cx = __stamp;
+    __nihil_rt_ret_dx = __size;
+    : __t;
+}
+
+__nihil_rt_sleep(ms = 0) {
+    ms <= 0 { : 0; }
+    __nihil_rt_flush();
+    __ts = __nihil_c("calloc", 1, 16);
+    __nihil_poke8(__ts, ms / 1000);
+    __nihil_poke8(__ts + 8, (ms % 1000) * 1000000);
+    * __nihil_rt_sys(35, __ts, __ts) == -4 { }
+    __nihil_c("free", __ts);
+    : 0;
+}
+
+// Linux's sockaddr_in for an IPv4 address and port, in a new buffer (free it)
+__nihil_rt_linux_addr(addr = 0, port = 0) {
+    __a = __nihil_c("calloc", 1, 16);
+    __nihil_rt_pokeb(__a, 0, 2);
+    __nihil_rt_pokeb(__a, 2, (port >> 8) & 255);
+    __nihil_rt_pokeb(__a, 3, port & 255);
+    __nihil_rt_pokeb(__a, 4, (addr >> 24) & 255);
+    __nihil_rt_pokeb(__a, 5, (addr >> 16) & 255);
+    __nihil_rt_pokeb(__a, 6, (addr >> 8) & 255);
+    __nihil_rt_pokeb(__a, 7, addr & 255);
+    : __a;
+}
+
+__nihil_rt_net_listen(port = 0, any = 0) {
+    __fd = __nihil_rt_sys(41, 2, 1 | 0x80000, 0);
+    __fd < 0 { : __fd; }
+    __one = __nihil_c("calloc", 1, 8);
+    __nihil_rt_poke4(__one, 1);
+    __nihil_rt_sys(54, __fd, 1, 2, __one, 4);
+    __nihil_c("free", __one);
+    __ip = 0x7F000001;
+    any != 0 { __ip = 0; }
+    __a = __nihil_rt_linux_addr(__ip, port);
+    __r = __nihil_rt_sys(49, __fd, __a, 16);
+    __nihil_c("free", __a);
+    __r >= 0 { __r = __nihil_rt_sys(50, __fd, 128); }
+    __r < 0 { __nihil_rt_sys(3, __fd); : __r; }
+    : __fd;
+}
+
+__nihil_rt_net_connect(addr = 0, port = 0) {
+    __fd = __nihil_rt_sys(41, 2, 1 | 0x80000, 0);
+    __fd < 0 { : __fd; }
+    __a = __nihil_rt_linux_addr(addr, port);
+    __r = __nihil_rt_sys(42, __fd, __a, 16);
+    * __r == -4 { __r = __nihil_rt_sys(42, __fd, __a, 16); }
+    __nihil_c("free", __a);
+    __r < 0 { __nihil_rt_sys(3, __fd); : __r; }
+    : __fd;
+}
+
+__nihil_rt_net_accept(fd = 0) {
+    __nihil_rt_flush();
+    __c = __nihil_rt_sys(288, fd, 0, 0, 0x80000);
+    * __c == -4 { __c = __nihil_rt_sys(288, fd, 0, 0, 0x80000); }
+    __c >= 0 {
+        __tv = __nihil_c("calloc", 1, 16);
+        __nihil_poke8(__tv, 15);
+        __nihil_rt_sys(54, __c, 1, 20, __tv, 16);
+        __nihil_c("free", __tv);
+    }
+    : __c;
+}
+
+__nihil_rt_fd_read(fd = 0, most = 0) {
+    most <= 0 { most = 65536; }
+    __t = __nihil_rt_new_text(most);
+    __k = __nihil_rt_sys(0, fd, __t, most);
+    * __k == -4 { __k = __nihil_rt_sys(0, fd, __t, most); }
+    __k < 0 { __k = 0; }
+    __nihil_rt_finish(__t, __k);
+    : __nihil_str_at(__t);
+}
+
+__nihil_rt_fd_send(fd = 0, s = 0) {
+    __left = __nihil_peek(s - 8);
+    * __left > 0 {
+        __k = __nihil_rt_sys(44, fd, s, __left, 0x4000);
+        __k < 0 && __k != -4 { : __k; }
+        __k > 0 { s = s + __k; __left = __left - __k; }
+    }
+    : 0;
+}
+
+__nihil_rt_fd_close(fd = 0) { __nihil_rt_sys(3, fd); : 0; }
+
+// the program's input, a byte at a time (-1 at its end); what was printed goes out first
+__nihil_rt_in_buf = 0;
+__nihil_rt_in_pos = 0;
+__nihil_rt_in_size = 0;
+__nihil_rt_in_end = false;
+
+__nihil_rt_read_byte() {
+    __nihil_rt_in_pos < __nihil_rt_in_size {
+        __b = __nihil_peekb(__nihil_rt_in_buf + __nihil_rt_in_pos);
+        __nihil_rt_in_pos = __nihil_rt_in_pos + 1;
+        : __b;
+    }
+    __nihil_rt_in_end { : -1; }
+    __nihil_rt_flush();
+    __nihil_rt_in_buf == 0 { __nihil_rt_in_buf = __nihil_c("malloc", 65536); }
+    __n = __nihil_rt_sys(0, 0, __nihil_rt_in_buf, 65536);
+    * __n == -4 { __n = __nihil_rt_sys(0, 0, __nihil_rt_in_buf, 65536); }
+    __n <= 0 { __nihil_rt_in_end = true; : -1; }
+    __nihil_rt_in_size = __n;
+    __nihil_rt_in_pos = 1;
+    : __nihil_peekb(__nihil_rt_in_buf);
+}
+
+// ---- reading texts: JSON values, lines of a fixed width, a table's records ----
+
+// the end of the JSON string that starts at s[i] ('"') → after its closing '"', or -1
+__nihil_rt_json_string(s = 0, n = 0, i = 0) {
+    i = i + 1;
+    * i < n {
+        __c = __nihil_peekb(s + i);
+        i = i + 1;
+        __c == '"' { : i; }
+        __c == 92 { i = i + 1; }
+    }
+    : -1;
+}
+
+__nihil_rt_json_space(c = 0) { : c == ' ' || c == 10 || c == 13 || c == 9; }
+
+// json_end(s, i): the end of the JSON value at s[i] (after blanks) → the index after it, or -1
+__nihil_rt_json_end(s = 0, i = 0) {
+    __n = __nihil_peek(s - 8);
+    i < 0 { : -1; }
+    * i < __n && __nihil_rt_json_space(__nihil_peekb(s + i)) { i = i + 1; }
+    i >= __n { : -1; }
+    __c = __nihil_peekb(s + i);
+    __c == '"' { : __nihil_rt_json_string(s, __n, i); }
+    __c == '{' || __c == '[' {
+        __depth = 0;
+        * i < __n {
+            __c = __nihil_peekb(s + i);
+            __c == '"' {
+                i = __nihil_rt_json_string(s, __n, i);
+                i < 0 { : -1; }
+            } || {
+                i = i + 1;
+                __c == '{' || __c == '[' { __depth = __depth + 1; }
+                || __c == '}' || __c == ']' { __depth = __depth - 1; __depth == 0 { : i; } }
+            }
+        }
+        : -1;
+    }
+    __start = i;
+    * i < __n {
+        __c = __nihil_peekb(s + i);
+        __c == ',' || __c == '}' || __c == ']' || __nihil_rt_json_space(__c) { __n = i; } || { i = i + 1; }
+    }
+    i == __start { : -1; }
+    : i;
+}
+
+// lines(s, w): how many lines of w characters (and a line break) s has, or -1 if it is not so
+__nihil_rt_lines(s = 0, w = 0) {
+    __n = __nihil_peek(s - 8);
+    w <= 0 { : -1; }
+    __n == 0 { : 0; }
+    __whole = __n / (w + 1);
+    __rest = __n % (w + 1);
+    __lines = __whole;
+    __rest != 0 { __rest != w { : -1; } __lines = __lines + 1; }
+    __k = 0;
+    * __k < __whole { __nihil_peekb(s + __k * (w + 1) + w) != 10 { : -1; } __k = __k + 1; }
+    __breaks = 0;                          // the line breaks, 8 bytes at a time: a byte 10 becomes 0 by
+    __i = 0;                               // xor, and an exact test of zero bytes marks it with its high bit
+    __end = __n & -8;
+    * __i < __end {
+        __x = __nihil_peek(s + __i) ^ 0x0A0A0A0A0A0A0A0A;
+        __y = ~(((__x & 0x7F7F7F7F7F7F7F7F) + 0x7F7F7F7F7F7F7F7F) | __x | 0x7F7F7F7F7F7F7F7F);
+        __breaks = __breaks + (((((__y >> 7) & 0x0101010101010101) * 0x0101010101010101) >> 56) & 255);
+        __i = __i + 8;
+    }
+    * __i < __n { __nihil_peekb(s + __i) == 10 { __breaks = __breaks + 1; } __i = __i + 1; }
+    __breaks != __whole { : -1; }
+    : __lines;
+}
+
+__nihil_rt_pow10 = [0.0 ; 23];             // 1e0 … 1e22, exact as doubles
+__nihil_rt_pow10_made = false;
+
+// rec_parse(t, at, schema): the record in the line of t at at, its fields by schema ([n, type,
+// width, …, then the model's tag]: 1 INT, 2 BOOL, 3 STRING, another FLOAT) → a new record (its texts
+// inside its block; the tag in its header's top 16 bits), or
+// -1. One pass: the block is as large as the schema's texts can be (its words: kept by schema).
+__nihil_rt_sch = 0;
+__nihil_rt_sch_words = 0;
+__nihil_rt_rec_parse(t = 0, at = 0, schema = 0) {
+    __nf = __nihil_peek(schema);
+    schema != __nihil_rt_sch {
+        __words = __nf;
+        __f = schema + 8;
+        __fend = __f + 16 * __nf;
+        * __f < __fend { __nihil_peek(__f) == 3 { __words = __words + (__nihil_peek(__f + 8) + 16) / 8; } __f = __f + 16; }
+        __nihil_rt_sch = schema;
+        __nihil_rt_sch_words = __words;
+    }
+    __r = [0 ; __nihil_rt_sch_words];
+    __rec = __nihil_addr(__r);
+    __nihil_poke8(__rec - 8, __nf);
+    __nihil_poke8(__rec - 16, __nihil_peek(__rec - 16) | __nihil_peek(schema + 8 + 16 * __nf));   // its model's tag (SPEC §20.12)
+    __next = __rec + 8 * __nf;
+    __slot = __rec;
+    __fs = schema + 8;
+    __fe = __fs + 16 * __nf;
+    * __fs < __fe {
+        __type = __nihil_peek(__fs);
+        __a = t + at;                      // (addresses, not indexes)
+        at = at + __nihil_peek(__fs + 8);
+        __b = t + at;
+        __fs = __fs + 16;
+        * __b - 8 >= __a && __nihil_peek(__b - 8) == 0x2020202020202020 { __b = __b - 8; }   // its blanks: 8 at a time
+        * __b > __a && __nihil_peekb(__b - 1) == ' ' { __b = __b - 1; }
+        __type != 3 {
+            * __a + 8 <= __b && __nihil_peek(__a) == 0x2020202020202020 { __a = __a + 8; }
+            * __a < __b && __nihil_peekb(__a) == ' ' { __a = __a + 1; }
+        }
+        __v = 0;
+        __type == 1 && __a < __b {                          // INT
+            __neg = false;
+            __c = __nihil_peekb(__a);
+            __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
+            __a == __b { : -1; }
+            * __a < __b {
+                __d = __nihil_peekb(__a) - '0';
+                __d < 0 || __d > 9 { : -1; }
+                __v >= 922337203685477580 && (__v > 922337203685477580 || __d > 7) { : -1; }   // (INT's largest, / 10)
+                __v = __v * 10 + __d;
+                __a = __a + 1;
+            }
+            __neg { __v = -__v; }
+        } || __type == 2 {                                  // BOOL
+            __b - __a == 1 {
+                __c = __nihil_peekb(__a);
+                __c == 'T' { __v = 1; } || __c != 'F' { : -1; }
+            } || __b != __a { : -1; }
+        } || __type == 3 {                                  // STRING, in the record's block: 8 bytes at a time
+            __m = __b - __a;
+            __nihil_poke8(__next, __m);
+            __dst = __next + 8;
+            __q = 0;
+            * __q + 8 <= __m { __nihil_poke8(__dst + __q, __nihil_peek(__a + __q)); __q = __q + 8; }
+            __ds = __nihil_str_at(__dst);
+            * __q < __m { __nihil_poke(__ds, __q, __nihil_peekb(__a + __q)); __q = __q + 1; }
+            __v = __dst;
+            __next = __dst + ((__m + 8) / 8) * 8;
+        } || __a < __b {                                    // FLOAT (any other type): Clinger's fast path
+            __neg = false;
+            __c = __nihil_peekb(__a);
+            __c == '-' { __neg = true; __a = __a + 1; } || __c == '+' { __a = __a + 1; }
+            __mant = 0;
+            __digits = 0;
+            __pw = 0;
+            __seen = false;
+            __dot = false;
+            * __a < __b {
+                __c = __nihil_peekb(__a);
+                __c == '.' && !__dot {
+                    __dot = true;
+                } || {
+                    __d = __c - '0';
+                    __d < 0 || __d > 9 { : -1; }
+                    __seen = true;
+                    __mant != 0 || __d != 0 {
+                        __digits >= 15 { : -1; }
+                        __digits = __digits + 1;
+                        __mant = __mant * 10 + __d;
+                    }
+                    __dot { __pw = __pw - 1; }
+                }
+                __a = __a + 1;
+            }
+            !__seen || __pw < -22 { : -1; }
+            !__nihil_rt_pow10_made {
+                __p = 1.0;
+                __k = 0;
+                * __k < 23 { __nihil_rt_pow10[__k] = __p; __p = __p * 10.0; __k = __k + 1; }
+                __nihil_rt_pow10_made = true;
+            }
+            __mant != 0 { __v = __nihil_addr(.__mant / __nihil_rt_pow10[-__pw]); }
+            __neg { __v = __v | (1 << 63); }
+        }
+        __nihil_poke8(__slot, __v);
+        __slot = __slot + 8;
+    }
+    : __rec;
+}

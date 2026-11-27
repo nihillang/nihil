@@ -19,7 +19,7 @@ convert(from_ = 0, to = 0) {
     is_opt(to) {
         from_ == TYPE_ABSENT { : true; }              // _ already leaves rax = rdx = 0
         from_ == base_opt(to) {
-            eb(0xBA, 1, 0, 0, 0);                   // mov edx, 1
+            op_load(OP_IMM, R_DX, 1);                   // mov edx, 1
             : true;
         }
     }
@@ -40,7 +40,7 @@ record_subtype(c = 0, p = 0) {
 convert_argument(from_ = 0, to = 0) {
     convert(from_, to) { : true; }
     !is_opt(from_) && record_subtype(from_, base_opt(to)) {
-        is_opt(to) { eb(0xBA, 1, 0, 0, 0); }         // mov edx, 1: present
+        is_opt(to) { op_load(OP_IMM, R_DX, 1); }      // mov edx, 1: present
         : true;
     }
     is_opt(from_) && is_opt(to) && record_subtype(base_opt(from_), base_opt(to)) { : true; }   // presence kept

@@ -52,10 +52,9 @@ raise_ahead() {
 cmd_protected_block() {
     next_token();                        // "?" → "{"
     method_current >= 0 { prot_in_method = true; } || { prot_at_top = true; }
-    eb(0x48, 0x8D, 0x05);                // lea rax, [rip + on_error]
-    on_error = size_code;
-    emit_d(0);
+    on_error = op_lea_fwd(R_AX);         // lea rax, [rip + on_error]
     emit_call_rt(RT_PROTECT);
+    want_arm { arm_prot_block(); }       // (-native: the unit keeps its slots in memory too)
     prot_depth = prot_depth + 1;
     block();
     prot_depth = prot_depth - 1;
@@ -63,16 +62,14 @@ cmd_protected_block() {
     tok_type == T_OR {
         next_token();                    // "||" → "{"
         tok_type != '{' { error_expected("'{' after '?{ … } ||': the block that runs when it fails"); }
-        emit(0xE9);                      // jmp over the handler
-        over = size_code;
-        emit_d(0);
-        put_d(on_error, size_code - (on_error + 4));
+        over = op_jmp();                 // jmp over the handler
+        patch_to_here(on_error);
         last_target = size_code;         // the runtime lands here
         block();
         patch_here(over);
         tok_type == T_OR { error("'?{ … } || { … }' takes one block after '||'"); }
     } || {
-        put_d(on_error, size_code - (on_error + 4));
+        patch_to_here(on_error);
         last_target = size_code;
     }
 }
@@ -267,21 +264,19 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     ix = new_slot();
     emit_store_local(a);
     lst {
-        eb(0x48, 0x8B, 0x00);                // mov rax, [rax]: a list's count, on entry
-        eb(0x48, 0x89, 0xC1);                // mov rcx, rax
+        op_ld(R_AX, R_AX, 0, 0);                // mov rax, [rax]: a list's count, on entry
+        op_mov(R_CX, R_AX);                // mov rcx, rax
     } || {
-        eb(0x48, 0x8B, 0x48, 0xF8);          // mov rcx, [rax - 8]: the size
+        op_ld(R_CX, R_AX, -8, 0);          // mov rcx, [rax - 8]: the size
     }
-    eb(0x48, 0x89, 0x8D); emit_d(n);         // mov [rbp + n], rcx
-    eb(0x48, 0xC7, 0x85); emit_d(ix); emit_d(0);    // mov qword [rbp + i], 0
+    op_st(R_BP, n, R_CX, 1);         // mov [rbp + n], rcx
+    op_sti(R_BP, ix, 0, 1);    // mov qword [rbp + i], 0
     align_loop();
-    top = size_code;
+    top = label_here();
     last_target = size_code;
-    eb(0x48, 0x8B, 0x8D); emit_d(ix);        // mov rcx, [rbp + i]
-    eb(0x48, 0x3B, 0x8D); emit_d(n);         // cmp rcx, [rbp + n]
-    eb(0x0F, 0x8D);                          // jge end
-    leave = size_code;
-    emit_d(0);
+    op_ld(R_CX, R_BP, ix, 1);        // mov rcx, [rbp + i]
+    op_cmpm(R_CX, R_BP, n, 1);         // cmp rcx, [rbp + n]
+    leave = op_jcc(CC_GE);                          // jge end
     // the block, with x (and i) as its first locals
     line = tok_line;
     next_token();
@@ -296,11 +291,11 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
         il == xl && same_text(ii, xi, il) { restore_pos(ii, il, iln, ili); error("the element and the index need two names"); }
         ki = each_name(ii, il, iln, ili, TYPE_INT);
     }
-    eb(0x48, 0x8B, 0x85); emit_d(a);         // mov rax, [rbp + a]
-    lst { eb(0x48, 0x8B, 0x80); emit_d(16); }   // mov rax, [rax + 16]: a list's items, read again each turn (it may grow)
-    t == TYPE_STR { eb(0x0F, 0xB6, 0x04, 0x08); } || { eb(0x48, 0x8B, 0x04, 0xC8); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
+    op_ld(R_AX, R_BP, a, 1);         // mov rax, [rbp + a]
+    lst { op_ld(R_AX, R_AX, 16, 1); }   // mov rax, [rax + 16]: a list's items, read again each turn (it may grow)
+    t == TYPE_STR { op_ldbx(R_AX, R_AX, R_CX); } || { op_ldx(R_AX, R_AX, R_CX); }   // movzx eax, byte [rax+rcx] / mov rax, [rax+rcx*8]
     emit_store_var(kx);
-    has_i { eb(0x48, 0x8B, 0x85); emit_d(ix); emit_store_var(ki); }   // mov rax, [rbp + i]
+    has_i { op_ld(R_AX, R_BP, ix, 1); emit_store_var(ki); }   // mov rax, [rbp + i]
     loop_depth = loop_depth + 1;
     * tok_type != '}' {
         tok_type == T_END {
@@ -318,7 +313,7 @@ each_loop(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     n_regs = nr;
     candidates = nc;
     level = level - 1;
-    eb(0x48, 0xFF, 0x85); emit_d(ix);        // inc qword [rbp + i]
+    op_addim(R_BP, ix, 1, 1);        // inc qword [rbp + i]
     emit_jmp_to(top);
     patch_here(leave);
     slots = slots - 3;
@@ -371,15 +366,13 @@ counted_loop(with_block = true) {
         // counter in a register: mov r, rax ; top: test r, r ; jle end ; … ; dec r ; jmp top
         emit_mov_reg_rax(r);
         align_loop();
-        top = size_code;
-        eb(0x48 | (rex_b(r) * 5), 0x85, 0xC0 | ((r & 7) << 3) | (r & 7));   // test r, r
-        eb(0x0F, 0x8E);                     // jle rel32
-        leave = size_code;
-        emit_d(0);
+        top = label_here();
+        op_test(r);   // test r, r
+        leave = op_jcc(CC_LE);                     // jle rel32
         loop_depth = loop_depth + 1;
         with_block { block(); } || { cmd_call(); }
         loop_depth = loop_depth - 1;
-        eb(0x48 | rex_b(r), 0xFF, 0xC8 | (r & 7));                          // dec r
+        op_addi(r, -1);                          // dec r
         emit_jmp_to(top);
         patch_here(leave);
         n_regs = n_regs - 1;
@@ -389,17 +382,13 @@ counted_loop(with_block = true) {
     d = new_slot();
     emit_store_local(d);
     align_loop();
-    top = size_code;
-    eb(0x48, 0x83, 0xBD);                   // cmp qword [rbp+disp32], imm8
-    emit_d(d);
-    eb(0x00, 0x0F, 0x8E);                   // 0 ; jle rel32
-    leave = size_code;
-    emit_d(0);
+    top = label_here();
+    op_cmpim(R_BP, d, 0, 1);                // cmp qword [rbp+disp32], 0
+    leave = op_jcc(CC_LE);                  // jle rel32
     loop_depth = loop_depth + 1;
     with_block { block(); } || { cmd_call(); }
     loop_depth = loop_depth - 1;
-    eb(0x48, 0xFF, 0x8D);                   // dec qword [rbp+disp32]
-    emit_d(d);
+    op_addim(R_BP, d, -1, 1);               // dec qword [rbp+disp32]
     emit_jmp_to(top);
     patch_here(leave);
     slots = slots - 1;
@@ -424,10 +413,8 @@ conditional() {
             patch_here(nxt);
             again = false;
         } || {
-            emit(0xE9);                    // jmp end
-            pending[n_pending] = size_code;
+            pending[n_pending] = op_jmp(); // jmp end
             n_pending = n_pending + 1;
-            emit_d(0);
             patch_here(nxt);             // the next branch starts here
             next_token();                // consome "||"
             tok_type == '{' {
@@ -459,7 +446,7 @@ cmd_while() {
     next_token();
     loop_depth = loop_depth + 1;            // the condition runs on every turn too
     align_loop();
-    top = size_code;
+    top = label_here();
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
     !is_bool(t) {
@@ -509,9 +496,7 @@ abstract_body(k = 0) {
     const_put_source(s_ofs[k], d);
     const_put_str(" implements it");
     c = const_close();
-    eb(0x48, 0x8D, 0x05);                   // lea rax, [rip + message]
-    register_fixup(size_code, c, false);
-    emit_d(0);
+    op_lea_const(R_AX, c);                  // lea rax, [rip + message]
     emit_call_rt(RT_FAIL);
     * tok_type != '}' { tok_type == T_END { error_expected("'}'"); } next_token(); }
     next_token();
@@ -519,22 +504,19 @@ abstract_body(k = 0) {
 
 cmd_method(k = 0) {
     s_skip[k] != 0 { skip_method(); :; }   // a prelude method the program does not reach
-    emit(0xE9);                            // jmp over the body
-    jump = size_code;
-    emit_d(0);
+    jump = op_jmp();                            // jmp over the body
     s_end[k] = size_code;
+    a_method(k);
     limit_regs = 0;
     optimize { limit_regs = s_regs[k]; }    // how many registers the previous pass asked for
-    eb(0x55, 0x48, 0x89, 0xE5);             // push rbp ; mov rbp, rsp
+    op_push(R_BP); op_mov(R_BP, R_SP);   // push rbp ; mov rbp, rsp
     i = 0;
     limit_regs {
         r = REGS[i];
-        r >= 8 { eb(0x41, 0x50 | (r & 7)); } || { emit(0x50 | r); }   // push r
+        op_push(r);   // push r
         i = i + 1;
     }
-    eb(0x48, 0x81, 0xEC);                   // sub rsp, N
-    frame = size_code;
-    emit_d(0);
+    frame = op_frame();                     // sub rsp, N
     sv_slots = slots;
     sv_max = max_slots;
     sv_n = n_sym;
@@ -613,12 +595,10 @@ cmd_method(k = 0) {
         const_put_source(s_ofs[k], s_len[k]);
         const_put_str("' ended without returning a value (missing ': value;')");
         m = const_close();
-        eb(0x48, 0x8D, 0x35);               // lea rsi, [rip + mensagem]
-        register_fixup(size_code, m, false);
-        emit_d(0);
+        op_lea_const(R_SI, m);               // lea rsi, [rip + mensagem]
         emit_call_rt(RT_ERROR);
     }
-    put_d(frame, (max_slots * 8 + 15) & -16);
+    put_frame(frame, (max_slots * 8 + 15) & -16);
     n_sym = sv_n;
     max_slots = sv_max;
     slots = sv_slots;
@@ -636,6 +616,7 @@ cmd_method(k = 0) {
     }
     limit_regs = 0;
     base_frame = 0;
+    a_method_end();
     s_mend[k] = size_code;
     patch_here(jump);
 }
@@ -652,10 +633,10 @@ cmd_print() {
     t & TYPE_MAP != 0 { error("'>>' does not print a whole MAP: print m[k], or loop over m.keys()"); }
     base_opt(t) == TYPE_FLOAT {
         // FLOAT: the prelude formats it (bits, present, error)
-        emit(0x50);                        // push rax
-        is_opt(t) { emit(0x52); } || { eb(0xB8, 1, 0, 0, 0); emit(0x50); }
-        eb(0x31, 0xC0);                     // error = false
-        emit(0x50);
+        op_push(R_AX);                        // push rax
+        is_opt(t) { op_push(R_DX); } || { op_load(OP_IMM, R_AX, 1); op_push(R_AX); }
+        op_zero(R_AX);                     // error = false
+        op_push(R_AX);
         call_prelude("__nihil_print_float", 24);
         expect(';', "';'");
         :;
@@ -694,10 +675,10 @@ cmd_print_error() {
     t & TYPE_MAP != 0 { error("'!>>' does not print a whole MAP: print m[k], or loop over m.keys()"); }
     base_opt(t) == TYPE_FLOAT {
         // FLOAT: the prelude formats it (bits, present, error)
-        emit(0x50);                        // push rax
-        is_opt(t) { emit(0x52); } || { eb(0xB8, 1, 0, 0, 0); emit(0x50); }
-        eb(0xB8, 1, 0, 0, 0);               // error = true
-        emit(0x50);
+        op_push(R_AX);                        // push rax
+        is_opt(t) { op_push(R_DX); } || { op_load(OP_IMM, R_AX, 1); op_push(R_AX); }
+        op_load(OP_IMM, R_AX, 1);               // error = true
+        op_push(R_AX);
         call_prelude("__nihil_print_float", 24);
         expect(';', "';'");
         :;
@@ -751,7 +732,7 @@ cmd_write_file(kind = 0) {
     t = expression();
     write_file_arg(t, op, "the path", pi, pl, pn, pli);
     expect(',', "',' between the path and the text");
-    emit(0x50);                            // push rax (the path)
+    op_push(R_AX);                            // push rax (the path)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
     is_rec(t) || is_rec_array(t) {
@@ -759,8 +740,8 @@ cmd_write_file(kind = 0) {
         t = TYPE_STR;
     }
     write_file_arg(t, op, "the text", pi, pl, pn, pli);
-    eb(0x48, 0x89, 0xC1);                   // mov rcx, rax (the text)
-    emit(0x58);                            // pop rax (the path)
+    op_mov(R_CX, R_AX);                   // mov rcx, rax (the text)
+    op_pop(R_AX);                            // pop rax (the path)
     kind == T_APPEND_FILE { emit_call_rt(RT_APPEND_FILE); } || { emit_call_rt(RT_WRITE_FILE); }
     expect(';', "';'");
 }
@@ -782,7 +763,7 @@ write_file_arg(t = 0, op = "", what = "", pi = 0, pl = 0, pn = 0, pli = 0) {
 cmd_exit() {
     next_token();
     tok_type == ';' {
-        eb(0x31, 0xFF);                     // xor edi, edi
+        op_zero(R_DI);                     // xor edi, edi
     } || {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         t = expression();
@@ -793,7 +774,7 @@ cmd_exit() {
             put_type(t);
             error_end();
         }
-        eb(0x48, 0x89, 0xC7);               // mov rdi, rax
+        op_mov(R_DI, R_AX);               // mov rdi, rax
     }
     emit_call_rt(RT_EXIT);
     expect(';', "';'");
@@ -858,15 +839,15 @@ cmd_read_line() {
     }
     !is_opt(tt) && s_flags[k] & FLAG_OPT == 0 {
         // end of input into an ordinary variable: the type's "zero" value
-        eb(0x48, 0x85, 0xD2);               // test rdx, rdx
+        op_test(R_DX);               // test rdx, rdx
         b == TYPE_STR {
-            eb(0x75, 7);                    // jnz +7
-            eb(0x48, 0x8D, 0x05);           // lea rax, [rip + ""]
-            register_fixup(size_code, const_empty, false);
-            emit_d(0);
+            skip = op_jcc8(CC_NE);          // jnz over it
+            op_lea_const(R_AX, const_empty);           // lea rax, [rip + ""]
+            patch8_here(skip);
         } || {
-            eb(0x75, 2);                    // jnz +2
-            eb(0x31, 0xC0);                 // xor eax, eax (0, false, 0.0)
+            skip = op_jcc8(CC_NE);          // jnz over it
+            op_zero(R_AX);                 // xor eax, eax (0, false, 0.0)
+            patch8_here(skip);
         }
     }
     emit_store_var(k);
@@ -887,7 +868,7 @@ cmd_return() {
     method_current >= 0 { method_return(); :; }
     next_token();
     tok_type == ';' {
-        eb(0x31, 0xFF);                     // xor edi, edi
+        op_zero(R_DI);                     // xor edi, edi
     } || {
         pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
         t = expression();
@@ -898,7 +879,7 @@ cmd_return() {
             put_type(t);
             error_end();
         }
-        eb(0x48, 0x89, 0xC7);               // mov rdi, rax
+        op_mov(R_DI, R_AX);               // mov rdi, rax
     }
     emit_call_rt(RT_EXIT);
     expect(';', "';'");
@@ -1056,69 +1037,29 @@ assign(pi = 0, pl = 0, pn = 0, pli = 0, t = 0) {
     expect(';', "';'");
 }
 
-// x = x + k / x = x - k already emitted as load ; mov rcx, k ; add/sub → becomes
-// inc, dec, add or sub directly on the variable. true if it was rewritten.
+// x = x + k / x = x - k already emitted as three operations (x into rax ; k into rcx ; add/sub
+// rax, rcx) → becomes inc, dec, add or sub directly on the variable. true if it was rewritten.
 increment(k = 0) {
     a = start_assignment;
     !optimize || a < 0 || last_target > a || n_fix > 0 && fix_pos[n_fix - 1] >= a { : false; }
-    // the load of x, as emit_load_var emits it
-    end_load = size_code;
-    emit_load_var(k);
-    nc = size_code - end_load;
-    equal = true;
-    i = 0;
-    nc { code[a + i] != code[end_load + i] { equal = false; } i = i + 1; }
-    size_code = end_load;
-    !equal { : false; }
-    p = a + nc;
-    v = 0;
-    size_code - p == 8 && code[p] == 0xB9 {
-        v = code[p + 1] | (code[p + 2] << 8) | (code[p + 3] << 16) | (code[p + 4] << 24);
-        v >= 0x80000000 { : false; }        // add r/m64, imm32 sign-extends
-        p = p + 5;
-    } || size_code - p == 10 && code[p] == 0x48 && code[p + 1] == 0xC7 && code[p + 2] == 0xC1 {
-        v = code[p + 3] | (code[p + 4] << 8) | (code[p + 5] << 16) | (code[p + 6] << 24);
-        v >= 0x80000000 { v = v - 0x100000000; }
-        p = p + 7;
-    } || {
-        : false;
-    }
-    code[p] != 0x48 || code[p + 2] != 0xC8 || code[p + 1] != 0x01 && code[p + 1] != 0x29 { : false; }
-    sub = code[p + 1] == 0x29;
-    sub { v = -v; }
+    note_use(k);                            // (as the load of x does)
+    !ops_last(3) || op_at[op_back(2)] != a || !is_load_var(op_back(2), k) { : false; }
+    c = op_back(1);
+    op_k[c] != OP_IMM || op_r[c] != R_CX { : false; }
+    s = op_back(0);
+    !op_same(s, OP_ALU, R_AX, ALU_ADD, R_CX) && !op_same(s, OP_ALU, R_AX, ALU_SUB, R_CX) { : false; }
+    v = op_v[c];
+    v >= 0x80000000 || v < -0x80000000 { : false; }   // add r/m64, imm32 sign-extends
+    op_v[s] == ALU_SUB { v = -v; }
     v >= 0x80000000 || v < -0x80000000 { : false; }
-    size_code = a;
+    code_cut(a);
     f = s_flags[k];
     f & FLAG_REG != 0 {
-        r = s_end[k];
-        v == 1 || v == -1 {
-            eb(0x48 | rex_b(r), 0xFF);
-            v == 1 { emit(0xC0 | (r & 7)); } || { emit(0xC8 | (r & 7)); }       // inc / dec r
-        } || {
-            eb(0x48 | rex_b(r), 0x81, 0xC0 | (r & 7));                         // add r, imm32
-            emit_d(v);
-        }
+        op_addi(s_end[k], v);                // inc / dec / add r, imm32
     } || f & FLAG_GLOBAL != 0 && f & FLAG_TOP == 0 {
-        v == 1 || v == -1 {
-            eb(0x48, 0xFF);
-            v == 1 { emit(0x04); } || { emit(0x0C); }                         // inc / dec [disp32]
-            emit(0x25);
-            emit_d(s_end[k]);
-        } || {
-            eb(0x48, 0x81, 0x04, 0x25);                                         // add qword [disp32], imm32
-            emit_d(s_end[k]);
-            emit_d(v);
-        }
+        op_addim(R_ABS, s_end[k], v, 1);     // inc / dec / add qword [disp32], imm32
     } || {
-        v == 1 || v == -1 {
-            eb(0x48, 0xFF);
-            v == 1 { emit(0x85); } || { emit(0x8D); }                         // inc / dec [rbp + d]
-            emit_d(s_end[k]);
-        } || {
-            eb(0x48, 0x81, 0x85);                                               // add qword [rbp + d], imm32
-            emit_d(s_end[k]);
-            emit_d(v);
-        }
+        op_addim(R_BP, s_end[k], v, 1);      // inc / dec / add qword [rbp + d], imm32
     }
     : true;
 }
@@ -1133,45 +1074,31 @@ reg_update(k = 0) {
     a = start_assignment;
     !optimize || a < 0 || s_flags[k] & FLAG_REG == 0 { : false; }
     r = s_end[k];
-    e = size_code;
-    e - a < 6 { : false; }
-    o = code[e - 2];
-    code[e - 3] != 0x48 || code[e - 1] != 0xC8 { : false; }
-    o != 0x01 && o != 0x29 && o != 0x21 && o != 0x09 && o != 0x31 { : false; }
-    lx = 0x48;                              // mov rax, rX: REX.W (+ REX.R from r12 on) 89 C0|(r&7)<<3
-    r >= 8 { lx = 0x4C; }
-    lm = 0xC0 | ((r & 7) << 3);
-    rex = 0x48 | rex_b(r);
+    !ops_last(3) { : false; }
+    s = op_back(0);
+    op_k[s] != OP_ALU || op_r[s] != R_AX || op_o[s] != R_CX { : false; }
+    o = op_v[s];
+    x = op_back(1);
+    y = op_back(2);
+    !op_same(x, OP_REG, R_AX, r, 0) && !op_same(y, OP_REG, R_AX, r, 0) { : false; }
     // y not simple: … ; mov rcx, rax ; mov rax, rX ; op rax, rcx
-    e - a >= 9 && code[e - 9] == 0x48 && code[e - 8] == 0x89 && code[e - 7] == 0xC1
-        && code[e - 6] == lx && code[e - 5] == 0x89 && code[e - 4] == lm
-        && last_target <= e - 9 && (n_fix == 0 || fix_pos[n_fix - 1] < e - 9) {
-        size_code = e - 9;
-        eb(rex, o, 0xC0 | (r & 7));         // op rX, rax
+    b = op_at[y];
+    op_same(x, OP_REG, R_AX, r, 0) && op_same(y, OP_REG, R_CX, R_AX, 0) && b >= a
+        && last_target <= b && (n_fix == 0 || fix_pos[n_fix - 1] < b) {
+        code_cut(b);
+        op_alu(o, r, R_AX);                 // op rX, rax
         : true;
     }
     // y simple: mov rax, rX ; y into rcx ; op rax, rcx (the whole assignment)
-    code[a] == lx && code[a + 1] == 0x89 && code[a + 2] == lm
-        && last_target <= a && (n_fix == 0 || fix_pos[n_fix - 1] < a) {
-        n = e - 3 - (a + 3);                // y's load
-        !rcx_load(a + 3, n) { : false; }
-        i = 0;
-        n { code[a + i] = code[a + 3 + i]; i = i + 1; }
-        size_code = a + n;
-        eb(rex, o, 0xC8 | (r & 7));         // op rX, rcx
+    b == a && op_same(y, OP_REG, R_AX, r, 0) && op_r[x] == R_CX && op_k[x] >= OP_IMM && op_k[x] <= OP_REG
+        && op_o[x] == 0 && last_target <= a && (n_fix == 0 || fix_pos[n_fix - 1] < a) {
+        yk = op_k[x];
+        yv = op_v[x];
+        code_cut(a);
+        op_load(yk, R_CX, yv);
+        op_alu(o, r, R_CX);                 // op rX, rcx
         : true;
     }
-    : false;
-}
-
-// code[a .. a + n) is exactly one simple load into rcx, as reload_in_rcx makes it
-rcx_load(a = 0, n = 0) {
-    n == 5 && code[a] == 0xB9 { : true; }                                            // mov ecx, imm32
-    n == 7 && code[a] == 0x48 && code[a + 1] == 0xC7 && code[a + 2] == 0xC1 { : true; } // mov rcx, simm32
-    n == 10 && code[a] == 0x48 && code[a + 1] == 0xB9 { : true; }                    // mov rcx, imm64
-    n == 8 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x0C && code[a + 3] == 0x25 { : true; }
-    n == 7 && code[a] == 0x48 && code[a + 1] == 0x8B && code[a + 2] == 0x8D { : true; }  // mov rcx, [rbp + d]
-    n == 3 && (code[a] == 0x48 || code[a] == 0x4C) && code[a + 1] == 0x89 && code[a + 2] & 0xC7 == 0xC1 { : true; }
     : false;
 }
 
@@ -1371,7 +1298,7 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
         put_type(u);
         error_end();
     }
-    emit(0x50);                            // push rax  (index)
+    op_push(R_AX);                            // push rax  (index)
     expect(']', "']'");
     expect('=', "'='");
     v = expression();
@@ -1385,9 +1312,9 @@ assignment_indexed(pi = 0, pl = 0, pn = 0, pli = 0) {
         put_type(v);
         error_end();
     }
-    eb(0x48, 0x89, 0xC2, 0x59);             // mov rdx, rax ; pop rcx
+    op_mov(R_DX, R_AX); op_pop(R_CX);             // mov rdx, rax ; pop rcx
     emit_load_var(k);
     emit_check_limit();
-    eb(0x48, 0x89, 0x14, 0xC8);             // mov [rax + rcx*8], rdx
+    op_stx(R_AX, R_CX, R_DX);             // mov [rax + rcx*8], rdx
     expect(';', "';'");
 }

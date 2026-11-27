@@ -183,6 +183,141 @@ fix_val = [0 ; MAX_FIX];
 fix_method = [false ; MAX_FIX];
 n_fix = 0;
 
+// ---- the operations last emitted (40_emit.nihil): what the optimizations read, instead of the x86
+// bytes, so that another backend can emit the same operations. A ring of the last ops_cap.
+OP_IMM = 1;             // r ← v, a constant
+OP_LOCAL = 2;           // r ← the local at frame offset v
+OP_GLOBAL = 3;          // r ← the global at address v
+OP_REG = 4;             // r ← the register v (rbx, r12 … r15: a local kept in a register)
+                        // (OP_LOCAL, OP_GLOBAL with o = 1: an optional, its presence into rdx too)
+OP_CMP_SET = 5;         // rax ← rax ?v rcx (INT comparison, v a condition), 0 or 1
+OP_CMP = 6;             // the flags ← rax - rcx
+OP_CALL_RT = 7;         // a call of the runtime's routine v
+OP_ALU = 8;             // r ← r op o (v: ALU_*), registers
+ALU_ADD = 0x01;         // (the values are x86's opcodes, for its encoder)
+ALU_SUB = 0x29;
+ALU_AND = 0x21;
+ALU_OR = 0x09;
+ALU_XOR = 0x31;
+CC_E = 4;               // conditions, in x86's numbering (a condition ^ 1 is its opposite)
+CC_NE = 5;
+CC_L = 12;
+CC_GE = 13;
+CC_LE = 14;
+CC_G = 15;
+R_AX = 0;               // the registers, in x86's numbering: rax, the value
+R_CX = 1;               // rcx, the second operand
+R_DX = 2;               // rdx, an optional's presence
+R_BX = 3;
+R_SP = 4;
+R_BP = 5;
+R_SI = 6;
+R_ABS = -1;             // as a base: no register, the address itself (a global)
+OP_LD = 16;             // r ← [base + v] (o = base * 2 + wide: the x86 disp32 form even when a byte fits)
+OP_ST = 17;             // [base + v] ← r (o as OP_LD)
+OP_LDX = 18;            // r ← [base + index * 8] (v = base, o = index)
+OP_STX = 19;            // [base + index * 8] ← r (v = base, o = index)
+OP_LDBX = 20;           // r ← the byte at [base + index] (v = base, o = index)
+OP_STBX = 21;           // the byte at [base + index] ← r's low byte (v = base, o = index)
+OP_LEA = 22;            // r ← base + v (o as OP_LD)
+OP_CMPM = 23;           // the flags ← r - [base + v] (o as OP_LD)
+OP_SUBM = 24;           // r ← r - [base + v] (o as OP_LD)
+OP_ADDTOM = 25;         // [base + v] ← [base + v] + r (o as OP_LD)
+OP_STI = 26;            // [base + o's disp] ← the constant v (o = (base * 2 + wide) * 2^32 + disp, see op_sti)
+OP_PUSHM = 27;          // push [base + v] (o as OP_LD)
+OP_PUSHI = 28;          // push the small constant v
+OP_ADDI = 29;           // r ← r + v (inc, dec or add imm32)
+OP_ADDIM = 30;          // [base + o's disp] ← … + v (inc, dec or add imm32; o as OP_STI)
+OP_CMPI = 31;           // the flags ← r - v
+OP_CMPIM = 32;          // the flags ← [base + o's disp] - v (imm8; o as OP_STI)
+OP_MULI = 33;           // r ← s * v (o = s)
+OP_MUL = 34;            // r ← r * s (o = s)
+OP_SHRI = 35;           // r ← r >> v, unsigned
+OP_SHL = 36;            // r ← r << cl
+OP_SAR = 37;            // r ← r >> cl, signed
+OP_NEG = 38;            // r ← -r
+OP_NOT = 39;            // r ← ~r
+OP_NOTB = 40;           // r ← r ^ 1 (a BOOL's not)
+OP_FNEG = 41;           // r ← r with its sign bit flipped (a FLOAT's -)
+OP_TEST = 42;           // the flags ← r & r
+OP_SETCC = 43;          // r's low byte ← 0 or 1 by the condition v (the rest of r untouched)
+OP_CMOV = 44;           // r ← s if the condition v (o = s)
+OP_JCC = 45;            // a jump on the condition v, forward (patched later) or to the position o
+OP_JMP = 46;            // a jump, forward (patched later) or to the position o
+OP_IMM64 = 47;          // r ← v in the 10-byte form whatever v is
+OP_IMMS = 48;           // r ← v in the sign-extended imm32 form whatever v is
+OP_XMOV = 49;           // xmm r ← the bits of the register o
+OP_RMOVX = 50;          // r ← the bits of xmm o
+OP_XLD = 51;            // xmm r ← [rbp + v]
+OP_XOP = 52;            // xmm r ← xmm r op xmm o (v: XOP_*)
+OP_I2F = 53;            // xmm r ← the INT o as a double
+OP_F2I = 54;            // r ← xmm o truncated to an INT
+OP_FCMP_SET = 55;       // rax ← xmm0 ?v xmm1 (v: the token: > >= < <= == !=), NaN: only != is true
+OP_ZXB = 56;            // r ← r's low byte, zero-extended
+OP_LEA_FWD = 57;        // r ← the address of a place further on (patched: patch_to_here)
+OP_JCC8 = 58;           // a short forward jump on the condition v, over a few operations (patch8_here)
+OP_FRAME = 59;          // rsp ← rsp - the frame's size (patched at the end: put_frame)
+OP_CALL_FWD = 60;       // a call of a place further on (patched: patch_here)
+OP_ALIGN = 61;          // nops up to an address multiple of 16 (v: how many bytes, in x86)
+OP_JCC_RT = 62;         // a jump on the condition v to the runtime's routine o (an error)
+OP_EPILOGUE = 63;       // a method's end: restores the v saved registers (REGS), rbp, and returns
+OP_CCALL = 64;          // -native: a call of the C function named at source[v … v + o), r arguments pushed
+OP_CCALL32 = 65;        // the same, its result an int (sign-extended)
+OP_PREFETCH = 66;       // the cache line at rax asked for (prefetcht0 [rax])
+CC_AE = 3;              // unsigned >=
+XOP_ADD = 0x58;         // (x86's opcodes, for its encoder)
+XOP_MUL = 0x59;
+XOP_SUB = 0x5C;
+XOP_DIV = 0x5E;
+R_DI = 7;
+OP_LEA_CONST = 13;      // r ← the address of the constant at offset v
+OP_CALL = 14;           // a call of the method v (its symbol)
+OP_RET = 15;
+OP_PUSH = 9;            // push r
+OP_POP = 10;            // pop r
+OP_ZERO = 11;           // r ← 0 (xor)
+OP_STACK = 12;          // the stack pointer + v (v < 0: room; v > 0: dropped); o = 1: the wide x86 form
+OPS_RING = 256;
+ops_cap = OPS_RING;     // the ring's size: -arm keeps all of a pass's operations (OPS_ARM), not wrapping
+OPS_ARM = 1 << 19;      // -arm: the first room (it doubles)
+want_arm = false;       // -arm: the ARM64 text of the operations, written after each pass (42_arm.nihil)
+arm_native = false;     // -native: a whole ARM64 program (.s) on stdout, for the C runtime (macos/native/)
+rt_used = [false ; 64]; // (-native) the runtime's routines called, by RT_* / 5
+arm = [0 ; 1];          // the text (-arm: it grows, 42_arm.nihil)
+arm_len = 0;
+op_at = [0 ; OPS_RING];     // where its code starts
+op_end = [0 ; OPS_RING];    // where its code ends
+op_k = [0 ; OPS_RING];
+op_r = [0 ; OPS_RING];
+op_v = [0 ; OPS_RING];
+op_o = [0 ; OPS_RING];
+n_ops = 0;              // operations noted so far; the ring holds those from ops_low on
+ops_low = 0;
+
+// ---- labels (40_emit.nihil): where a jump lands. A forward jump makes one, bound where it lands
+// (patch_here); a jump back names one bound before it (label_here). Without -arm, a bound forward
+// label is free again; with -arm all are kept, and where each was bound (lab_op) puts it in the text.
+LAB_JUMP = 0;           // a jump's
+LAB_JUMP8 = 1;          // a short jump's (op_jcc8: an 8-bit displacement)
+LAB_CALLED = 2;         // a place called (op_call_fwd): its return address is kept where it starts
+LAB_METHOD = 3;         // the start of the method lab_v
+LABELS = 1 << 16;
+LABELS_ARM = 1 << 17;
+lab_cap = LABELS;
+lab_at = [0 ; LABELS];      // its place in the code, once bound (-1 before)
+lab_fix = [0 ; LABELS];     // the displacement of the forward jump to patch when it is bound (-1: none)
+lab_kind = [0 ; LABELS];
+lab_v = [0 ; LABELS];
+lab_op = [0 ; LABELS];      // (-arm) the operation it is bound before
+lab_next = [0 ; LABELS];    // the next free label
+n_labs = 0;
+lab_free = -1;
+binds = [0 ; 1];            // (-arm) the labels in the order they were bound
+n_binds = 0;
+meth_lo = [0 ; 1];          // (-arm) each method's operations: meth_lo … meth_hi - 1 (42_arm.nihil)
+meth_hi = [0 ; 1];
+n_meths = 0;
+
 // ---- symbol table (one column per field) ----
 s_ofs = [0 ; MAX_SYM];
 s_len = [0 ; MAX_SYM];
