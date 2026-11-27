@@ -221,6 +221,7 @@ map_method(t = 0, ns = 0, nl = 0) {
             error_end();
         }
         call_prelude("__nihil_map_values", 8);
+        map_val(t) == TYPE_BOOL { bool_array_of(); }
         : map_val(t) | TYPE_ARR;
     }
     error_start();

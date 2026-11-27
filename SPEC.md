@@ -63,9 +63,9 @@ Every value fits in **one 64-bit register**, except optionals.
 |---|---|
 | `INT` | signed 64-bit integer |
 | `FLOAT` | IEEE-754 `double`. Its 64 bits live in `rax` like any other value; arithmetic goes through `xmm0` and `xmm1` (SSE2) |
-| `BOOL` | 0 or 1 in a 64-bit register; 8 bytes in memory |
+| `BOOL` | 0 or 1 in a 64-bit register; 8 bytes in memory (a variable, a record's field), one byte as an element of an ARRAY |
 | `STRING` | pointer to the bytes; the **length is in the 8 bytes before the pointer**, and a 0 byte follows the text. Immutable |
-| `ARRAY` | pointer to 8-byte elements; the **length is in the 8 bytes before**. Fixed size, mutable contents |
+| `ARRAY` | pointer to 8-byte elements; the **length is in the 8 bytes before**. Fixed size, mutable contents. An ARRAY of BOOL has 1-byte elements (0 or 1) in a STRING's block, a 0 byte after them |
 | optional `T?` (any T) | value + presence flag: `rax` + `rdx` in registers, two 8-byte words in memory. `_` is value 0 and flag 0 |
 
 - Arrays and strings are passed and assigned **by reference**: after `a = b;`
@@ -265,6 +265,8 @@ from. Use `[0 ; 0]`.
   first (`[1, 2] + [3]` is `[1, 2, 3]`; stage 1). Neither changes. Each `+`
   copies both, so growing an array one element at a time costs *n*² copies;
   for many elements, count first and fill `[x ; n]`.
+- An ARRAY of BOOL takes one byte per element (§3): `[true ; 20000000]`
+  is 20 MB, not 160.
 - Arrays (and STRINGs and records) live in a heap with a **garbage
   collector**: what the program can no longer reach is freed and its memory
   used again (§12.4). There is nothing to free by hand.
