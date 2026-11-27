@@ -654,6 +654,79 @@ query_field() {
     : f_type[m_first[q_model] + j];
 }
 
+// inside a query: name(…), a method of the element's model (its own or the nearest inherited),
+// called on the current element (docs/query-methods.md). k: what lookup() found for the name.
+// -1: not a method of the model. A name that also means something callable in the program is
+// refused, so that no program that compiled before changes meaning.
+query_method(ns = 0, nl = 0, k = 0) {
+    m = q_model;
+    km = lookup_model_method(m_sym[m], ns, nl);
+    p = m_parent[m];
+    * km < 0 && p >= 0 { km = lookup_model_method(m_sym[p], ns, nl); p = m_parent[p]; }
+    km < 0 { : -1; }
+    other = "";
+    k >= 0 && is_model(k) { other = "a data model"; }
+    k >= 0 && !is_model(k) && s_flags[k] & FLAG_METHOD != 0 { other = "a method of the program"; }
+    k < 0 && (name_is(ns, nl, "tools") || name_is(ns, nl, "call_tool") || (nl > 8 && name_is(ns, 8, "__nihil_"))) {
+        other = "a name of the language";
+    }
+    #other > 0 {
+        error_start();
+        put_str("'");
+        put_source(ns, nl);
+        put_str("' is a method of ");
+        put_type(model_type(m));
+        put_str(" and ");
+        put_str(other);
+        put_str(": inside a query over ");
+        put_type(model_type(m));
+        put_str(" it would be ambiguous, rename one of them");
+        error_end();
+    }
+    q_load(0, q_elem);                              // the element is the record the method gets
+    : model_method_call(model_type(m), ns, nl);
+}
+
+// a model between m (included) and its ancestor o (excluded) declares the method too
+replaced_below(m = 0, o = 0, ns = 0, nl = 0) {
+    * m != o {
+        lookup_model_method(m_sym[m], ns, nl) >= 0 { : true; }
+        m = m_parent[m];
+    }
+    : false;
+}
+
+// inside a query: name(…) that is no method, of the model or of the program
+query_unknown(ns = 0, nl = 0) {
+    m = q_model;
+    error_start();
+    put_str("method '");
+    put_source(ns, nl);
+    put_str("' does not exist: inside a query over ");
+    put_type(model_type(m));
+    put_str(", a name followed by ( is a method of the program or of ");
+    put_type(model_type(m));
+    listed = 0;
+    o = m;
+    * o >= 0 {
+        km = m_sym[o];
+        j = 0;
+        * j < n_sym {
+            s_flags[j] & FLAG_METHOD != 0 && s_len[j] > s_len[km] + 1 && source[s_ofs[j] + s_len[km]] == '.'
+                && same_source(s_ofs[j], s_ofs[km], s_len[km])
+                && !replaced_below(m, o, s_ofs[j] + s_len[km] + 1, s_len[j] - s_len[km] - 1) {
+                listed == 0 { put_str(" ("); } || { put_str(", "); }
+                put_source(s_ofs[j] + s_len[km] + 1, s_len[j] - s_len[km] - 1);
+                listed = listed + 1;
+            }
+            j = j + 1;
+        }
+        o = m_parent[o];
+    }
+    listed > 0 { put_str(")"); }
+    error_end();
+}
+
 query_missing(t = 0, s = 0, n = 0) {
     error_start();
     put_type(t);
@@ -766,12 +839,13 @@ query_call(t = 0) {
         } || u == TYPE_FLOAT {
             xs = 0;                         // (the expression calls a method: in memory)
             d_n > 0 {
+                op_xmov(1, R_AX);   // movq xmm1, rax: the value, before rax takes the sum
                 q_load(0, d_n);
                 op_xmov(0, R_AX);   // movq xmm0, rax
             } || {
                 op_xld(0, d_n);     // movq xmm0, [rbp + d_n]
+                op_xmov(1, R_AX);   // movq xmm1, rax
             }
-            op_xmov(1, R_AX);   // movq xmm1, rax
             op_xop(XOP_ADD, 0, 1);     // addsd xmm0, xmm1
             op_rmovx(R_AX, 0);   // movq rax, xmm0
             q_store(d_n);

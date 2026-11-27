@@ -1,0 +1,5 @@
+// a method that returns nothing is no condition
+ACCOUNT = @[id: INT(4); _cents: INT(10)];
+ACCOUNT.show(a = ACCOUNT()) { >> $a.id; }
+xs = [ACCOUNT(1, 100)];
+>> $xs.count(show());

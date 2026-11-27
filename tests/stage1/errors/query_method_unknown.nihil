@@ -1,0 +1,8 @@
+// inside a query, a name followed by ( that is no method: the model's methods are listed once
+ACCOUNT = @[id: INT(4); _cents: INT(10)];
+ACCOUNT.balance(a = ACCOUNT()) { : a._cents; }
+ACCOUNT.fee(a = ACCOUNT()) { : 1; }
+CHECKING = @[ACCOUNT; overdraft: INT(10)];
+CHECKING.fee(c = CHECKING()) { : 150; }
+xs = [CHECKING(1, 100, 0)];
+>> $xs.count(nothing() > 1);

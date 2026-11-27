@@ -610,6 +610,10 @@ primary_name() {
     k = lookup(tok_start, tok_len);
     e = peek_type();
     e == '(' {
+        q_model >= 0 {
+            qm = query_method(pi, pl, k);      // inside rows.where(…): a method of the element
+            qm >= 0 { : qm; }
+        }
         k < 0 && name_is(pi, pl, "__nihil_addr") { : intrinsic(TYPE_INT); }
         k < 0 && name_is(pi, pl, "__nihil_str_at") { : intrinsic(TYPE_STR); }
         k < 0 && name_is(pi, pl, "__nihil_arr_at") { : intrinsic(TYPE_ARR | TYPE_INT); }
@@ -647,6 +651,7 @@ primary_name() {
         k < 0 && name_is(pi, pl, "tools") { : tools_text(); }
         k < 0 && name_is(pi, pl, "call_tool") { : call_tool_call(); }
         is_model(k) { : new_record(k); }
+        k < 0 && q_model >= 0 { query_unknown(pi, pl); }
         : call_method(k);
     }
     is_model(k) {
