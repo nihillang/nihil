@@ -25,3 +25,18 @@ rnd(n = 1) { seed = (seed * 1103515245 + 12345) % 2147483648; : seed / 16 % n; }
 s = 0; i = 0;
 * i < 100000 { s = s + rnd(1000); i = i + 1; }
 >> $s + "\n";
+// as an optional's value (its presence set apart), and in x = x / 2, x = x % 8 inside a method
+half(x = 0) { x < 0 { : _; } : x / 2; }
+low? = half(-7);
+h? = half(-6) || half(13);
+>> $(low || 99) + " " + $(h || 0) + " " + $(half(7) == _) + "\n";
+steps(x = 0) {
+    n = 0;
+    * x != 0 { x = x / 2; n = n + 1; }
+    y = -1000;
+    y = y % 8;
+    z = 12345;
+    z = z % 256;
+    : n * 1000000 + (y + 8) * 1000 + z;
+}
+>> $steps(-1000) + " " + $steps(1 << 40) + "\n";
