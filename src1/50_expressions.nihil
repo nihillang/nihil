@@ -728,6 +728,10 @@ primary_array() {
         } || {
             op_mov(R_CX, R_AX); op_pop(R_DX);     // mov rcx, rax ; pop rdx
             emit_call_rt(RT_ARRAY_REP);
+            // -native: an array of BOOL or FLOAT holds no address, so the collector does not look
+            // inside it (its header's bit 4, as a text's; a new block's header is 0). Not INT: the
+            // prelude keeps addresses in INT arrays (__nihil_addr: rows, maps)
+            arm_native && (t == TYPE_BOOL || t == TYPE_FLOAT) { op_sti(R_AX, -16, 4, 0); }
         }
         expect(']', "']' (in [value ; size])");
     } || {
