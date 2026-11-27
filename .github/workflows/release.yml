@@ -67,6 +67,7 @@ jobs:
           NIHIL_URL="file://$PWD/dist/out/nihil-linux-x86_64.tar.gz" NIHIL_HOME="$RUNNER_TEMP/nihil" NIHIL_BIN="$RUNNER_TEMP/bin" sh site/install.sh
           printf '%s\n' '@ "std:json.nihil";' '>> json_bool(true) + " Hello, Nihil!\n";' > "$RUNNER_TEMP/hello.nihil"
           test "$("$RUNNER_TEMP/bin/nihil" run "$RUNNER_TEMP/hello.nihil")" = "true Hello, Nihil!"
+          test "$(NIHIL_TRANSLATE=1 "$RUNNER_TEMP/bin/nihil" run "$RUNNER_TEMP/hello.nihil")" = "true Hello, Nihil!"
 
       - name: The installed IDE compiles and runs a program
         run: dist/test-ide.sh "$RUNNER_TEMP/bin/nihil"
@@ -96,6 +97,10 @@ jobs:
   macos:
     needs: linux
     runs-on: macos-latest
+    env:
+      # every binary of the package (and the compiler's programs, below) runs on macOS 11 and later:
+      # without it clang stamps the runner's own version, and older Macs refuse to start them
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
@@ -137,19 +142,45 @@ jobs:
           printf -- '-map %s/src1/nihilc1.nihil\n' "$PWD" | build/macos/nihilc1-native > build/macos/c2.x86 2> /dev/null
           cmp linux/nihilc1.x86 build/macos/c2.x86
 
-      - name: Tests, natively
+      # since v4.13 the compiler compiles itself, and every program, straight into ARM64 (-native,
+      # its runtime written in Nihil, src1/native.nihil); the translated one above is its seed. The
+      # translator stays in the package one more version, for NIHIL_TRANSLATE=1
+      - name: The compiler, straight into ARM64 (-native), and its fixed point
+        run: |
+          printf -- '-native %s/src1/nihilc1.nihil\n' "$PWD" | build/macos/nihilc1-native > build/macos/n1.s
+          clang -arch arm64 -o build/macos/nihilc1-n1 build/macos/n1.s
+          printf -- '-native %s/src1/nihilc1.nihil\n' "$PWD" | build/macos/nihilc1-n1 > build/macos/n2.s
+          cmp build/macos/n1.s build/macos/n2.s
+          printf -- '-map %s/src1/nihilc1.nihil\n' "$PWD" | build/macos/nihilc1-n1 > build/macos/c3.x86 2> /dev/null
+          cmp linux/nihilc1.x86 build/macos/c3.x86
+          cp build/macos/nihilc1-n1 build/macos/nihilc1-native
+
+      - name: Tests, compiled straight into ARM64 (the default way)
+        run: |
+          bash macos/test-native-c.sh | tee build/macos/tests-native.txt
+          grep -q ' 0 failed, 0 did not link, 0 did not compile' build/macos/tests-native.txt
+          NIHIL_O0=1 bash macos/test-native-c.sh | tee build/macos/tests-native-o0.txt
+          grep -q ' 0 failed, 0 did not link, 0 did not compile' build/macos/tests-native-o0.txt
+
+      - name: Tests, translated (NIHIL_TRANSLATE=1)
         run: |
           bash macos/test-native.sh | tee build/macos/tests.txt
           grep -q ' 0 failed' build/macos/tests.txt
 
       - name: The IDE server
-        run: macos/nihil ide/server.nihil build/macos/ide-server
+        run: macos/nihil-native ide/server.nihil build/macos/ide-server
 
       - name: The IDE app (Nihil IDE.app)
         run: macos/ide-app/build.sh build/macos
 
       - name: Package
         run: dist/package.sh macos-arm64 dist/out build/macos/nihilc1-native build/macos/rt.o build/macos/translate build/macos/ide-server "build/macos/Nihil IDE.app"
+
+      - name: The package's programs start on macOS 11 and later
+        run: |
+          for b in build/macos/nihilc1-native build/macos/translate build/macos/ide-server; do
+            vtool -show-build "$b" | grep -q 'minos 11.0' || { vtool -show-build "$b"; exit 1; }
+          done
 
       - name: The package installs and compiles a program
         run: |

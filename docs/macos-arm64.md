@@ -1,6 +1,23 @@
 # Nihil on macOS (Apple silicon, ARM64) — the port
 
-## Now: native through a translator (works)
+## Since v4.13: the compiler writes ARM64 itself (-native), by default
+
+`nihil` on a Mac compiles every program with `-native` (section "-native" below): the compiler
+writes the whole program as ARM64 assembly, its runtime included (written in Nihil,
+`src1/native.nihil`), and clang assembles and links it with the system's library alone. No
+translator, no `arm64/rt.c`. The package's compiler is built the same way, and it compiles itself
+to the same assembly (fixed point, in the release workflow). Its programs, and the package's own,
+run on macOS 11 and later (`-mmacosx-version-min=11.0`; without it clang stamps the build machine's
+version).
+
+    macos/nihil-native prog.nihil [out]   what `nihil` does (./nihilc1.sh too, in the repository)
+    macos/test-native-c.sh                tests/ and tests/stage1/ this way (NIHIL_O0=1, NIHIL_GC_TORTURE=1)
+
+`NIHIL_TRANSLATE=1 nihil …` keeps the way before v4.13, the translator of the next section, for
+one more version, in case a program needs it (tell us). After that the translator and
+`arm64/rt.c` leave the package.
+
+## Before v4.13 (NIHIL_TRANSLATE=1): native through a translator
 
 Instead of a second backend in the compiler (the plan below), the x86-64 code the compiler
 already emits is **translated** to ARM64 assembly. The compiler emits a closed set of about 180
