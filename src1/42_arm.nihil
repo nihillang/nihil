@@ -1514,6 +1514,28 @@ a_rotate(j = 0, i = 0) {
 // the division at operation i (rax / cv, cv a power of 2) is of a multiple of cv: it comes right
 // after `x % c == 0 {` (c a multiple of cv), on the way where it held, and divides the same x —
 // rax ← x ; rcx ← c ; rest ; rcx ← 0 ; cmp ; jne ; rax ← x ; rcx ← cv ; division, no way in between
+// a division by the constant d (1 < d < 2^62, not a power of 2) as a multiplication (Granlund and
+// Montgomery, 1994, figure 5.2): l = ceil(log2 d), m = 2^(63+l) / d + 1 (in [2^63, 2^64): the
+// INT it wraps to, negative), and n / d = ((n + smulh(n, m)) >> (l - 1)) - (n >> 63) for every n.
+// The quotient is worked out a bit at a time: the rest stays below d, the quotient wraps as m does.
+div_magic_l = 0;
+div_magic(d = 0) {
+    l = 0;
+    * (1 << l) < d { l = l + 1; }
+    div_magic_l = l;
+    q = 0;
+    r = 0;
+    b = 63 + l;
+    * b >= 0 {
+        r = r + r;
+        b == 63 + l { r = r + 1; }
+        q = q + q;
+        r >= d { r = r - d; q = q + 1; }
+        b = b - 1;
+    }
+    : q + 1;
+}
+
 div_exact(i = 0, cv = 0) {
     i < 8 { : false; }
     j = i - 7;
@@ -1724,6 +1746,31 @@ arm_lazy(i = 0) {
         || {
             a_ins("and x16, x16, #0x"); a_hex(0 - cv); a_nl();
             a_ins("sub "); a_x(d); a_str(", "); a_x(a); a_str(", x16"); a_nl();
+        }
+        dest_done(R_AX, d);
+        pend_k[R_DX] = 0;
+        : 1 + sk;
+    }
+    // by another constant (positive, below 2^62): div_magic's multiplication, the rest by msub
+    k == OP_CALL_RT && (v == RT_DIV || v == RT_MOD)
+            && pend_k[R_CX] == 2 && pend_v[R_CX] > 2 && pend_v[R_CX] < (1 << 62) {
+        cv = pend_v[R_CX];
+        m = div_magic(cv);
+        a = srcr(R_AX);
+        d = dest_of(i, R_AX);
+        sk = skip;
+        a_imm(17, m);
+        a_ins("smulh x16, "); a_x(a); a_str(", x17"); a_nl();
+        a_ins("add x16, x16, "); a_x(a); a_nl();
+        a_ins("asr x16, x16, #"); a_num(div_magic_l - 1); a_nl();
+        v == RT_DIV {
+            dest_clear(R_AX, d);
+            a_ins("add "); a_x(d); a_str(", x16, "); a_x(a); a_str(", lsr #63"); a_nl();
+        } || {
+            a_ins("add x16, x16, "); a_x(a); a_str(", lsr #63"); a_nl();
+            a_imm(17, cv);
+            dest_clear(R_AX, d);
+            a_ins("msub "); a_x(d); a_str(", x16, x17, "); a_x(a); a_nl();
         }
         dest_done(R_AX, d);
         pend_k[R_DX] = 0;
