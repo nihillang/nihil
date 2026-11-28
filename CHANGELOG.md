@@ -22,6 +22,8 @@ before v2.0.
   - *Why:* It was put there and taken off again to no purpose, a million times a collection in `bench/workload`.
     Marking 1,000,000 such records takes a half to a third of the time; the workload runs 5% fewer instructions
     (generate 22 → 19 ms) and peaks at 149 MB instead of 159 (the stack no longer grows to a million entries)
+- fix: macOS `-native`: closing a descriptor (`__nihil_syscall([3, fd])`) gives the system's answer (0 or -errno,
+  Linux's numbers) instead of always 0, as on Linux; a directory's descriptor is closed once, by its closedir
 - `@>> path, rows;` writes the table about 1 MB at a time instead of making its whole text first (SPEC §20), on Linux
   and on macOS: the same file, written the same way (a temporary, synced and renamed), and the same errors, with the
   file left untouched when a field does not fit
