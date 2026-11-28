@@ -12,7 +12,7 @@
 // =============================================================================
 
 // ---- the heap and its collector (first in the file: their globals are set before any block is made) ----
-// As macos/native/rt.c's was: conservative mark, no sweep. Blocks of 21 size classes live in pages
+// As macos/native/rt.c's was: conservative mark, no sweep. Blocks of 41 size classes live in pages
 // of 64 KiB, one class to a page; a larger one takes whole pages. Whether a block is in use is in a
 // map, a byte for each 32 bytes of the arena (`used`); a mark sets the bytes of the used blocks it
 // reaches in the other map (`marked`), then the two swap and the old one is cleared. A class hands
@@ -29,8 +29,8 @@ __nihil_gc_pnext = 0;                      // 8 bytes a page: the next page with
 __nihil_gc_free = 0;                       // single free pages below high (8 bytes each)
 __nihil_gc_nfree = 0;
 __nihil_gc_high = 0;                       // pages in use or used before
-__nihil_gc_csize = 0;                      // the 21 classes' sizes (8 bytes each)
-__nihil_gc_cls = 0;                        // the class of a block of b bytes: a byte at (b + 15) / 16
+__nihil_gc_csize = 0;                      // the 41 classes' sizes (8 bytes each)
+__nihil_gc_cls = 0;                        // the class of a block of b bytes: a byte at (b + 7) / 8
 __nihil_gc_cur = 0;                        // a class's page it hands out of (+ 1), its next slot, its pages with room
 __nihil_gc_slot = 0;
 __nihil_gc_room = 0;
@@ -71,11 +71,11 @@ __nihil_gc_init() {
     __nihil_gc_pspan = __nihil_c("calloc", 8, 1 << 20);
     __nihil_gc_pnext = __nihil_c("calloc", 8, 1 << 20);
     __nihil_gc_free = __nihil_c("calloc", 8, 1 << 20);
-    __nihil_gc_csize = __nihil_c("calloc", 8, 21);
-    __nihil_gc_cls = __nihil_c("calloc", 1, 2049);
-    __nihil_gc_cur = __nihil_c("calloc", 8, 21);
-    __nihil_gc_slot = __nihil_c("calloc", 8, 21);
-    __nihil_gc_room = __nihil_c("calloc", 8, 21);
+    __nihil_gc_csize = __nihil_c("calloc", 8, 41);
+    __nihil_gc_cls = __nihil_c("calloc", 1, 4097);
+    __nihil_gc_cur = __nihil_c("calloc", 8, 41);
+    __nihil_gc_slot = __nihil_c("calloc", 8, 41);
+    __nihil_gc_room = __nihil_c("calloc", 8, 41);
     __nihil_gc_regs = __nihil_c("calloc", 8, 10);
     __nihil_gc_line = __nihil_c("calloc", 1, 256);
     __nihil_gc_arena == -1 || __nihil_gc_pkind == 0 || __nihil_gc_pspan == 0 || __nihil_gc_free == 0 { __nihil_gc_oom(); }
@@ -83,15 +83,17 @@ __nihil_gc_init() {
     __nihil_gc_marked = __nihil_gc_map_new();
     __s = 32;
     __c = 0;
-    * __c < 21 {                           // 32, 48, 64, 96 … 32768
+    __d = 8;
+    * __c < 41 {                           // 32, 40, 48, 56, 64, 80 … 32768: four to a doubling
         __nihil_poke8(__nihil_gc_csize + 8 * __c, __s);
-        __c % 2 == 0 { __s = __s + __s / 2; } || { __s = __s / 3 * 4; }
+        __s == 8 * __d { __d = 2 * __d; }
+        __s = __s + __d;
         __c = __c + 1;
     }
     __q = 0;
     __c = 0;
-    * __q <= 2048 {                        // the smallest class that holds 16 · q bytes
-        * __nihil_peek(__nihil_gc_csize + 8 * __c) < 16 * __q { __c = __c + 1; }
+    * __q <= 4096 {                        // the smallest class that holds 8 · q bytes
+        * __nihil_peek(__nihil_gc_csize + 8 * __c) < 8 * __q { __c = __c + 1; }
         __nihil_rt_pokeb(__nihil_gc_cls, __q, __c);
         __q = __q + 1;
     }
@@ -173,7 +175,7 @@ __nihil_rt_alloc(n = 0) {
     __b = n * 8 + 16;                                     // its bytes
     __a = __nihil_gc_allocated + __b;
     __a > __nihil_gc_threshold { : 0; }
-    __c = __nihil_peekb(__nihil_gc_cls + (__b + 15) / 16);
+    __c = __nihil_peekb(__nihil_gc_cls + (__b >> 3));
     __p = __nihil_peek(__nihil_gc_cur + 8 * __c);
     __p == 0 { : 0; }
     __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
@@ -229,7 +231,7 @@ __nihil_gc_alloc(n = 0, lazy = false) {
     __nihil_gc_allocated > __nihil_gc_threshold { __nihil_gc_collect(); }
     __b = 0;
     __bytes <= 32768 {
-        __c = __nihil_peekb(__nihil_gc_cls + (__bytes + 15) / 16);
+        __c = __nihil_peekb(__nihil_gc_cls + (__bytes >> 3));
         __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
         __b = __nihil_gc_small(__c, __s);
         __s <= 512 { __z = __b; * __z < __b + __s { __nihil_poke8(__z, 0); __z = __z + 8; } }
@@ -410,8 +412,8 @@ __nihil_gc_after_mark(t0 = 0, t_mark = 0, ended = false, since = 0) {
     __nihil_gc_marked = __t;
     __kept = 0;
     __nihil_gc_nfree = 0;
-    __nihil_c("memset", __nihil_gc_cur, 0, 8 * 21);
-    __nihil_c("memset", __nihil_gc_room, 0, 8 * 21);
+    __nihil_c("memset", __nihil_gc_cur, 0, 8 * 41);
+    __nihil_c("memset", __nihil_gc_room, 0, 8 * 41);
     __p = 0;
     * __p < __nihil_gc_high {
         __kind = __nihil_peekb(__nihil_gc_pkind + __p);
