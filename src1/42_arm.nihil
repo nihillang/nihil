@@ -377,9 +377,34 @@ arm_call_method(i = 0) {
     q = 0;
     * q < virt { a_ins("mov "); a_x(1 + real + q); a_str(", "); a_x(9 + q); a_nl(); q = q + 1; }
     real > 0 { arm_stack(8 * real); }
-    a_ins("bl Lm"); a_num(k); a_nl();
+    k == list_push_method() { arm_push_inline(k, i); } || { a_ins("bl Lm"); a_num(k); a_nl(); }
     n > 0 { : 2; }
     : 1;
+}
+
+// v[] = x (__nihil_list_push(l, v), l in x1, v in x2): its usual case here, with no call: room left
+// (length < capacity, the list's first two words), v goes after the last item and the length grows.
+// A full list calls the method, which doubles it
+arm_push_inline(k = 0, i = 0) {
+    a_line("ldp x16, x17, [x1]");
+    a_line("cmp x16, x17");
+    a_ins("b.eq Lpush"); a_num(i); a_nl();
+    a_line("ldr x15, [x1, #16]");
+    a_line("str x2, [x15, x16, lsl #3]");
+    a_line("add x16, x16, #1");
+    a_line("str x16, [x1]");
+    a_ins("b Lpushed"); a_num(i); a_nl();
+    a_ins("Lpush"); a_num(i); a_str(":"); a_nl();
+    a_ins("bl Lm"); a_num(k); a_nl();
+    a_ins("Lpushed"); a_num(i); a_str(":"); a_nl();
+}
+
+// __nihil_list_push's method (looked up once a pass; -1 without the prelude)
+list_push_pass = -1;
+list_push_k = -1;
+list_push_method() {
+    list_push_pass != n_passes { list_push_pass = n_passes; list_push_k = lookup_text("__nihil_list_push"); }
+    : list_push_k;
 }
 a_method(k = 0) {
     !want_arm { :; }

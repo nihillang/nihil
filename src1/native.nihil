@@ -33,6 +33,7 @@ __nihil_gc_csize = 0;                      // the 41 classes' sizes (8 bytes eac
 __nihil_gc_cls = 0;                        // the class of a block of b bytes: a byte at (b + 7) / 8
 __nihil_gc_cur = 0;                        // a class's page it hands out of (+ 1), its next slot, its pages with room
 __nihil_gc_slot = 0;
+__nihil_gc_run = 0;                        // a class's run of free blocks rt_alloc hands out: next, end (16 bytes)
 __nihil_gc_room = 0;
 __nihil_gc_used = 0;
 __nihil_gc_marked = 0;
@@ -75,6 +76,7 @@ __nihil_gc_init() {
     __nihil_gc_cls = __nihil_c("calloc", 1, 4097);
     __nihil_gc_cur = __nihil_c("calloc", 8, 41);
     __nihil_gc_slot = __nihil_c("calloc", 8, 41);
+    __nihil_gc_run = __nihil_c("calloc", 16, 41);
     __nihil_gc_room = __nihil_c("calloc", 8, 41);
     __nihil_gc_regs = __nihil_c("calloc", 8, 10);
     __nihil_gc_line = __nihil_c("calloc", 1, 256);
@@ -167,8 +169,10 @@ __nihil_gc_pages(n = 0) {
 }
 
 // alloc(n): a block of n words. The usual case, as a leaf (it calls nothing, so its 8 slots stay in
-// x1 … x8 and it saves no register): a small block, no collection due, its class's page with room
-// (its next slot clear in `used`), zeroed 8 bytes at a time. 0: anything else, and the call
+// x1 … x8 and it saves no register): a small block, no collection due, the next block of its class's
+// run (the free blocks in a row it took from its page: the page's next slot is past them, so
+// gc_small never hands them out; a collection drops the runs), zeroed 8 bytes at a time. An empty run
+// is taken again from the class's page, past its next slot. 0: anything else, and the call
 // (42_arm.nihil, arm_call_nihil) then takes __nihil_rt_alloc_slow.
 __nihil_rt_alloc(n = 0) {
     __nihil_gc_arena == 0 || n < 0 || n > 62 { : 0; }   // (n itself: n · 8 could overflow)
@@ -176,23 +180,34 @@ __nihil_rt_alloc(n = 0) {
     __a = __nihil_gc_allocated + __b;
     __a > __nihil_gc_threshold { : 0; }
     __c = __nihil_peekb(__nihil_gc_cls + (__b >> 3));
-    __p = __nihil_peek(__nihil_gc_cur + 8 * __c);
-    __p == 0 { : 0; }
     __s = __nihil_peek(__nihil_gc_csize + 8 * __c);
-    __m = __nihil_gc_used + 4096 + ((__p - 1) << 11);
-    __o = __nihil_peek(__nihil_gc_slot + 8 * __c) * __s;
-    * __o + __s <= 65536 && __nihil_peekb(__m + (__o >> 5)) != 0 { __o = __o + __s; }
-    __o + __s > 65536 { : 0; }
-    __nihil_poke8(__nihil_gc_slot + 8 * __c, __o / __s + 1);
-    __nihil_gc_allocated = __a;
-    __nihil_poke(__nihil_str_at(__m), __o >> 5, 1);       // used
-    __nihil_gc_child != 0 {                               // a child marks: this block lives (as in gc_alloc)
-        __nihil_poke(__nihil_str_at(__m + (__nihil_gc_marked - __nihil_gc_used)), __o >> 5, 1);
+    __r = __nihil_gc_run + 16 * __c;
+    __p = __nihil_peek(__r);
+    __e = __p + __s;
+    __e > __nihil_peek(__r + 8) {                         // the run is empty: the next one
+        __g = __nihil_peek(__nihil_gc_cur + 8 * __c);
+        __g == 0 { : 0; }
+        __m = __nihil_gc_used + 4096 + ((__g - 1) << 11);
+        __o = __nihil_peek(__nihil_gc_slot + 8 * __c) * __s;
+        * __o + __s <= 65536 && __nihil_peekb(__m + (__o >> 5)) != 0 { __o = __o + __s; }
+        __o + __s > 65536 { : 0; }
+        __q = __o + __s;
+        * __q + __s <= 65536 && __nihil_peekb(__m + (__q >> 5)) == 0 { __q = __q + __s; }
+        __nihil_poke8(__nihil_gc_slot + 8 * __c, __q / __s);
+        __g = __nihil_gc_arena + ((__g - 1) << 16);
+        __p = __g + __o;
+        __e = __p + __s;
+        __nihil_poke8(__r + 8, __g + __q);
     }
-    __p = __nihil_gc_arena + ((__p - 1) << 16) + __o;     // the block
-    __o = __p + __s;
+    __nihil_poke8(__r, __e);
+    __nihil_gc_allocated = __a;
+    __o = 4096 + ((__p - __nihil_gc_arena) >> 5);
+    __nihil_poke(__nihil_str_at(__nihil_gc_used), __o, 1);           // used
+    __nihil_gc_child != 0 {                               // a child marks: this block lives (as in gc_alloc)
+        __nihil_poke(__nihil_str_at(__nihil_gc_marked), __o, 1);
+    }
     __b = __p;
-    * __b < __o { __nihil_poke8(__b, 0); __b = __b + 8; }
+    * __b < __e { __nihil_poke8(__b, 0); __b = __b + 8; }
     __nihil_poke8(__p + 8, n);
     : __p + 16;
 }
@@ -415,6 +430,7 @@ __nihil_gc_after_mark(t0 = 0, t_mark = 0, ended = false, since = 0) {
     __kept = 0;
     __nihil_gc_nfree = 0;
     __nihil_c("memset", __nihil_gc_cur, 0, 8 * 41);
+    __nihil_c("memset", __nihil_gc_run, 0, 16 * 41);    // (a run's pages may go back to the system)
     __nihil_c("memset", __nihil_gc_room, 0, 8 * 41);
     __p = 0;
     * __p < __nihil_gc_high {
