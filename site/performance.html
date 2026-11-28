@@ -24,8 +24,8 @@ and how that compares with the same work written in C and in Go. The records are
 so every run has the same data, and each one has six fields in 50 bytes:</p>
 <pre class="nihil">ITEM = @[#code: INT(8); name: STRING(20); category: INT(4); price: FLOAT(10); qty: INT(6); active: BOOL];</pre>
 <p>The machines: <b>Linux</b>, a GitHub Actions runner (Intel Xeon 6975P-C, 4 CPUs, Ubuntu 24.04), where Nihil, C and Go all run
-natively; and <b>macOS</b>, an Apple M4, measured before v4.13, when Nihil's x86-64 code was translated to ARM64 (since
-v4.13 the compiler writes ARM64 itself, faster). To measure your own machine, run
+natively; and <b>macOS</b>, an Apple M4 (macOS 27), where the compiler writes ARM64 itself (since v4.13), measured with
+<code>main</code> after v4.13.0. To measure your own machine, run
 <code>bench/run.sh</code> or, for the comparison, <code>bench/compare/run.sh</code> in the repository.</p>
 
 <ol class="toc">
@@ -64,16 +64,16 @@ operation (one <code>stat</code>), so it still sees what another program or an e
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>Linux, 100 000</th><th>Linux, 1 000 000</th><th>macOS, 1 000 000</th></tr></thead>
 <tbody>
-<tr><td>make the records in memory</td><td>12 ms</td><td>135 ms</td><td>69 ms</td></tr>
-<tr><td>write the table: <code>@&gt;&gt; path, rows</code> (atomic, synced)</td><td>31 ms</td><td>330 ms</td><td>265 ms</td></tr>
-<tr><td>read the whole table: <code>ITEM @ path</code></td><td>13 ms</td><td>123 ms</td><td>67 ms</td></tr>
+<tr><td>make the records in memory</td><td>12 ms</td><td>135 ms</td><td>75 ms</td></tr>
+<tr><td>write the table: <code>@&gt;&gt; path, rows</code> (atomic, synced)</td><td>31 ms</td><td>330 ms</td><td>130 ms</td></tr>
+<tr><td>read the whole table: <code>ITEM @ path</code></td><td>13 ms</td><td>123 ms</td><td>64 ms</td></tr>
 <tr><td><code>where(active &amp;&amp; price &lt; 200.0)</code></td><td>0.6 ms</td><td>9.3 ms</td><td>8.2 ms</td></tr>
-<tr><td><code>count(category == 7)</code></td><td>0.3 ms</td><td>6.8 ms</td><td>1.8 ms</td></tr>
-<tr><td><code>sum(price * .qty)</code></td><td>0.3 ms</td><td>8.1 ms</td><td>2.2 ms</td></tr>
-<tr><td><code>sort(-price)</code></td><td>18 ms</td><td>187 ms</td><td>134 ms</td></tr>
-<tr><td>the first key operation (reads the table and builds the index)</td><td>6.8 ms</td><td>85 ms</td><td>62 ms</td></tr>
+<tr><td><code>count(category == 7)</code></td><td>0.3 ms</td><td>6.8 ms</td><td>1.6 ms</td></tr>
+<tr><td><code>sum(price * .qty)</code></td><td>0.3 ms</td><td>8.1 ms</td><td>1.7 ms</td></tr>
+<tr><td><code>sort(-price)</code></td><td>18 ms</td><td>187 ms</td><td>94 ms</td></tr>
+<tr><td>the first key operation (reads the table and builds the index)</td><td>6.8 ms</td><td>85 ms</td><td>50 ms</td></tr>
 <tr><td>size of the table / of its index</td><td>4.8 MB / 1 MB</td><td>48 MB / 8 MB</td><td>48 MB / 8 MB</td></tr>
-<tr><td>peak memory of the whole run</td><td>36 MB</td><td>327 MB</td><td>325 MB</td></tr>
+<tr><td>peak memory of the whole run</td><td>36 MB</td><td>327 MB</td><td>353 MB</td></tr>
 </tbody></table></div>
 
 <h2 id="one">One record at a time</h2>
@@ -82,11 +82,11 @@ operation (one <code>stat</code>), so it still sees what another program or an e
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>Linux</th><th>macOS</th></tr></thead>
 <tbody>
-<tr><td>read record <i>i</i>: <code>ITEM @[i] path</code></td><td>0.9 µs</td><td>1.4 µs</td></tr>
-<tr><td>find by key: <code>ITEM @{k} path</code></td><td>1.8 µs</td><td>2.1 µs</td></tr>
+<tr><td>read record <i>i</i>: <code>ITEM @[i] path</code></td><td>0.9 µs</td><td>1.5 µs</td></tr>
+<tr><td>find by key: <code>ITEM @{k} path</code></td><td>1.8 µs</td><td>2.0 µs</td></tr>
 <tr><td>change by key: find it, then <code>@{}&gt;&gt; path, r</code> (1 fsync)</td><td>0.19 ms</td><td>4.7 ms</td></tr>
-<tr><td>add by key: <code>@{}&gt;&gt; path, r</code> with a new key (2 fsyncs)</td><td>0.25 ms</td><td>9.0 ms</td></tr>
-<tr><td>delete by key: <code>ITEM @{k} path = _</code> (2 fsyncs)</td><td>0.33 ms</td><td>9.5 ms</td></tr>
+<tr><td>add by key: <code>@{}&gt;&gt; path, r</code> with a new key (2 fsyncs)</td><td>0.25 ms</td><td>9.2 ms</td></tr>
+<tr><td>delete by key: <code>ITEM @{k} path = _</code> (2 fsyncs)</td><td>0.33 ms</td><td>9.7 ms</td></tr>
 </tbody></table></div>
 
 <h2 id="reading">Reading the numbers</h2>
@@ -109,9 +109,10 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   <li><b>Writers wait for each other.</b> A table is a file, not a server, but every write by key takes the table's lock (a
   <code>.nihil-lock</code> file next to it), from the lookup to the last write: two programs adding records to the same table at
   the same moment both get theirs in. Reads take no lock.</li>
-  <li><b>On the Mac</b>, these numbers are from before v4.13, when Nihil's code and its runtime (the same as Linux's) were
-  translated from x86-64 to ARM64, which cost most on small, frequent operations. Since v4.13 the compiler writes ARM64 itself,
-  with a runtime of its own.</li>
+  <li><b>On the Mac</b>, the compiler writes ARM64 itself, with a runtime and a collector of its own (since v4.13). Against
+  the numbers measured before, when Nihil's x86-64 code was translated to ARM64, writing the table takes half the time
+  (265 → 130 ms), sorting 30% less (134 → 94 ms) and the queries over every record up to a quarter less; the peak memory of a
+  million records is 8% higher (325 → 353 MB, the native collector's).</li>
   <li><b>GitHub's runners are not all the same machine</b>, and a shared server under load gives noisier numbers still. Compare
   numbers from the same run.</li>
   <li><b>The clock</b> is <code>std:time</code>'s <code>now_us()</code>, in microseconds. The operations on one record are timed

@@ -9,7 +9,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 "$compiler" bench/tables.nihil "$work/tables"
 if [ "$(uname -s)" = Darwin ]; then
-    echo "$(sysctl -n machdep.cpu.brand_string), macOS $(sw_vers -productVersion) (the x86-64 code translated to ARM64)"
+    echo "$(sysctl -n machdep.cpu.brand_string), macOS $(sw_vers -productVersion), compiled by $compiler"
 else
     echo "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ //'), $(nproc) CPUs, Linux $(uname -r)"
 fi
