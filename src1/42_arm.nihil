@@ -866,10 +866,15 @@ slot_clash(a = 0, b = 0) {
 // register reg can take slot s too: no slot it holds is live while s is (a method's only: the
 // program's own code does not run in the order of its operations)
 // (the program's own code: by its operations' order, which is the order it runs in up to its last
-// exit (top_end); after it comes the globals' start, called first: a slot touched there shares nothing)
+// exit (top_end); after it comes the globals' start (80_main.nihil: stores and a ret, no exit), called
+// first: a slot touched there shares nothing, neither as the one placed nor as one the register holds)
 top_end = -1;
 reg_fits(reg = 0, s = 0) {
     unit_top && (top_end < 0 || slot_whi[s] > top_end) { : false; }
+    unit_top {
+        q = 0;
+        * q < n_uslot { u = uslot[q]; unit_reg[u] == reg && slot_whi[u] > top_end { : false; } q = q + 1; }
+    }
     slot_exact {
         q = 0;
         * q < n_uslot { u = uslot[q]; u != s && unit_reg[u] == reg && slot_clash(u, s) { : false; } q = q + 1; }
