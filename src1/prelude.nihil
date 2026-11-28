@@ -317,6 +317,7 @@ __nihil_table_write(path = "", rows = [0], schema = [0], names = "", model = "")
         __done = 0;
         * __e == 0 && __done < __len {
             __g = __nihil_syscall([1, __fd, __nihil_addr(__buf) + __done, __len - __done]);   // write
+            __g == 0 { __g = -5; }                                              // nothing written: EIO, not a loop
             __g > 0 { __done = __done + __g; } || __g != -4 { __e = __g; }     // -4: EINTR, again
         }
         __i = __i + __k;
