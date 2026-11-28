@@ -941,7 +941,9 @@ are checked at compile time: a misspelled field is a compile error.
 - `NAME @? path` is the same, but a file that cannot be read gives an **empty
   table** instead of an error: the usual way to start the first run.
 - `@>> path, r;` / `@>> path, rows;` write a record or a table, and `@+>> path,
-  r;` appends records (§8.1.1): the text is `$r` or `$rows`.
+  r;` appends records (§8.1.1): the text is `$r` or `$rows`. `@>> path, rows;`
+  writes it about 1 MB at a time, so the whole text is never in memory; the file,
+  its atomicity and the errors are those of `@>> path, $rows;`.
 
 A value that does not fit (`INT(3)` holding `1234`, a 61-byte text in a
 `STRING(50)`, a STRING with a line break) ends the program when it is written,

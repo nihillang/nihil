@@ -22,6 +22,12 @@ before v2.0.
   - *Why:* It was put there and taken off again to no purpose, a million times a collection in `bench/workload`.
     Marking 1,000,000 such records takes a half to a third of the time; the workload runs 5% fewer instructions
     (generate 22 → 19 ms) and peaks at 149 MB instead of 159 (the stack no longer grows to a million entries)
+- `@>> path, rows;` writes the table about 1 MB at a time instead of making its whole text first (SPEC §20), on Linux
+  and on macOS: the same file, written the same way (a temporary, synced and renamed), and the same errors, with the
+  file left untouched when a field does not fit
+  - *Why:* 1,000,000 records make a 21 MB text that was garbage as soon as it was written. A program whose peak is the
+    write (a million records, then `@>>`) goes from 101 to 81 MB on an M4. `bench/workload` keeps its peak, which is
+    later (the sales and the rows read back, both alive)
 
 ## v4.13.0
 
