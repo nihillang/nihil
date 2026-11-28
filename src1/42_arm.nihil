@@ -865,8 +865,11 @@ slot_clash(a = 0, b = 0) {
 
 // register reg can take slot s too: no slot it holds is live while s is (a method's only: the
 // program's own code does not run in the order of its operations)
+// (the program's own code: by its operations' order, which is the order it runs in up to its last
+// exit (top_end); after it comes the globals' start, called first: a slot touched there shares nothing)
+top_end = -1;
 reg_fits(reg = 0, s = 0) {
-    unit_top { : false; }
+    unit_top && (top_end < 0 || slot_whi[s] > top_end) { : false; }
     slot_exact {
         q = 0;
         * q < n_uslot { u = uslot[q]; u != s && unit_reg[u] == reg && slot_clash(u, s) { : false; } q = q + 1; }
@@ -895,6 +898,7 @@ slots_clear() {
 
 unit_slots(lo = 0, hi = 0, top = false) {
     unit_top = top;
+    top { top_end = -1; }
     unit_lo = lo;
     rn_clear();
     slots_clear();
@@ -932,6 +936,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
                 v == R_BP || o == R_BP { promote_off = true; }
             }
             k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { calls = true; }
+            top && k == OP_CALL_RT && v == RT_EXIT { top_end = i; }
             k == OP_CALL_RT && v == RT_PROTECT && is_prot_block(i) { promote_off = true; }
             k == OP_CALL_RT && v != RT_DIV && v != RT_MOD && !rt_no_return(v) { calls = true; }
             k == OP_LOCAL && o != 0 && v >= 0 { leaf_bad = true; }   // an optional parameter: two slots, in memory
@@ -1011,6 +1016,24 @@ unit_slots(lo = 0, hi = 0, top = false) {
                 slot_w[best] = -1;
                 unit_csr = unit_csr | (1 << reg);
             }
+        }
+    }
+    // a unit with no call: the registers of x1 … x8 still free hold its heaviest constants in loops
+    // (no save: no call can change them)
+    !top && !calls && !leaf_bad {
+        reg = reg0;
+        * reg <= 8 {
+            (rn_taken >> reg) & 1 == 0 && (unit_csr >> reg) & 1 == 0 {
+                best = -1;
+                bw = 7;
+                q = 0;
+                * q < n_cst { cst_r[q] == 0 && cst_w[q] > bw { best = q; bw = cst_w[q]; } q = q + 1; }
+                best >= 0 {
+                    cst_r[best] = reg;
+                    unit_csr = unit_csr | (1 << reg);
+                }
+            }
+            reg = reg + 1;
         }
     }
     // the registers free, the heaviest slots first (weight 3 or more: a register saved costs two)
