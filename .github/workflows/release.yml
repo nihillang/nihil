@@ -75,13 +75,13 @@ jobs:
       - name: The installer wrote the IDE's menu entry
         run: grep -q 'StartupWMClass=NihilIDE' "$HOME/.local/share/applications/nihil-ide.desktop"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nihil-linux-x86_64
           path: dist/out/
 
       # for the macOS job; every path is in build/, so the artifact keeps them without it (linux/…)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           retention-days: 7
@@ -113,7 +113,7 @@ jobs:
           esac
           echo "NIHIL_PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: linux
           path: linux
@@ -198,7 +198,7 @@ jobs:
           codesign -v "$RUNNER_TEMP/Applications/Nihil IDE.app"
           test "$(cat "$RUNNER_TEMP/Applications/Nihil IDE.app/Contents/Resources/nihil-home")" = "$RUNNER_TEMP/nihil"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nihil-macos-arm64
           path: dist/out/
@@ -214,7 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: nihil-*
           merge-multiple: true
@@ -262,7 +262,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: nihil-*
           merge-multiple: true
