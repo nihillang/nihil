@@ -377,34 +377,52 @@ arm_call_method(i = 0) {
     q = 0;
     * q < virt { a_ins("mov "); a_x(1 + real + q); a_str(", "); a_x(9 + q); a_nl(); q = q + 1; }
     real > 0 { arm_stack(8 * real); }
-    k == list_push_method() { arm_push_inline(k, i); } || { a_ins("bl Lm"); a_num(k); a_nl(); }
+    arm_list_call(k, i);
     n > 0 { : 2; }
     : 1;
 }
 
-// v[] = x (__nihil_list_push(l, v), l in x1, v in x2): its usual case here, with no call: room left
-// (length < capacity, the list's first two words), v goes after the last item and the length grows.
-// A full list calls the method, which doubles it
-arm_push_inline(k = 0, i = 0) {
-    a_line("ldp x16, x17, [x1]");
-    a_line("cmp x16, x17");
-    a_ins("b.eq Lpush"); a_num(i); a_nl();
-    a_line("ldr x15, [x1, #16]");
-    a_line("str x2, [x15, x16, lsl #3]");
-    a_line("add x16, x16, #1");
-    a_line("str x16, [x1]");
-    a_ins("b Lpushed"); a_num(i); a_nl();
-    a_ins("Lpush"); a_num(i); a_str(":"); a_nl();
+// a call of method k (operation i), its arguments in x1 … x8. The prelude's LIST methods have their
+// usual case here, with no call (the list: length, capacity, the items' address; the method itself
+// for the rest, where it fails or grows the list):
+//   __nihil_list_push(l, v)    v[] = x: room left (length < capacity): v after the last item
+//   __nihil_list_get(l, i)     v[i]: 0 <= i < length (unsigned) → x9
+//   __nihil_list_set(l, i, v)  v[i] = x: 0 <= i < length
+arm_list_call(k = 0, i = 0) {
+    list_push_method();
+    k == list_push_k {
+        a_line("ldp x16, x17, [x1]");
+        a_line("cmp x16, x17");
+        a_ins("b.eq Lls"); a_num(i); a_nl();
+        a_line("ldr x15, [x1, #16]");
+        a_line("str x2, [x15, x16, lsl #3]");
+        a_line("add x16, x16, #1");
+        a_line("str x16, [x1]");
+    } || k == list_get_k || k == list_set_k {
+        a_line("ldr x16, [x1]");
+        a_line("cmp x2, x16");
+        a_ins("b.hs Lls"); a_num(i); a_nl();
+        a_line("ldr x15, [x1, #16]");
+        k == list_get_k { a_line("ldr x9, [x15, x2, lsl #3]"); } || { a_line("str x3, [x15, x2, lsl #3]"); }
+    } || { a_ins("bl Lm"); a_num(k); a_nl(); :; }
+    a_ins("b Llsd"); a_num(i); a_nl();
+    a_ins("Lls"); a_num(i); a_str(":"); a_nl();
     a_ins("bl Lm"); a_num(k); a_nl();
-    a_ins("Lpushed"); a_num(i); a_str(":"); a_nl();
+    a_ins("Llsd"); a_num(i); a_str(":"); a_nl();
 }
 
-// __nihil_list_push's method (looked up once a pass; -1 without the prelude)
+// the prelude's LIST methods (looked up once a pass; -1 without the prelude)
 list_push_pass = -1;
 list_push_k = -1;
+list_get_k = -1;
+list_set_k = -1;
 list_push_method() {
-    list_push_pass != n_passes { list_push_pass = n_passes; list_push_k = lookup_text("__nihil_list_push"); }
-    : list_push_k;
+    list_push_pass != n_passes {
+        list_push_pass = n_passes;
+        list_push_k = lookup_text("__nihil_list_push");
+        list_get_k = lookup_text("__nihil_list_get");
+        list_set_k = lookup_text("__nihil_list_set");
+    }
 }
 a_method(k = 0) {
     !want_arm { :; }
