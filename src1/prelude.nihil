@@ -154,12 +154,14 @@ __nihil_put_int(out = "", end = 0, v = 0) {
     __x < 0 { __x = -__x; }
     __p = end;
     __p = __p - 1;
-    __nihil_poke(out, __p, '0' + __x % 10);
-    __x = __x / 10;
+    __q = __x / 10;                         // (the rest from the quotient: one division, not two)
+    __nihil_poke(out, __p, '0' + __x - __q * 10);
+    __x = __q;
     * __x > 0 {
         __p = __p - 1;
-        __nihil_poke(out, __p, '0' + __x % 10);
-        __x = __x / 10;
+        __q = __x / 10;
+        __nihil_poke(out, __p, '0' + __x - __q * 10);
+        __x = __q;
     }
     v < 0 { __nihil_poke(out, __p - 1, '-'); }
 }

@@ -780,11 +780,12 @@ __nihil_rt_put_int(__t = 0, end = 0, v = 0) {
     __i = end;
     __going = true;
     * __going {
-        __d = v % 10;
+        __q = v / 10;                       // (the rest from the quotient: one division, not two)
+        __d = v - __q * 10;
         __d < 0 { __d = -__d; }
         __i = __i - 1;
         __nihil_poke(__s, __i, '0' + __d);
-        v = v / 10;
+        v = __q;
         __going = v != 0;
     }
     __neg { __nihil_poke(__s, __i - 1, '-'); }

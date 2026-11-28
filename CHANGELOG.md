@@ -6,6 +6,10 @@ before v2.0.
 
 ## Unreleased
 
+- On a Mac (`-native`), a division or rest by a constant that is not a power of 2 becomes a multiplication
+  (`smulh`, Granlund and Montgomery), and writing a number in decimal takes one division per digit, not two: a
+  chain of `x / 10` and `x % 10` 25% faster, `bench/workload`'s JSON phase 11 → 10 ms.
+
 ## v4.14.0
 
 On a Mac, the native collector does less work and wastes less memory; maps add to a key in one call; and writing a table
