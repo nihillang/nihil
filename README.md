@@ -216,7 +216,7 @@ it from another machine through an SSH tunnel.
 | `src1/` | stage 1: the compiler written in Nihil (`nihilc1.nihil` lists its parts) |
 | `src1/bigint.nihil`, `float_text.nihil`, `prelude.nihil` | the prelude, in Nihil: exact FLOAT ⇄ text, records, the key index and the library; a program gets only the methods it reaches |
 | `asm/` | Nihil's own assembler: `src/runtime.asm` into the same bytes as nasm (`make runtime`) |
-| `macos/`, `arm64/` | macOS on Apple silicon: the drivers and tests of the ARM64 way (`-native`), and, until v4.14, the translator of the x86-64 code to ARM64 and its system calls in C |
+| `macos/`, `arm64/` | macOS on Apple silicon: the drivers and tests of the ARM64 way (`-native`), and, until v4.15, the translator of the x86-64 code to ARM64 and its system calls in C |
 | `tests/` | the test suite (`tests/stage1/` for the newer features) |
 | `examples/`, `ide/workspace/` | example programs, including the PSX Doom fire on a 24-bit color terminal |
 | `ide/` | the web IDE |

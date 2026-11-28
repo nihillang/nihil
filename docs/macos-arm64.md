@@ -13,9 +13,9 @@ version).
     macos/nihil-native prog.nihil [out]   what `nihil` does (./nihilc1.sh too, in the repository)
     macos/test-native-c.sh                tests/ and tests/stage1/ this way (NIHIL_O0=1, NIHIL_GC_TORTURE=1)
 
-`NIHIL_TRANSLATE=1 nihil …` keeps the way before v4.13, the translator of the next section, for
-one more version, in case a program needs it (tell us). After that the translator and
-`arm64/rt.c` leave the package.
+`NIHIL_TRANSLATE=1 nihil …` keeps the way before v4.13, the translator of the next section, in
+v4.13 and v4.14, in case a program needs it (tell us). In v4.15 the translator and `arm64/rt.c`
+leave the package.
 
 ## Before v4.13 (NIHIL_TRANSLATE=1): native through a translator
 
