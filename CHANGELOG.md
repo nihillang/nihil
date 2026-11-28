@@ -6,13 +6,29 @@ before v2.0.
 
 ## Unreleased
 
-- an ARRAY of BOOL takes one byte per element instead of eight (SPEC §3, §6.2), on Linux and on macOS: its block is a
-  STRING's (the length before the bytes, a 0 after them), and `+` of two is STRING's. Nothing a program writes changes:
-  `[b ; n]`, literals, `a[i]`, `a[i] = b;`, `xs : x, i`, `+`, `#`, a MAP's `values()`, a LIST's `array()` and
-  `to_json()` work as before
-  - *Why:* A sieve over 20 million BOOLs wrote 160 MB where C writes 20 MB, and spent its time on memory: with the
-    same 8-byte elements, C took the same 0.50 s. With one byte, the native macOS build takes 0.13 s (C: 0.135 s) and
-    62 MB instead of 482 MB; its collector does not look inside such a block (no address can be in it)
+## v4.14.0
+
+On a Mac, the native collector does less work and wastes less memory; maps add to a key in one call; and writing a table
+no longer makes its whole text first. `bench/workload` (1,000,000 sales) went from 205 to 171 ms on an M4 (1.2 times C,
+0.6 times Go), and its peak memory from 176 to 149 MB. The translator of the x86-64 code (`NIHIL_TRANSLATE=1`) stays one
+more version.
+
+- maps: `m[k] = (m[k] || d) + e;` on a map of INT values is one call that finds the slot once and adds in place
+  (docs/map-upsert.md), where it was a read and a write; `d` an INT literal, `e` names, numbers, fields, indexes and
+  arithmetic with no call, so nothing can tell the two apart but the time. Off with `-O0`
+  - *Why:* The commonest update of a map, a count or a total by key. `bench/workload`'s map phase on an M4: 43 → 38 ms
+    with `-native`
+- `@>> path, rows;` writes the table about 1 MB at a time instead of making its whole text first (SPEC §20), on Linux
+  and on macOS: the same file, written the same way (a temporary, synced and renamed), and the same errors, with the
+  file left untouched when a field does not fit
+  - *Why:* 1,000,000 records make a 21 MB text that was garbage as soon as it was written. A program whose peak is the
+    write (a million records, then `@>>`) goes from 101 to 81 MB on an M4. `bench/workload` keeps its peak, which is
+    later (the sales and the rows read back, both alive)
+- macOS: the native collector does not look inside a record whose fields are all INT, FLOAT or BOOL (made by its
+  model or read from a table; not yet those the prelude makes, such as `[r ; n]` and `from_json`): no address can be
+  in it
+  - *Why:* `bench/workload`'s million sales are such records: its table phase went from 124 to 114 ms and generate from
+    25 to 23 ms on an M4
 - macOS: the native collector has 41 block sizes instead of 21 (32, 40, 48, 56, 64, 80 … 32768: four to a doubling),
   so a block wastes at most a fifth of itself instead of a third
   - *Why:* A record of five fields takes 56 bytes and was given 64. `bench/workload` (1,000,000 sales, two copies of
@@ -24,12 +40,6 @@ before v2.0.
     (generate 22 → 19 ms) and peaks at 149 MB instead of 159 (the stack no longer grows to a million entries)
 - fix: macOS `-native`: closing a descriptor (`__nihil_syscall([3, fd])`) gives the system's answer (0 or -errno,
   Linux's numbers) instead of always 0, as on Linux; a directory's descriptor is closed once, by its closedir
-- `@>> path, rows;` writes the table about 1 MB at a time instead of making its whole text first (SPEC §20), on Linux
-  and on macOS: the same file, written the same way (a temporary, synced and renamed), and the same errors, with the
-  file left untouched when a field does not fit
-  - *Why:* 1,000,000 records make a 21 MB text that was garbage as soon as it was written. A program whose peak is the
-    write (a million records, then `@>>`) goes from 101 to 81 MB on an M4. `bench/workload` keeps its peak, which is
-    later (the sales and the rows read back, both alive)
 
 ## v4.13.0
 
@@ -46,6 +56,14 @@ the macOS package starts on macOS 11 again. `bench/workload` (1,000,000 sales) w
 - x86-64: a division or rest by a constant power of 2 (up to 2^31) is shifts, rounding towards 0 as before, instead of a call to `idiv`
   - *Why:* `x / 16`, `x % 256` and a random generator's `% 2^31` are common; `idiv` costs tens of cycles (less on recent Intel: `bench/workload`'s generate went 81 → 76 ms on an i3-1115G4)
 - ARM64 (`-native`): pushes and pops in pairs (`stp`/`ldp`), constants negated or shifted at compile time, and no reload of a global just stored. `bench/workload` on an M4: 221 → 208 ms
+- an ARRAY of BOOL takes one byte per element instead of eight (SPEC §3, §6.2), on Linux and on macOS: its block is a
+  STRING's (the length before the bytes, a 0 after them), and `+` of two is STRING's. Nothing a program writes changes:
+  `[b ; n]`, literals, `a[i]`, `a[i] = b;`, `xs : x, i`, `+`, `#`, a MAP's `values()`, a LIST's `array()` and
+  `to_json()` work as before
+  - *Why:* A sieve over 20 million BOOLs wrote 160 MB where C writes 20 MB, and spent its time on memory: with the
+    same 8-byte elements, C took the same 0.50 s. With one byte, the native macOS build takes 0.13 s (C: 0.135 s) and
+    62 MB instead of 482 MB; its collector does not look inside such a block (no address can be in it)
+
 ## v4.12.0
 
 Queries that use a model's methods, a FLOAT sum that was wrong inside methods, a chapter on objects for the Learn

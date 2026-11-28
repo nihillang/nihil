@@ -111,8 +111,9 @@ operation (one <code>stat</code>), so it still sees what another program or an e
   the same moment both get theirs in. Reads take no lock.</li>
   <li><b>On the Mac</b>, the compiler writes ARM64 itself, with a runtime and a collector of its own (since v4.13). Against
   the numbers measured before, when Nihil's x86-64 code was translated to ARM64, writing the table takes half the time
-  (265 → 130 ms), sorting 30% less (134 → 94 ms) and the queries over every record up to a quarter less; the peak memory of a
-  million records is 8% higher (325 → 353 MB, the native collector's).</li>
+  (265 → 130 ms), sorting 30% less (134 → 94 ms) and the queries over every record up to a quarter less. The peak memory of a
+  million records is 8% higher (325 → 353 MB), from when the last collection falls: both collectors start the next one
+  after allocating as much as is alive, and in other phases of the run the native one holds less.</li>
   <li><b>GitHub's runners are not all the same machine</b>, and a shared server under load gives noisier numbers still. Compare
   numbers from the same run.</li>
   <li><b>The clock</b> is <code>std:time</code>'s <code>now_us()</code>, in microseconds. The operations on one record are timed
