@@ -25,7 +25,8 @@ more version.
     write (a million records, then `@>>`) goes from 101 to 81 MB on an M4. `bench/workload` keeps its peak, which is
     later (the sales and the rows read back, both alive)
 - macOS: the native collector does not look inside a record whose fields are all INT, FLOAT or BOOL (made by its
-  model or read from a table): no address can be in it
+  model or read from a table; not yet those the prelude makes, such as `[r ; n]` and `from_json`): no address can be
+  in it
   - *Why:* `bench/workload`'s million sales are such records: its table phase went from 124 to 114 ms and generate from
     25 to 23 ms on an M4
 - macOS: the native collector has 41 block sizes instead of 21 (32, 40, 48, 56, 64, 80 … 32768: four to a doubling),
