@@ -24,6 +24,12 @@ before v2.0.
     (generate 22 → 19 ms) and peaks at 149 MB instead of 159 (the stack no longer grows to a million entries)
 - fix: macOS `-native`: closing a descriptor (`__nihil_syscall([3, fd])`) gives the system's answer (0 or -errno,
   Linux's numbers) instead of always 0, as on Linux; a directory's descriptor is closed once, by its closedir
+- `@>> path, rows;` writes the table about 1 MB at a time instead of making its whole text first (SPEC §20), on Linux
+  and on macOS: the same file, written the same way (a temporary, synced and renamed), and the same errors, with the
+  file left untouched when a field does not fit
+  - *Why:* 1,000,000 records make a 21 MB text that was garbage as soon as it was written. A program whose peak is the
+    write (a million records, then `@>>`) goes from 101 to 81 MB on an M4. `bench/workload` keeps its peak, which is
+    later (the sales and the rows read back, both alive)
 
 ## v4.13.0
 

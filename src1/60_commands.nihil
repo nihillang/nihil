@@ -735,6 +735,13 @@ cmd_write_file(kind = 0) {
     op_push(R_AX);                            // push rax (the path)
     pi = tok_start; pl = tok_len; pn = tok_line; pli = tok_lstart;
     t = expression();
+    kind == T_WRITE_FILE && is_rec_array(t) {
+        op_push(R_AX);                        // a table: written in parts (__nihil_table_write)
+        push_model((t & ~TYPE_ARR) >> 8);
+        call_prelude("__nihil_table_write", 40);
+        expect(';', "';'");
+        :;
+    }
     is_rec(t) || is_rec_array(t) {
         emit_rec_text(t);                  // a record or a table: its fixed-width text
         t = TYPE_STR;
