@@ -6,6 +6,10 @@ before v2.0.
 
 ## Unreleased
 
+- `sort(key)` copies the keys once, each beside its element's index, merges those pairs (one loop per kind of key)
+  and starts from runs of 8 sorted by insertion: 1,000,000 records sorted 30% faster by an INT key (97 → 68 ms on an
+  M4) and 26% by a STRING key (273 → 203 ms); the same stable order.
+
 ## v4.14.0
 
 On a Mac, the native collector does less work and wastes less memory; maps add to a key in one call; and writing a table
