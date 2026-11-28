@@ -17,6 +17,11 @@ before v2.0.
   so a block wastes at most a fifth of itself instead of a third
   - *Why:* A record of five fields takes 56 bytes and was given 64. `bench/workload` (1,000,000 sales, two copies of
     them) peaks at 159 MB instead of 176, with 2% fewer instructions and the same time
+- macOS: the native collector marks a small block it does not look inside (a text, a record of numbers only) without
+  putting it on its stack of blocks to scan
+  - *Why:* It was put there and taken off again to no purpose, a million times a collection in `bench/workload`.
+    Marking 1,000,000 such records takes a half to a third of the time; the workload runs 5% fewer instructions
+    (generate 22 → 19 ms) and peaks at 149 MB instead of 159 (the stack no longer grows to a million entries)
 
 ## v4.13.0
 

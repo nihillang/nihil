@@ -320,13 +320,15 @@ __nihil_gc_mark_range(from = 0, to = 0) {
                 __nihil_peekb(__nihil_gc_used + __m) != 0 && __nihil_peekb(__nihil_gc_marked + __m) == 0 {
                     __nihil_rt_pokeb(__nihil_gc_marked, __m, 1);
                     __kind == 1 { __nihil_gc_live_small = __nihil_gc_live_small + __s; }
-                    __nihil_gc_sn == __nihil_gc_scap {
-                        __nihil_gc_scap == 0 { __nihil_gc_scap = 65536; } || { __nihil_gc_scap = 2 * __nihil_gc_scap; }
-                        __nihil_gc_stack = __nihil_c("realloc", __nihil_gc_stack, 8 * __nihil_gc_scap);
-                        __nihil_gc_stack == 0 { __nihil_gc_oom(); }
+                    __kind != 1 || __nihil_peek(__b) & 4 == 0 {   // a small one not scanned (a text, numbers only): marked is all
+                        __nihil_gc_sn == __nihil_gc_scap {
+                            __nihil_gc_scap == 0 { __nihil_gc_scap = 65536; } || { __nihil_gc_scap = 2 * __nihil_gc_scap; }
+                            __nihil_gc_stack = __nihil_c("realloc", __nihil_gc_stack, 8 * __nihil_gc_scap);
+                            __nihil_gc_stack == 0 { __nihil_gc_oom(); }
+                        }
+                        __nihil_poke8(__nihil_gc_stack + 8 * __nihil_gc_sn, __b);
+                        __nihil_gc_sn = __nihil_gc_sn + 1;
                     }
-                    __nihil_poke8(__nihil_gc_stack + 8 * __nihil_gc_sn, __b);
-                    __nihil_gc_sn = __nihil_gc_sn + 1;
                 }
             }
         }
