@@ -1037,12 +1037,14 @@ __nihil_rt_getdents(fd = 0, buf = 0, cap = 0) {
     : __used;
 }
 
+// close(fd) → 0 or -errno (Linux's): a directory's descriptor is closed by its closedir
 __nihil_rt_close(fd = 0) {
     fd >= 0 && fd < 256 && __nihil_rt_dirs[fd] != 0 {
-        __nihil_c32("closedir", __nihil_rt_dirs[fd]);
+        __d = __nihil_rt_dirs[fd];
         __nihil_rt_dirs[fd] = 0;
+        : __nihil_rt_res(__nihil_c32("closedir", __d));
     }
-    __nihil_c32("close", fd);
+    : __nihil_rt_res(__nihil_c32("close", fd));
 }
 
 // fstat / newfstatat into Linux's struct stat at b (144 bytes): dev, ino, mode, size, mtime
@@ -1106,7 +1108,7 @@ __nihil_rt_syscall(x = 0) {
 __nihil_rt_sys(__n = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0) {
     __n == 0 { : __nihil_rt_res(__nihil_c("read", a1, a2, a3)); }
     __n == 1 { : __nihil_rt_res(__nihil_c("write", a1, a2, a3)); }
-    __n == 3 { __nihil_rt_close(a1); : 0; }
+    __n == 3 { : __nihil_rt_close(a1); }
     __n == 5 { : __nihil_rt_stat(5, a1, a2, a3, a4); }
     __n == 262 { : __nihil_rt_stat(262, a1, a2, a3, a4); }
     __n == 8 { : __nihil_rt_res(__nihil_c("lseek", a1, a2, a3)); }
