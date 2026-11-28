@@ -13,6 +13,10 @@ before v2.0.
   - *Why:* A sieve over 20 million BOOLs wrote 160 MB where C writes 20 MB, and spent its time on memory: with the
     same 8-byte elements, C took the same 0.50 s. With one byte, the native macOS build takes 0.13 s (C: 0.135 s) and
     62 MB instead of 482 MB; its collector does not look inside such a block (no address can be in it)
+- macOS: the native collector has 41 block sizes instead of 21 (32, 40, 48, 56, 64, 80 … 32768: four to a doubling),
+  so a block wastes at most a fifth of itself instead of a third
+  - *Why:* A record of five fields takes 56 bytes and was given 64. `bench/workload` (1,000,000 sales, two copies of
+    them) peaks at 159 MB instead of 176, with 2% fewer instructions and the same time
 
 ## v4.13.0
 
