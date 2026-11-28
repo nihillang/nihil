@@ -1,0 +1,9 @@
+60000
+true
+caught: field 'name' of P does not fit in STRING(20): the text has 34 bytes
+caught: field 'name' of P cannot hold a line break
+60000 n59999
+0
+caught: could not write 'build': it is a directory
+caught: field 'name' of P does not fit in STRING(20): the text has 25 bytes
+caught: field 'name' of P does not fit in STRING(20): the text has 25 bytes

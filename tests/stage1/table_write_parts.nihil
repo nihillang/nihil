@@ -1,0 +1,26 @@
+// @>> path, rows: the table written about 1 MB at a time (__nihil_table_write), the same file as
+// @>> path, $rows; a field that does not fit is the same error, before the file is replaced
+P = @[id: INT(8); name: STRING(20); v: FLOAT(10)];
+ps = [P() ; *];
+i = 0;
+* i < 60000 { ps[] = P(i, "n" + $i, 1.5); i = i + 1; }     // 40 bytes a line: 2.4 MB, three parts
+f = "build/table_write_parts.dat";
+@>> f, ps.array();
+>> $#(P @ f) + "\n";
+>> $(@ f == $ps.array()) + "\n";
+ps[59999].name = "a name much too long for the field";
+?{ @>> f, ps.array(); } || { >> "caught: " + ?! + "\n"; }
+ps[59999].name = "two\nlines";
+?{ @>> f, ps.array(); } || { >> "caught: " + ?! + "\n"; }
+>> $#(P @ f) + " " + (P @ f)[59999].name + "\n";          // the file before them, whole
+@>> f, [P() ; *].array();
+>> $#(@ f) + "\n";
+small = [P() ; *];
+small[] = P(1, "a", 2.0);
+?{ @>> "build", small.array(); } || { >> "caught: " + ?! + "\n"; }        // rename over a directory
+ps[59999].name = "too long for twenty bytes";                                   // in the last part
+?{ @>> "tests/no_such_dir/t.dat", ps.array(); } || { >> "caught: " + ?! + "\n"; }   // the field, not the path
+ps[0].name = "too long for twenty bytes";
+?{ @>> "tests/no_such_dir/t.dat", ps.array(); } || { >> "caught: " + ?! + "\n"; }   // the field first, as before
+@>> "tests/no_such_dir/t.dat", small.array();
+>> "not reached\n";

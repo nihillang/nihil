@@ -17,6 +17,12 @@ before v2.0.
   so a block wastes at most a fifth of itself instead of a third
   - *Why:* A record of five fields takes 56 bytes and was given 64. `bench/workload` (1,000,000 sales, two copies of
     them) peaks at 159 MB instead of 176, with 2% fewer instructions and the same time
+- `@>> path, rows;` writes the table about 1 MB at a time instead of making its whole text first (SPEC §20), on Linux
+  and on macOS: the same file, written the same way (a temporary, synced and renamed), and the same errors, with the
+  file left untouched when a field does not fit
+  - *Why:* 1,000,000 records make a 21 MB text that was garbage as soon as it was written. A program whose peak is the
+    write (a million records, then `@>>`) goes from 101 to 81 MB on an M4. `bench/workload` keeps its peak, which is
+    later (the sales and the rows read back, both alive)
 
 ## v4.13.0
 

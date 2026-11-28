@@ -183,7 +183,8 @@ __nihil_table_bad(path = "", line = 0, what = "") {
 
 // writes the fields of record r into out, from position at: numbers aligned
 // to the right, STRING to the left, BOOL as T or F; spaces fill the rest
-__nihil_rec_put(r = 0, schema = [0], names = "", model = "", out = "", at = 0) {
+// quiet: a field that does not fit makes it return false (nothing reported) instead of the error
+__nihil_rec_put(r = 0, schema = [0], names = "", model = "", out = "", at = 0, quiet = false) {
     __slots = __nihil_arr_at(r);
     __pos = at;
     __i = 0;
@@ -196,6 +197,7 @@ __nihil_rec_put(r = 0, schema = [0], names = "", model = "", out = "", at = 0) {
         __ty == 1 {
             __len = __nihil_int_len(__v);
             __len > __wd {
+                quiet { : false; }
                 __nihil_rec_bad(names, __i, model, "does not fit in INT(" + __nihil_int_text(__wd) + "): " + __nihil_int_text(__v));
             }
             __nihil_put_int(out, __pos + __wd, __v);
@@ -207,7 +209,10 @@ __nihil_rec_put(r = 0, schema = [0], names = "", model = "", out = "", at = 0) {
                 __s = __nihil_str_at(__v);
                 __c = 0;
                 #__s {
-                    __s[__c] == 10 { __nihil_rec_bad(names, __i, model, "cannot hold a line break"); }
+                    __s[__c] == 10 {
+                        quiet { : false; }
+                        __nihil_rec_bad(names, __i, model, "cannot hold a line break");
+                    }
                     __c = __c + 1;
                 }
             } || {
@@ -216,8 +221,10 @@ __nihil_rec_put(r = 0, schema = [0], names = "", model = "", out = "", at = 0) {
             #__s > __wd {
                 __kind = __nihil_type_name(__ty) + "(" + __nihil_int_text(__wd) + ")";
                 __ty == 3 {
+                    quiet { : false; }
                     __nihil_rec_bad(names, __i, model, "does not fit in " + __kind + ": the text has " + __nihil_int_text(#__s) + " bytes");
                 }
+                quiet { : false; }
                 __nihil_rec_bad(names, __i, model, "does not fit in " + __kind + ": " + __s);
             }
             __start = __pos + __wd - #__s;          // FLOAT: to the right
@@ -228,6 +235,7 @@ __nihil_rec_put(r = 0, schema = [0], names = "", model = "", out = "", at = 0) {
         __pos = __pos + __wd;
         __i = __i + 1;
     }
+    : true;
 }
 
 // $r, @>> path, r : the record's line (with the "\n")
@@ -261,6 +269,106 @@ __nihil_table_text(rows = [0], schema = [0], names = "", model = "") {
         __i = __i + 1;
     }
     : __out;
+}
+
+// @>> path, rows : the table written about 1 MB at a time into path + ".nihil-tmp." + the process
+// id, synced, closed and renamed over path, as the runtime writes a text (rt_write_file), but without
+// the whole text in memory. The same file and the same errors as @>> path, $rows:
+// - a field that does not fit: the temporary is opened only once the first part is made, and a
+//   field in a later part removes it before the error (that record's, raised by rec_put);
+// - anything the system refuses: the temporary is removed, the records not yet made are checked
+//   (a field that does not fit is still the error), then the runtime's error is raised ("could not
+//   write 'path': reason"), with no second attempt;
+// - a path with a NUL byte or too long: the old way (the text, then the runtime's write).
+// What allocates once the temporary is open (FLOAT fields' text) can still run out of memory and
+// leave it behind, as a kill does.
+__nihil_table_write(path = "", rows = [0], schema = [0], names = "", model = "") {
+    __w = __nihil_rec_width(schema) + 1;
+    __nihil_size_mul(#rows, __w);
+    !__nihil_path_ok(path) || #path > 4064 {
+        @>> path, __nihil_table_text(rows, schema, names, model);
+        :;
+    }
+    __per = 1048576 / __w;
+    __per < 1 { __per = 1; }
+    __k = #rows;
+    __k > __per { __k = __per; }
+    __buf = __nihil_bytes(__k * __w);              // every part's, the first the largest
+    __bad = __nihil_table_part(rows, 0, __k, schema, names, model, __buf, __w);
+    __bad >= 0 { __nihil_rec_put(rows[__bad], schema, names, model, __buf, 0); }    // its error
+    __tmp = path + ".nihil-tmp." + __nihil_int_text(__nihil_syscall([39])) + "\0";       // getpid
+    __p = path + "\0";
+    __fd = __nihil_syscall([257, -100, __nihil_addr(__tmp), 0x241, 420]);   // O_WRONLY | O_CREAT | O_TRUNC
+    __fd < 0 { __nihil_table_refused(path, __fd, rows, __k, schema, names, model, __buf, __w, __per); }
+    __e = 0;
+    __i = 0;
+    * __e == 0 && __i < #rows {
+        __i > 0 {                                     // the next part (the first is made)
+            __k = #rows - __i;
+            __k > __per { __k = __per; }
+            __bad = __nihil_table_part(rows, __i, __k, schema, names, model, __buf, __w);
+            __bad >= 0 {
+                __nihil_syscall([3, __fd]);
+                __nihil_syscall([87, __nihil_addr(__tmp)]);                     // unlink
+                __nihil_rec_put(rows[__bad], schema, names, model, __buf, 0);   // its error
+            }
+        }
+        __len = __k * __w;
+        __done = 0;
+        * __e == 0 && __done < __len {
+            __g = __nihil_syscall([1, __fd, __nihil_addr(__buf) + __done, __len - __done]);   // write
+            __g > 0 { __done = __done + __g; } || __g != -4 { __e = __g; }     // -4: EINTR, again
+        }
+        __i = __i + __k;
+    }
+    __e == 0 { __e = __nihil_syscall([74, __fd]); }                             // fsync
+    __c = __nihil_syscall([3, __fd]);
+    __e == 0 && __c < 0 { __e = __c; }
+    __e == 0 { __e = __nihil_syscall([82, __nihil_addr(__tmp), __nihil_addr(__p)]); }   // rename
+    __e >= 0 { :; }
+    __nihil_syscall([87, __nihil_addr(__tmp)]);                                 // unlink
+    __nihil_table_refused(path, __e, rows, __i, schema, names, model, __buf, __w, __per);
+}
+
+// the system refused the write (e = -errno) with records from made on not yet checked: a field of
+// theirs that does not fit is the error, as when the whole text was made first; else the runtime's
+__nihil_table_refused(path = "", e = 0, rows = [0], made = 0, schema = [0], names = "", model = "", buf = "", w = 0, per = 0) {
+    __i = made;
+    * __i < #rows {
+        __k = #rows - __i;
+        __k > per { __k = per; }
+        __bad = __nihil_table_part(rows, __i, __k, schema, names, model, buf, w);
+        __bad >= 0 { __nihil_rec_put(rows[__bad], schema, names, model, buf, 0); }
+        __i = __i + __k;
+    }
+    __nihil_table_failed(path, e);
+}
+
+// records i … i + k - 1 of rows as lines in buf; → the first record whose field does not fit, or -1
+__nihil_table_part(rows = [0], i = 0, k = 0, schema = [0], names = "", model = "", buf = "", w = 0) {
+    __j = 0;
+    * __j < k {
+        !__nihil_rec_put(rows[i + __j], schema, names, model, buf, __j * w, true) { : i + __j; }
+        __nihil_poke(buf, __j * w + w - 1, 10);
+        __j = __j + 1;
+    }
+    : -1;
+}
+
+// the runtime's error for a write the system refused (e = -errno), with its reasons (errno_reasons)
+__nihil_table_failed(path = "", e = 0) {
+    e = -e;
+    __r = "error " + __nihil_int_text(e);
+    e == 2 { __r = "no such file or directory"; }
+    e == 13 { __r = "permission denied"; }
+    e == 17 { __r = "file exists"; }
+    e == 20 { __r = "a part of the path is not a directory"; }
+    e == 21 { __r = "it is a directory"; }
+    e == 28 { __r = "no space left on the device"; }
+    e == 30 { __r = "read-only file system"; }
+    e == 36 { __r = "the path is too long"; }
+    e == 122 { __r = "disk quota exceeded"; }
+    __nihil_fail("could not write '" + path + "': " + __r);
 }
 
 // [r ; n] : n independent copies of record r
