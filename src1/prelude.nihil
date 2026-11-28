@@ -2052,9 +2052,16 @@ __nihil_map_add(m = 0, k = 0, e = 0, d = 0, kind = 0) {
     __ks = __nihil_arr_at(__mm[2]);
     __mask = __mm[1] - 1;
     __j = 0;
-    kind == 3 {
-        __j = __mm[5] & __mask;
-        __us[__j] == 0 || __ks[__j] != k { __j = __nihil_map_slot(m, k, kind); }
+    kind == 3 {                             // a STRING key: the hint, or its look-up written out (as in
+        __j = __mm[5] & __mask;             // map_slot, with key_hash's FNV-1a: the same slots)
+        __us[__j] == 0 || __ks[__j] != k {
+            __s = __nihil_str_at(k);
+            __h = -3750763034362895579;
+            __i = 0;
+            #__s { __h = (__h ^ __s[__i]) * 1099511628211; __i = __i + 1; }
+            __j = __h & __mask;
+            * __us[__j] != 0 && __ks[__j] != k && __nihil_str_at(__ks[__j]) != __s { __j = (__j + 1) & __mask; }
+        }
     } || {
         __h = k * -7046029254386353131;    // an INT key: its look-up written out, as in map_get_int
         __j = (__h ^ (__h >> 29)) & __mask;

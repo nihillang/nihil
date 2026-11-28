@@ -6,6 +6,11 @@ before v2.0.
 
 ## Unreleased
 
+- maps: `m[k] = (m[k] || d) + e;` with a STRING key finds its slot inside the one call (the hash and the look-up
+  written out, the same slots as before) instead of calling the look-up, which called the hash
+  - *Why:* Three calls a sale became one. `bench/workload`'s units by product name over 1,000,000 sales: 16 → 13 ms on
+    an M4 with `-native`; the map phase 38 → 35 ms
+
 ## v4.14.0
 
 On a Mac, the native collector does less work and wastes less memory; maps add to a key in one call; and writing a table
