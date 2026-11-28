@@ -377,9 +377,52 @@ arm_call_method(i = 0) {
     q = 0;
     * q < virt { a_ins("mov "); a_x(1 + real + q); a_str(", "); a_x(9 + q); a_nl(); q = q + 1; }
     real > 0 { arm_stack(8 * real); }
-    a_ins("bl Lm"); a_num(k); a_nl();
+    arm_list_call(k, i);
     n > 0 { : 2; }
     : 1;
+}
+
+// a call of method k (operation i), its arguments in x1 … x8. The prelude's LIST methods have their
+// usual case here, with no call (the list: length, capacity, the items' address; the method itself
+// for the rest, where it fails or grows the list):
+//   __nihil_list_push(l, v)    v[] = x: room left (length < capacity): v after the last item
+//   __nihil_list_get(l, i)     v[i]: 0 <= i < length (unsigned) → x9
+//   __nihil_list_set(l, i, v)  v[i] = x: 0 <= i < length
+arm_list_call(k = 0, i = 0) {
+    list_push_method();
+    k == list_push_k {
+        a_line("ldp x16, x17, [x1]");
+        a_line("cmp x16, x17");
+        a_ins("b.eq Lls"); a_num(i); a_nl();
+        a_line("ldr x15, [x1, #16]");
+        a_line("str x2, [x15, x16, lsl #3]");
+        a_line("add x16, x16, #1");
+        a_line("str x16, [x1]");
+    } || k == list_get_k || k == list_set_k {
+        a_line("ldr x16, [x1]");
+        a_line("cmp x2, x16");
+        a_ins("b.hs Lls"); a_num(i); a_nl();
+        a_line("ldr x15, [x1, #16]");
+        k == list_get_k { a_line("ldr x9, [x15, x2, lsl #3]"); } || { a_line("str x3, [x15, x2, lsl #3]"); }
+    } || { a_ins("bl Lm"); a_num(k); a_nl(); :; }
+    a_ins("b Llsd"); a_num(i); a_nl();
+    a_ins("Lls"); a_num(i); a_str(":"); a_nl();
+    a_ins("bl Lm"); a_num(k); a_nl();
+    a_ins("Llsd"); a_num(i); a_str(":"); a_nl();
+}
+
+// the prelude's LIST methods (looked up once a pass; -1 without the prelude)
+list_push_pass = -1;
+list_push_k = -1;
+list_get_k = -1;
+list_set_k = -1;
+list_push_method() {
+    list_push_pass != n_passes {
+        list_push_pass = n_passes;
+        list_push_k = lookup_text("__nihil_list_push");
+        list_get_k = lookup_text("__nihil_list_get");
+        list_set_k = lookup_text("__nihil_list_set");
+    }
 }
 a_method(k = 0) {
     !want_arm { :; }
@@ -822,8 +865,16 @@ slot_clash(a = 0, b = 0) {
 
 // register reg can take slot s too: no slot it holds is live while s is (a method's only: the
 // program's own code does not run in the order of its operations)
+// (the program's own code: by its operations' order, which is the order it runs in up to its last
+// exit (top_end); after it comes the globals' start (80_main.nihil: stores and a ret, no exit), called
+// first: a slot touched there shares nothing, neither as the one placed nor as one the register holds)
+top_end = -1;
 reg_fits(reg = 0, s = 0) {
-    unit_top { : false; }
+    unit_top && (top_end < 0 || slot_whi[s] > top_end) { : false; }
+    unit_top {
+        q = 0;
+        * q < n_uslot { u = uslot[q]; unit_reg[u] == reg && slot_whi[u] > top_end { : false; } q = q + 1; }
+    }
     slot_exact {
         q = 0;
         * q < n_uslot { u = uslot[q]; u != s && unit_reg[u] == reg && slot_clash(u, s) { : false; } q = q + 1; }
@@ -852,6 +903,7 @@ slots_clear() {
 
 unit_slots(lo = 0, hi = 0, top = false) {
     unit_top = top;
+    top { top_end = -1; }
     unit_lo = lo;
     rn_clear();
     slots_clear();
@@ -889,6 +941,7 @@ unit_slots(lo = 0, hi = 0, top = false) {
                 v == R_BP || o == R_BP { promote_off = true; }
             }
             k == OP_CALL || k == OP_CALL_FWD || k == OP_CCALL || k == OP_CCALL32 || k == OP_RET { calls = true; }
+            top && k == OP_CALL_RT && v == RT_EXIT { top_end = i; }
             k == OP_CALL_RT && v == RT_PROTECT && is_prot_block(i) { promote_off = true; }
             k == OP_CALL_RT && v != RT_DIV && v != RT_MOD && !rt_no_return(v) { calls = true; }
             k == OP_LOCAL && o != 0 && v >= 0 { leaf_bad = true; }   // an optional parameter: two slots, in memory
@@ -968,6 +1021,24 @@ unit_slots(lo = 0, hi = 0, top = false) {
                 slot_w[best] = -1;
                 unit_csr = unit_csr | (1 << reg);
             }
+        }
+    }
+    // a unit with no call: the registers of x1 … x8 still free hold its heaviest constants in loops
+    // (no save: no call can change them)
+    !top && !calls && !leaf_bad {
+        reg = reg0;
+        * reg <= 8 {
+            (rn_taken >> reg) & 1 == 0 && (unit_csr >> reg) & 1 == 0 {
+                best = -1;
+                bw = 7;
+                q = 0;
+                * q < n_cst { cst_r[q] == 0 && cst_w[q] > bw { best = q; bw = cst_w[q]; } q = q + 1; }
+                best >= 0 {
+                    cst_r[best] = reg;
+                    unit_csr = unit_csr | (1 << reg);
+                }
+            }
+            reg = reg + 1;
         }
     }
     // the registers free, the heaviest slots first (weight 3 or more: a register saved costs two)

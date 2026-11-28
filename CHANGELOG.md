@@ -6,6 +6,13 @@ before v2.0.
 
 ## Unreleased
 
+- `-native` (macOS): `v[] = x`, `v[i]` and `v[i] = x` on a LIST are done in place when the list has room or the index is
+  within it, calling the prelude only to grow the list or to report the index; an allocation takes the next block of
+  a run of free ones instead of looking for one each time
+  - *Why:* A push went from about 66 to 12 instructions. `bench/workload`'s price dispatch
+    (`rules[s.product % 4].total(...)`) over 1,000,000 rows: 6 → 4 ms on an M4. The make-up phase keeps its time: it
+    is bound by fresh memory and the collector, not by instructions
+
 ## v4.14.0
 
 On a Mac, the native collector does less work and wastes less memory; maps add to a key in one call; and writing a table
